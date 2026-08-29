@@ -1,0 +1,77 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <unordered_map>
+#include <unordered_set>
+#include <vector>
+
+#include "sequence.hh"
+
+namespace nanovllm {
+
+struct Block {
+  std::size_t id;
+  std::optional<std::uint64_t> hash;
+  std::vector<std::int32_t> token_ids;
+
+  std::size_t ref_count;
+
+  void clear();
+};
+
+struct BlockAllocation {
+  std::size_t num_reused_blocks;
+  std::size_t num_new_blocks;
+  std::size_t num_allocate_blocks;
+};
+
+class BlockManager {
+ public:
+  BlockManager(std::size_t block_size, std::size_t num_blocks);
+  ~BlockManager() = default;
+
+  BlockManager(const BlockManager&) = delete;
+  BlockManager& operator=(const BlockManager&) = delete;
+
+  BlockManager(BlockManager&&) = default;
+  BlockManager& operator=(BlockManager&&) = default;
+
+  [[nodiscard]] bool can_allocate(BlockAllocation allocation) const;
+
+  [[nodiscard]] BlockAllocation predict_prefill_allocation(
+      const Sequence& seq) const;
+
+  void prefill_allocate(Sequence& seq, BlockAllocation allocation);
+
+  [[nodiscard]] BlockAllocation predict_decode_allocation(
+      const Sequence& seq) const;
+
+  void decode_allocate(Sequence& seq, BlockAllocation allocation);
+
+  void deallocate(Sequence& seq);
+
+ private:
+  [[nodiscard]] std::uint64_t compute_hash(
+      std::span<const std::int32_t> token_ids,
+      std::optional<std::uint64_t> prefix) const;
+
+  [[nodiscard]] std::size_t allocate_block();
+  void allocate_block(std::size_t block_id);
+
+  void deallocate_block(std::size_t block_id);
+
+ private:
+  std::vector<Block> blocks_;
+  std::size_t block_size_;
+
+  std::unordered_map<std::uint64_t, std::size_t> hash_to_block_id_;
+
+  std::unordered_set<std::size_t> used_block_ids_;
+  std::deque<std::size_t> free_block_ids_;
+
+  std::hash<std::int32_t> hasher_;
+};
+
+} // namespace nanovllm
