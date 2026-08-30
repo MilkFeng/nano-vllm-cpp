@@ -7,7 +7,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "sequence.hh"
+#include "engine/sequence.hh"
 
 namespace nanovllm {
 
@@ -43,12 +43,21 @@ class BlockManager {
   [[nodiscard]] BlockAllocation predict_prefill_allocation(
       const Sequence& seq) const;
 
+  [[nodiscard]] bool can_prefill_allocate(Sequence& seq) const {
+    return can_allocate(predict_prefill_allocation(seq));
+  }
+
   void prefill_allocate(Sequence& seq, BlockAllocation allocation);
 
   [[nodiscard]] BlockAllocation predict_decode_allocation(
       const Sequence& seq) const;
 
+  [[nodiscard]] bool can_decode_allocate(Sequence& seq) const {
+    return can_allocate(predict_decode_allocation(seq));
+  }
+
   void decode_allocate(Sequence& seq, BlockAllocation allocation);
+  void decode_allocate(Sequence& seq);
 
   void deallocate(Sequence& seq);
 

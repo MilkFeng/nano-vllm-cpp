@@ -1,8 +1,8 @@
-#include <nano-vllm/nano-vllm.hh>
-
+#include "engine/model_runner.hh"
+#include "engine/scheduler.hh"
+#include "engine/tokenizer.hh"
 #include "model_config.hh"
-#include "scheduler.hh"
-#include "tokenizer.hh"
+#include "nano-vllm/nano-vllm.hh"
 
 namespace nanovllm {
 
@@ -65,7 +65,10 @@ class LLMEngine::Impl {
             ModelConfig::read_from_file(model_path_.model_config_path())),
         tokenizer_(model_path_.tokenizer_path(),
                    model_path_.tokenizer_config_path()),
-        scheduler_(params.kvcache_block_size) {
+        model_runner_(params, model_config_),
+        scheduler_(model_runner_.num_blocks(), params.kvcache_block_size,
+                   params.max_num_seqs, params.max_num_batched_tokens,
+                   tokenizer_.eos_token_id()) {
     logger_->info("Initializing LLM engine");
   }
 
@@ -83,6 +86,10 @@ class LLMEngine::Impl {
       const auto token_ids = tokenizer_.encode(prompt);
       scheduler_.append_sequence(token_ids, sampling_params);
     }
+
+    while (!scheduler_.finished()) {
+      const auto scheduled = scheduler_.schedule();
+    }
     return {};
   }
 
@@ -95,6 +102,7 @@ class LLMEngine::Impl {
   ModelConfig model_config_;
   Tokenizer tokenizer_;
 
+  ModelRunner model_runner_;
   Scheduler scheduler_;
 };
 

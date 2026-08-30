@@ -19,8 +19,6 @@ struct Sequence {
   std::size_t num_cached_tokens;
   std::size_t num_scheduled_tokens;
 
-  bool is_prefill;
-
   std::vector<std::size_t> block_ids;
   std::size_t block_size;
 

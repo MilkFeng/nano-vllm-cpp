@@ -1,9 +1,9 @@
-#include "block_manager.hh"
+#include "engine/block_manager.hh"
 
 #include <cstdint>
 #include <optional>
 
-#include "hasher.hh"
+#include "common/hasher.hh"
 
 namespace nanovllm {
 
@@ -103,6 +103,14 @@ BlockAllocation BlockManager::predict_decode_allocation(
 }
 
 void BlockManager::decode_allocate(Sequence& seq, BlockAllocation allocation) {
+  if (allocation.num_allocate_blocks == 1) {
+    const auto block_id = allocate_block();
+    seq.block_ids.push_back(block_id);
+  }
+}
+
+void BlockManager::decode_allocate(Sequence& seq) {
+  const auto allocation = predict_decode_allocation(seq);
   if (allocation.num_allocate_blocks == 1) {
     const auto block_id = allocate_block();
     seq.block_ids.push_back(block_id);

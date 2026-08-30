@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "macros.hh"
+#include "common/macros.hh"
 
 namespace nanovllm {
 enum class RoPEScalingType { Linear, Dynamic, Yarn };
