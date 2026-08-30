@@ -18,6 +18,7 @@ find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
 find_package(xxHash CONFIG REQUIRED)
+find_package(magic_enum CONFIG REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 
 find_program(CARGO_EXECUTABLE cargo HINTS "$ENV{HOME}/.cargo/bin")
@@ -83,6 +84,7 @@ target_link_libraries(
     spdlog::spdlog
     tokenizers_cpp
     xxHash::xxhash
+    magic_enum::magic_enum
 )
 
 # ========== nano-vllm-cpp CLI ==========

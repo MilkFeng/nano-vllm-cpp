@@ -1,4 +1,4 @@
-#include "models/model_config.hh"
+#include "model/model_config.hh"
 
 #include <cassert>
 #include <fstream>

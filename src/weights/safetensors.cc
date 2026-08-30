@@ -151,7 +151,9 @@ Safetensors::Safetensors(Safetensors&& other) noexcept
       tensor_map_(std::move(other.tensor_map_)) {}
 
 Safetensors& Safetensors::operator=(Safetensors&& other) noexcept {
-  if (this == &other) return *this;
+  if (this == &other) {
+    return *this;
+  }
 
   close();
   path_ = std::move(other.path_);

@@ -2,5 +2,5 @@
     "name": "nano-vllm-cpp",
     "version": "0.1.0",
     "description": "",
-    "dependencies": ["nlohmann-json", "spdlog", "cli11", "xxhash"]
+    "dependencies": ["nlohmann-json", "spdlog", "cli11", "xxhash", "magic-enum"]
 }
