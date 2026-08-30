@@ -27,25 +27,25 @@ Tensor::Tensor(std::shared_ptr<Storage> storage, std::size_t byte_offset,
     throw std::invalid_argument("tensor device is invalid");
   }
 
-  if (!storage) {
-    if (byte_offset != 0 || layout.numel() != 0) {
+  if (!storage_) {
+    if (byte_offset != 0 || layout_.numel() != 0) {
       throw std::invalid_argument(
           "a non-empty tensor requires allocated storage");
     }
     return;
   }
 
-  if (storage->device() != device) {
+  if (storage_->device() != device) {
     throw std::invalid_argument(
         "tensor and its storage must be on the same device");
   }
 
-  if (byte_offset > storage->size_bytes()) {
+  if (byte_offset > storage_->size_bytes()) {
     throw std::out_of_range("tensor byte offset is outside its storage");
   }
 
-  const auto span_size = layout_span_size_bytes(layout, dtype);
-  if (span_size > storage->size_bytes() - byte_offset) {
+  const auto span_size = layout_span_size_bytes(layout_, dtype);
+  if (span_size > storage_->size_bytes() - byte_offset) {
     throw std::out_of_range("tensor layout extends outside its storage");
   }
 }
