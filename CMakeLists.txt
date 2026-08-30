@@ -25,7 +25,7 @@ find_program(CARGO_EXECUTABLE cargo HINTS "$ENV{HOME}/.cargo/bin")
 if(NOT CARGO_EXECUTABLE)
   message(
     FATAL_ERROR
-    "tokenizers-cpp requires Rust and Cargo; install them with rustup before configuring"
+    "tokenizers-cpp requires Rust and Cargo; install them before configuring"
   )
 endif()
 

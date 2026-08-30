@@ -7,7 +7,7 @@
 #include <string_view>
 
 #include "common/macros.hh"
-#include "weights/tensor.hh"
+#include "model/device.hh"
 
 namespace nanovllm {
 

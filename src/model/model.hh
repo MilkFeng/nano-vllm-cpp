@@ -3,9 +3,8 @@
 #include <filesystem>
 #include <map>
 #include <string>
-#include <string_view>
 
-#include "weights/tensor.hh"
+#include "model/module.hh"
 
 namespace nanovllm {
 
@@ -20,44 +19,30 @@ struct ModelLoadResult {
   std::uint64_t num_bytes = 0;
 };
 
-// Base class for executable models that own their parameter storage.
-//
-// Derived models register checkpoint tensor names together with the destination
-// views they own. A destination may be a slice of a packed parameter, allowing
-// checkpoint tensors such as q_proj/k_proj/v_proj to be loaded directly into a
-// single QKV allocation without teaching ModelLoader about model architectures.
-class Model {
+// Base class for executable models. Module parameters provide default
+// checkpoint destinations. Derived models may add explicit checkpoint bindings
+// for external names or slices of packed parameters without teaching the loader
+// about model architectures.
+class Model : public Module {
  public:
-  using Parameters = std::map<std::string, TensorView, std::less<>>;
-
-  virtual ~Model() = default;
-
-  Model(const Model&) = delete;
-  Model& operator=(const Model&) = delete;
-  Model(Model&&) = delete;
-  Model& operator=(Model&&) = delete;
-
-  [[nodiscard]] const Parameters& parameters() const noexcept {
-    return parameters_;
-  }
-
-  [[nodiscard]] bool has_parameter(std::string_view name) const noexcept {
-    return parameters_.contains(name);
-  }
-
-  [[nodiscard]] TensorView parameter(std::string_view name) const;
+  ~Model() override = default;
 
   [[nodiscard]] ModelLoadResult load_ckpt(
-      const std::filesystem::path& ckpt_path,
-      ModelLoadOptions options = {}) const;
+      const std::filesystem::path& ckpt_path, ModelLoadOptions options = {});
 
  protected:
   Model() = default;
 
-  void register_parameter(std::string name, TensorView destination);
+  void register_checkpoint_binding(std::string name, TensorView destination);
 
  private:
-  Parameters parameters_;
+  using CheckpointBindings = std::map<std::string, TensorView, std::less<>>;
+
+  // Builds a fresh mapping so registered Parameters are never represented by
+  // cached TensorViews. Explicit bindings override same-named defaults.
+  [[nodiscard]] CheckpointBindings checkpoint_destinations();
+
+  CheckpointBindings checkpoint_bindings_;
 };
 
 } // namespace nanovllm
