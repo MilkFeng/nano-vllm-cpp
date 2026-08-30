@@ -1,11 +1,11 @@
 #pragma once
 
 #include <deque>
-#include <nano-vllm/nano-vllm.hh>
 #include <span>
 
 #include "engine/block_manager.hh"
 #include "engine/sequence.hh"
+#include "nanovllm/nanovllm.hh"
 
 namespace nanovllm {
 

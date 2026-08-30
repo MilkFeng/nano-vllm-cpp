@@ -88,6 +88,7 @@ Scheduled Scheduler::schedule() {
   // Decode
   while (!runnings_.empty() && scheduled_seqs.size() < max_num_seqs_) {
     const auto seq_id = runnings_.front();
+    runnings_.pop_front();
     auto& seq = sequences_[seq_id];
 
     bool current_seq_preempted = false;

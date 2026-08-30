@@ -7,16 +7,15 @@
 
 namespace nanovllm {
 
-void Block::clear() {
+void Block::reset() {
   token_ids.clear();
   hash = std::nullopt;
-  ref_count = 0;
+  ref_count = 1;
 }
 
-BlockManager::BlockManager(std::size_t block_size, std::size_t num_blocks)
+BlockManager::BlockManager(std::size_t num_blocks, std::size_t block_size)
     : blocks_(num_blocks),
-      block_size_(block_size),
-      free_block_ids_(num_blocks) {
+      block_size_(block_size) {
   for (std::size_t i = 0; i < num_blocks; ++i) {
     blocks_[i].id = i;
     free_block_ids_.push_back(i);
@@ -151,7 +150,7 @@ std::size_t BlockManager::allocate_block() {
     }
   }
 
-  block.clear();
+  block.reset();
 
   used_block_ids_.insert(block_id);
   return block_id;

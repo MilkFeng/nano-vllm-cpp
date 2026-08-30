@@ -1,8 +1,8 @@
 #pragma once
 
 #include "engine/sequence.hh"
-#include "model_config.hh"
-#include "nano-vllm/nano-vllm.hh"
+#include "models/model_config.hh"
+#include "nanovllm/nanovllm.hh"
 
 namespace nanovllm {
 

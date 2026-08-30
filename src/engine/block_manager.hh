@@ -18,7 +18,7 @@ struct Block {
 
   std::size_t ref_count;
 
-  void clear();
+  void reset();
 };
 
 struct BlockAllocation {
@@ -29,7 +29,7 @@ struct BlockAllocation {
 
 class BlockManager {
  public:
-  BlockManager(std::size_t block_size, std::size_t num_blocks);
+  BlockManager(std::size_t num_blocks, std::size_t block_size);
   ~BlockManager() = default;
 
   BlockManager(const BlockManager&) = delete;

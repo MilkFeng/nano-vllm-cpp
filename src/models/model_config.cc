@@ -1,4 +1,4 @@
-#include "model_config.hh"
+#include "models/model_config.hh"
 
 #include <cassert>
 #include <fstream>
@@ -38,9 +38,10 @@ VLLM_IMPL_NLOHMANN_JSON(RoPEScaling)
 VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(HiddenAct, {{HiddenAct::GeLU, "gelu"},
                                              {HiddenAct::SiLU, "silu"}})
 
-VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(DataType, {{DataType::Float16, "float16"},
-                                            {DataType::BFloat16, "bfloat16"},
-                                            {DataType::Float32, "float32"}})
+VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(TorchDataType,
+                                 {{TorchDataType::Float16, "float16"},
+                                  {TorchDataType::BFloat16, "bfloat16"},
+                                  {TorchDataType::Float32, "float32"}})
 
 nlohmann::json ModelConfig::to_json() const {
   return {
@@ -95,7 +96,7 @@ ModelConfig ModelConfig::from_json(const nlohmann::json& j) {
 
       .tie_word_embeddings = j.at("tie_word_embeddings").get<bool>(),
 
-      .dtype = j.at("torch_dtype").get<DataType>(),
+      .dtype = j.at("torch_dtype").get<TorchDataType>(),
   };
 
   assert(config.vocab_size > 0);

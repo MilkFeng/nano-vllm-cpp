@@ -1,6 +1,6 @@
 #include <iostream>
 #include <mutex>
-#include <nano-vllm/nano-vllm.hh>
+#include <nanovllm/nanovllm.hh>
 
 class ConsoleLogger final : public nanovllm::Logger {
  public:

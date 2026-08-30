@@ -31,9 +31,9 @@ enum class HiddenAct { GeLU, SiLU };
 
 VLLM_DEFINE_NLOHMANN_JSON(HiddenAct)
 
-enum class DataType { Float16, BFloat16, Float32 };
+enum class TorchDataType { Float16, BFloat16, Float32 };
 
-VLLM_DEFINE_NLOHMANN_JSON(DataType)
+VLLM_DEFINE_NLOHMANN_JSON(TorchDataType)
 
 struct ModelConfig {
   std::string model_type;
@@ -58,7 +58,7 @@ struct ModelConfig {
 
   bool tie_word_embeddings;
 
-  DataType dtype;
+  TorchDataType dtype;
 
   [[nodiscard]] nlohmann::json to_json() const;
   [[nodiscard]] static ModelConfig from_json(const nlohmann::json& j);

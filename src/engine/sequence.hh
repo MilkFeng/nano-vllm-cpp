@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "nano-vllm/nano-vllm.hh"
+#include "nanovllm/nanovllm.hh"
 
 namespace nanovllm {
 

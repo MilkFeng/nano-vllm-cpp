@@ -1,8 +1,8 @@
 #include "engine/model_runner.hh"
 #include "engine/scheduler.hh"
 #include "engine/tokenizer.hh"
-#include "model_config.hh"
-#include "nano-vllm/nano-vllm.hh"
+#include "models/model_config.hh"
+#include "nanovllm/nanovllm.hh"
 
 namespace nanovllm {
 

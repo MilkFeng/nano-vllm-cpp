@@ -5,7 +5,9 @@ namespace nanovllm {
 
 ModelRunner::ModelRunner(EngineParams params, ModelConfig config)
     : params_(params),
-      config_(config) {}
+      config_(config) {
+  num_blocks_ = 512;
+}
 
 std::vector<std::size_t> ModelRunner::run(std::span<const Sequence> seqs,
                                           bool prefill) {
