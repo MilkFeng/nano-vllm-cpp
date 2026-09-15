@@ -1,5 +1,3 @@
-#include "kernels/inference.hh"
-
 #include <curand_kernel.h>
 #include <math_constants.h>
 
@@ -11,6 +9,7 @@
 #include <limits>
 
 #include "kernels/common.cuh"
+#include "kernels/inference.hh"
 
 namespace nanovllm::kernels {
 namespace {
@@ -23,8 +22,9 @@ __device__ bool better(float score, int index, float best, int best_index) {
 
 __device__ void reduce_best(float* scores, int* indices) {
   for (unsigned offset = kThreads / 2; offset > 0; offset /= 2) {
-    if (threadIdx.x < offset && better(scores[threadIdx.x + offset],
-        indices[threadIdx.x + offset], scores[threadIdx.x], indices[threadIdx.x])) {
+    if (threadIdx.x < offset
+        && better(scores[threadIdx.x + offset], indices[threadIdx.x + offset],
+                  scores[threadIdx.x], indices[threadIdx.x])) {
       scores[threadIdx.x] = scores[threadIdx.x + offset];
       indices[threadIdx.x] = indices[threadIdx.x + offset];
     }
@@ -42,7 +42,8 @@ __global__ void sample_kernel(const T* logits, const float* temperatures,
   for (std::size_t row = blockIdx.x; row < batch; row += gridDim.x) {
     const float temperature = temperatures[row];
     const bool valid_temperature = isfinite(temperature) && temperature >= 0.0f;
-    assert(valid_temperature && "sampling temperature must be finite and nonnegative");
+    assert(valid_temperature
+           && "sampling temperature must be finite and nonnegative");
     if (!valid_temperature) {
       if (threadIdx.x == 0) output[row] = -1;
       continue;
@@ -52,8 +53,10 @@ __global__ void sample_kernel(const T* logits, const float* temperatures,
     for (std::size_t col = threadIdx.x; col < vocab; col += blockDim.x) {
       const float logit = detail::to_float(logits[row * stride + col]);
       const bool valid_logit = !isnan(logit) && logit != CUDART_INF_F;
-      assert(valid_logit && "sampling logits cannot contain NaN or positive infinity");
-      if (valid_logit && better(logit, static_cast<int>(col), best, best_index)) {
+      assert(valid_logit
+             && "sampling logits cannot contain NaN or positive infinity");
+      if (valid_logit
+          && better(logit, static_cast<int>(col), best, best_index)) {
         best = logit;
         best_index = static_cast<int>(col);
       }
@@ -83,8 +86,8 @@ __global__ void sample_kernel(const T* logits, const float* temperatures,
       // Divide first when temperature can shrink finite extreme logits;
       // subtract first for small temperatures to avoid infinity - infinity.
       const float centered = temperature >= 1.0f
-          ? logit / temperature - maximum / temperature
-          : (logit - maximum) / temperature;
+                                 ? logit / temperature - maximum / temperature
+                                 : (logit - maximum) / temperature;
       const float score = centered - logf(exponential);
       if (better(score, static_cast<int>(col), best, best_index)) {
         best = score;
@@ -113,29 +116,37 @@ void sample(ConstTensorView logits, ConstTensorView temperatures,
                       && output.device() == logits.device()
                       && temperatures.dtype() == DataType::Float32
                       && output.dtype() == DataType::Int32,
-                  "sample requires Float32 temperatures and Int32 output on the logits device");
-  detail::require(logits.rank() == 2 && temperatures.rank() == 1 && output.rank() == 1,
-                  "sample expects logits[B,V], temperatures[B], and output[B]");
+                  "sample requires Float32 temperatures and Int32 output on "
+                  "the logits device");
+  detail::require(
+      logits.rank() == 2 && temperatures.rank() == 1 && output.rank() == 1,
+      "sample expects logits[B,V], temperatures[B], and output[B]");
   const auto batch = logits.shape()[0], vocab = logits.shape()[1];
-  detail::require(vocab > 0
-                      && vocab <= static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())
-                      && temperatures.shape()[0] == batch && output.shape()[0] == batch,
-                  "sample batch sizes must match and vocabulary must fit positive Int32");
-  detail::require(logits.strides().size() == 2 && logits.strides()[1] == 1
-                      && logits.strides()[0] >= vocab && temperatures.is_contiguous()
-                      && output.is_contiguous(),
-                  "sample requires contiguous logits columns, temperatures, and output");
+  detail::require(
+      vocab > 0
+          && vocab <= static_cast<std::size_t>(
+                 std::numeric_limits<std::int32_t>::max())
+          && temperatures.shape()[0] == batch && output.shape()[0] == batch,
+      "sample batch sizes must match and vocabulary must fit positive Int32");
+  detail::require(
+      logits.strides().size() == 2 && logits.strides()[1] == 1
+          && logits.strides()[0] >= vocab && temperatures.is_contiguous()
+          && output.is_contiguous(),
+      "sample requires contiguous logits columns, temperatures, and output");
   detail::require(!detail::overlaps(logits, output.as_const())
                       && !detail::overlaps(temperatures, output.as_const()),
                   "sample output must not overlap its inputs");
   (void)detail::checked_mul(batch, vocab);
   if (batch == 0) return;
   const detail::DeviceGuard guard(logits.device().index);
-  const auto blocks = static_cast<unsigned>(std::min<std::size_t>(batch, 65535));
+  const auto blocks =
+      static_cast<unsigned>(std::min<std::size_t>(batch, 65535));
   detail::dispatch_float(logits.dtype(), [&]<typename T> {
-    sample_kernel<<<blocks, kThreads, 0, stream>>>(static_cast<const T*>(logits.data()),
-        static_cast<const float*>(temperatures.data()), static_cast<std::int32_t*>(output.data()),
-        batch, vocab, logits.strides()[0], seed, step);
+    sample_kernel<<<blocks, kThreads, 0, stream>>>(
+        static_cast<const T*>(logits.data()),
+        static_cast<const float*>(temperatures.data()),
+        static_cast<std::int32_t*>(output.data()), batch, vocab,
+        logits.strides()[0], seed, step);
   });
   detail::check_cuda(cudaGetLastError(), "sample launch");
 }

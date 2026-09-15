@@ -16,7 +16,9 @@
 namespace nanovllm::kernels::detail {
 
 inline void require(bool condition, const char* message) {
-  if (!condition) throw std::invalid_argument(message);
+  if (!condition) {
+    throw std::invalid_argument(message);
+  }
 }
 
 inline void check_cuda(cudaError_t status, const char* operation) {
@@ -49,8 +51,9 @@ class DeviceGuard {
 };
 
 inline void require_cuda(ConstTensorView tensor) {
-  require(tensor.device().type == DeviceType::Cuda && tensor.device().index >= 0,
-          "kernel tensors must be on a CUDA device");
+  require(
+      tensor.device().type == DeviceType::Cuda && tensor.device().index >= 0,
+      "kernel tensors must be on a CUDA device");
   require(tensor.numel() == 0 || tensor.data() != nullptr,
           "a non-empty kernel tensor requires data");
 }
@@ -62,7 +65,8 @@ inline void require_float(ConstTensorView tensor) {
           "kernel supports only Float32, Float16 and BFloat16");
 }
 
-inline void require_same_device_dtype(ConstTensorView lhs, ConstTensorView rhs) {
+inline void require_same_device_dtype(ConstTensorView lhs,
+                                      ConstTensorView rhs) {
   require(lhs.device() == rhs.device(), "kernel tensor devices must match");
   require(lhs.dtype() == rhs.dtype(), "kernel tensor dtypes must match");
 }
@@ -84,14 +88,14 @@ inline std::size_t checked_mul(std::size_t a, std::size_t b) {
 inline std::size_t storage_span(ConstTensorView tensor) {
   require(tensor.strides().size() == tensor.rank(),
           "kernel tensor shape and strides must have equal rank");
-  if (std::ranges::find(tensor.shape(), std::size_t{0}) != tensor.shape().end()) {
+  if (std::ranges::find(tensor.shape(), std::size_t{0})
+      != tensor.shape().end()) {
     return 0;
   }
   std::size_t elements = 1;
   for (std::size_t axis = 0; axis < tensor.rank(); ++axis) {
-    elements = checked_add(elements,
-                           checked_mul(tensor.shape()[axis] - 1,
-                                       tensor.strides()[axis]));
+    elements = checked_add(elements, checked_mul(tensor.shape()[axis] - 1,
+                                                 tensor.strides()[axis]));
   }
   return checked_mul(elements, data_type_size(tensor.dtype()));
 }

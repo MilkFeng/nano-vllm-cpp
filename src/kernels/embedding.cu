@@ -1,11 +1,10 @@
-#include "kernels/kernels.hh"
-
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 
 #include "kernels/common.cuh"
+#include "kernels/kernels.hh"
 
 namespace nanovllm::kernels {
 namespace {
@@ -16,14 +15,17 @@ __global__ void embedding_kernel(const std::int32_t* input_ids, const T* weight,
                                  std::size_t vocab_size,
                                  std::size_t hidden_size) {
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
-  for (std::size_t index = static_cast<std::size_t>(blockIdx.x) * blockDim.x
-                           + threadIdx.x;
+  for (std::size_t index =
+           static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
        index < count; index += step) {
     const std::int32_t token = input_ids[index / hidden_size];
-    const bool valid = token >= 0 && static_cast<std::size_t>(token) < vocab_size;
+    const bool valid =
+        token >= 0 && static_cast<std::size_t>(token) < vocab_size;
     assert(valid && "embedding token ID is outside the vocabulary");
     // Keep the bounds check in release builds, where assert may be disabled.
-    if (!valid) continue;
+    if (!valid) {
+      continue;
+    }
     output[index] = weight[static_cast<std::size_t>(token) * hidden_size
                            + index % hidden_size];
   }
@@ -40,10 +42,12 @@ void embedding(ConstTensorView input_ids, ConstTensorView weight,
                   "embedding requires Int32 token IDs");
   detail::require_float(weight);
   detail::require_same_device_dtype(weight, output.as_const());
-  detail::require(input_ids.device() == weight.device(),
-                  "embedding requires token IDs and weights on the same CUDA device");
-  detail::require(input_ids.rank() == 1 && weight.rank() == 2 && output.rank() == 2,
-                  "embedding expects rank-1 IDs and rank-2 weights and output");
+  detail::require(
+      input_ids.device() == weight.device(),
+      "embedding requires token IDs and weights on the same CUDA device");
+  detail::require(
+      input_ids.rank() == 1 && weight.rank() == 2 && output.rank() == 2,
+      "embedding expects rank-1 IDs and rank-2 weights and output");
   detail::require(input_ids.is_contiguous() && weight.is_contiguous()
                       && output.is_contiguous(),
                   "embedding requires contiguous IDs, weights, and output");

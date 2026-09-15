@@ -2,7 +2,7 @@
 
 #include <xxhash.h>
 
-#include <bit>
+#include <array>
 #include <new>
 
 namespace nanovllm {
@@ -34,10 +34,13 @@ Hasher::Hasher()
 Hasher::~Hasher() = default;
 
 void Hasher::update(std::uint64_t value) {
-  if constexpr (std::endian::native == std::endian::big) {
-    value = std::byteswap(value);
+  // Hash integers in little-endian byte order on every host.
+  std::array<std::uint8_t, sizeof(value)> bytes{};
+  for (auto& byte : bytes) {
+    byte = static_cast<std::uint8_t>(value);
+    value >>= 8;
   }
-  XXH64_update(&state_->state(), &value, sizeof(value));
+  XXH64_update(&state_->state(), bytes.data(), bytes.size());
 }
 
 std::uint64_t Hasher::digest() const {

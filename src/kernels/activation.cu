@@ -1,10 +1,9 @@
-#include "kernels/kernels.hh"
-
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 
 #include "kernels/common.cuh"
+#include "kernels/kernels.hh"
 
 namespace nanovllm::kernels {
 namespace {
@@ -15,8 +14,8 @@ __global__ void silu_and_mul_kernel(const T* gate, const T* up, T* output,
                                     std::size_t gate_stride,
                                     std::size_t up_stride) {
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
-  for (std::size_t index = static_cast<std::size_t>(blockIdx.x) * blockDim.x
-                           + threadIdx.x;
+  for (std::size_t index =
+           static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
        index < count; index += step) {
     const std::size_t row = index / width;
     const std::size_t column = index % width;
@@ -45,15 +44,17 @@ void silu_and_mul(ConstTensorView gate, ConstTensorView up, TensorView output,
                   "silu_and_mul requires matching gate, up, and output shapes");
   const std::size_t width = gate.shape()[1];
   detail::require(width > 0, "silu_and_mul requires a positive feature width");
-  detail::require(gate.strides()[1] == 1 && up.strides()[1] == 1
-                      && gate.strides()[0] >= width
-                      && up.strides()[0] >= width,
-                  "silu_and_mul requires unit feature strides and nonoverlapping rows");
+  detail::require(
+      gate.strides()[1] == 1 && up.strides()[1] == 1
+          && gate.strides()[0] >= width && up.strides()[0] >= width,
+      "silu_and_mul requires unit feature strides and nonoverlapping rows");
   detail::require(output.is_contiguous(),
                   "silu_and_mul requires contiguous output");
-  detail::require_exact_or_disjoint(gate, output.as_const(),
+  detail::require_exact_or_disjoint(
+      gate, output.as_const(),
       "silu_and_mul permits only exact contiguous gate/output aliases");
-  detail::require_exact_or_disjoint(up, output.as_const(),
+  detail::require_exact_or_disjoint(
+      up, output.as_const(),
       "silu_and_mul permits only exact contiguous up/output aliases");
   const std::size_t count = output.numel();
   if (count == 0) return;

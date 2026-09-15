@@ -1,9 +1,8 @@
-#include "kernels/kernels.hh"
-
 #include <algorithm>
 #include <cmath>
 
 #include "kernels/common.cuh"
+#include "kernels/kernels.hh"
 
 namespace nanovllm::kernels {
 namespace {
@@ -53,7 +52,8 @@ void validate_output(ConstTensorView input, ConstTensorView output) {
 }
 
 void validate_alias(ConstTensorView input, ConstTensorView output) {
-  detail::require_exact_or_disjoint(input, output,
+  detail::require_exact_or_disjoint(
+      input, output,
       "normalization permits only exact contiguous input/output aliases");
 }
 
@@ -62,25 +62,27 @@ void validate_weight(ConstTensorView input, ConstTensorView weight,
   detail::require(std::isfinite(epsilon) && epsilon > 0.0f,
                   "normalization epsilon must be finite and positive");
   detail::require_same_device_dtype(input, weight);
-  detail::require(weight.rank() == 1 && weight.is_contiguous()
-                      && weight.shape()[0] == input.shape().back(),
-                  "normalization weight must be a contiguous vector matching width");
+  detail::require(
+      weight.rank() == 1 && weight.is_contiguous()
+          && weight.shape()[0] == input.shape().back(),
+      "normalization weight must be a contiguous vector matching width");
   detail::require(!detail::overlaps(weight, output),
                   "normalization weight must not overlap output");
 }
 
 template <typename T, bool Fused>
-__global__ void normalization_kernel(
-    const T* input, const T* residual, const T* weight, T* output,
-    T* residual_output, Rows rows, std::size_t residual_token_stride,
-    float epsilon) {
+__global__ void normalization_kernel(const T* input, const T* residual,
+                                     const T* weight, T* output,
+                                     T* residual_output, Rows rows,
+                                     std::size_t residual_token_stride,
+                                     float epsilon) {
   __shared__ float sums[kThreads];
   for (std::size_t row = blockIdx.x; row < rows.count; row += gridDim.x) {
     const auto token = row / rows.heads;
     const auto head = row % rows.heads;
     const auto input_offset = token * rows.token_stride + head * rows.width;
-    const auto residual_offset = token * residual_token_stride
-                                 + head * rows.width;
+    const auto residual_offset =
+        token * residual_token_stride + head * rows.width;
     const auto output_offset = row * rows.width;
     float sum = 0.0f;
     for (std::size_t col = threadIdx.x; col < rows.width; col += blockDim.x) {
@@ -96,8 +98,8 @@ __global__ void normalization_kernel(
       if (threadIdx.x < offset) sums[threadIdx.x] += sums[threadIdx.x + offset];
       __syncthreads();
     }
-    const float inv_rms = rsqrtf(sums[0] / static_cast<float>(rows.width)
-                                + epsilon);
+    const float inv_rms =
+        rsqrtf(sums[0] / static_cast<float>(rows.width) + epsilon);
     for (std::size_t col = threadIdx.x; col < rows.width; col += blockDim.x) {
       float value = detail::to_float(input[input_offset + col]);
       if constexpr (Fused) {
@@ -125,7 +127,8 @@ void rms_norm(ConstTensorView input, ConstTensorView weight, TensorView output,
   if (rows.count == 0) return;
 
   detail::DeviceGuard guard(input.device().index);
-  const auto blocks = static_cast<unsigned>(std::min(rows.count, std::size_t{65535}));
+  const auto blocks =
+      static_cast<unsigned>(std::min(rows.count, std::size_t{65535}));
   detail::dispatch_float(input.dtype(), [&]<typename T>() {
     normalization_kernel<T, false><<<blocks, kThreads, 0, stream>>>(
         static_cast<const T*>(input.data()), nullptr,
@@ -149,8 +152,9 @@ void fused_add_rms_norm(ConstTensorView input, ConstTensorView residual,
   validate_weight(input, weight, output.as_const(), epsilon);
   detail::require(!detail::overlaps(weight, residual_output.as_const()),
                   "normalization weight must not overlap residual output");
-  detail::require(!detail::overlaps(output.as_const(), residual_output.as_const()),
-                  "normalization outputs must not overlap");
+  detail::require(
+      !detail::overlaps(output.as_const(), residual_output.as_const()),
+      "normalization outputs must not overlap");
   validate_alias(input, output.as_const());
   validate_alias(input, residual_output.as_const());
   validate_alias(residual, output.as_const());
@@ -158,13 +162,15 @@ void fused_add_rms_norm(ConstTensorView input, ConstTensorView residual,
   if (rows.count == 0) return;
 
   detail::DeviceGuard guard(input.device().index);
-  const auto blocks = static_cast<unsigned>(std::min(rows.count, std::size_t{65535}));
+  const auto blocks =
+      static_cast<unsigned>(std::min(rows.count, std::size_t{65535}));
   detail::dispatch_float(input.dtype(), [&]<typename T>() {
     normalization_kernel<T, true><<<blocks, kThreads, 0, stream>>>(
-        static_cast<const T*>(input.data()), static_cast<const T*>(residual.data()),
+        static_cast<const T*>(input.data()),
+        static_cast<const T*>(residual.data()),
         static_cast<const T*>(weight.data()), static_cast<T*>(output.data()),
-        static_cast<T*>(residual_output.data()), rows, residual_rows.token_stride,
-        epsilon);
+        static_cast<T*>(residual_output.data()), rows,
+        residual_rows.token_stride, epsilon);
   });
   detail::check_cuda(cudaGetLastError(), "launch fused_add_rms_norm");
 }

@@ -9,7 +9,7 @@ void validate_local_name(std::string_view name) {
   if (name.empty()) {
     throw std::invalid_argument("module registration name must not be empty");
   }
-  if (name.contains('.')) {
+  if (name.find('.') != std::string_view::npos) {
     throw std::invalid_argument(
         "module registration name must not contain '.'");
   }

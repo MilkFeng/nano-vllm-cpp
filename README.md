@@ -4,7 +4,7 @@
 
 ## 构建
 
-需要 CMake 3.28+、支持 C++23 的主机编译器、CUDA Toolkit、Rust/Cargo，以及 `vcpkg.json` 中列出的 C++ 依赖。首次配置会获取 tokenizers-cpp 和固定版本的 minja。
+需要 CMake 3.28+、支持 C++20 的主机编译器和标准库、CUDA Toolkit、Rust/Cargo，以及 `vcpkg.json` 中列出的 C++ 依赖。首次配置会获取 tokenizers-cpp 和固定版本的 minja。
 
 ```bash
 cmake -S . -B build \
@@ -14,7 +14,7 @@ cmake -S . -B build \
 cmake --build build -j4
 ```
 
-将架构 `120` 改为实际 GPU 对应值。C++ 源文件使用 C++23，CUDA 源文件使用 C++20。
+将架构 `120` 改为实际 GPU 对应值。C++ 和 CUDA 源文件均使用 C++20。
 
 ## 生成文本
 

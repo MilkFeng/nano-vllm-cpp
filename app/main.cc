@@ -4,6 +4,7 @@
 #include <mutex>
 #include <nanovllm/nanovllm.hh>
 #include <nlohmann/json.hpp>
+#include <random>
 
 class ConsoleLogger final : public nanovllm::Logger {
  public:
@@ -37,6 +38,10 @@ class ConsoleLogger final : public nanovllm::Logger {
 };
 
 int main(int argc, char** argv) {
+  std::random_device rd;
+  std::mt19937_64 gen(rd());
+  std::uniform_int_distribution<uint64_t> dis(0, UINT64_MAX);
+
   CLI::App app{"Single-GPU Qwen3 inference with C++ and CUDA"};
   std::string model_path;
   std::vector<std::string> prompts;
@@ -45,6 +50,8 @@ int main(int argc, char** argv) {
   bool json_output = false;
   bool thinking = true;
   std::size_t repeat = 1;
+
+  params.seed = dis(gen);
 
   app.add_option(
          "-m,--model", model_path,
