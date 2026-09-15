@@ -80,10 +80,12 @@ ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
     const auto elements_per_token =
         8.0L * config_.hidden_size + 4.0L * config_.intermediate_size
         + 4.0L * config_.q_size() + 8.0L * config_.kv_size();
-    const auto reserve = 256.0L * 1024 * 1024
-                         * (tokens * elements_per_token
-                            + params_.max_num_seqs * config_.vocab_size)
-                         * item_size;
+    constexpr auto fixed_workspace_bytes = 256.0L * 1024 * 1024;
+    const auto activation_bytes = tokens * elements_per_token * item_size;
+    const auto logits_bytes =
+        params_.max_num_seqs * config_.vocab_size * item_size;
+    const auto reserve =
+        fixed_workspace_bytes + activation_bytes + logits_bytes;
     const auto budget = total_bytes * params_.gpu_memory_utilization
                         - (total_bytes - free_bytes) - reserve;
     if (budget < block_bytes) {
