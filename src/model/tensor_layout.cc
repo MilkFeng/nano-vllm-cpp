@@ -46,15 +46,15 @@ TensorLayout::TensorLayout(std::vector<std::size_t> shape,
                            std::vector<std::size_t> strides)
     : shape_(std::move(shape)),
       strides_(std::move(strides)) {
-  if (shape.size() != strides.size()) {
+  if (shape_.size() != strides_.size()) {
     throw std::invalid_argument(
         "tensor shape and strides must have equal rank");
   }
 
-  if (has_zero_dimension(shape)) return;
+  if (has_zero_dimension(shape_)) return;
 
-  for (std::size_t i = 0; i < shape.size(); ++i) {
-    if (shape[i] > 1 && strides[i] == 0) {
+  for (std::size_t i = 0; i < shape_.size(); ++i) {
+    if (shape_[i] > 1 && strides_[i] == 0) {
       throw std::invalid_argument(
           "zero strides are not supported for non-empty dimensions");
     }

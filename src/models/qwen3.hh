@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cuda_runtime_api.h>
+
 #include <cstddef>
 #include <memory>
 #include <optional>
@@ -21,6 +23,7 @@ struct Qwen3ForwardContext {
   ConstTensorView slot_mapping;
   ConstTensorView context_lens;
   ConstTensorView block_tables;
+  cudaStream_t stream = nullptr;
 };
 
 class Qwen3Linear final : public Module {
@@ -28,7 +31,8 @@ class Qwen3Linear final : public Module {
   Qwen3Linear(std::size_t in_features, std::size_t out_features, bool bias,
               DataType dtype, Device device);
 
-  [[nodiscard]] Tensor forward(ConstTensorView input) const;
+  [[nodiscard]] Tensor forward(ConstTensorView input,
+                               cudaStream_t stream = nullptr) const;
 
   [[nodiscard]] std::size_t in_features() const noexcept;
   [[nodiscard]] std::size_t out_features() const noexcept;
@@ -44,12 +48,21 @@ class Qwen3Linear final : public Module {
   std::unique_ptr<Parameter> bias_;
 };
 
+struct Qwen3RMSNormOutput {
+  Tensor hidden_states;
+  Tensor residual;
+};
+
 class Qwen3RMSNorm final : public Module {
  public:
   Qwen3RMSNorm(std::size_t normalized_size, float epsilon, DataType dtype,
                Device device);
 
-  [[nodiscard]] Tensor forward(ConstTensorView input) const;
+  [[nodiscard]] Tensor forward(ConstTensorView input,
+                               cudaStream_t stream = nullptr) const;
+  [[nodiscard]] Qwen3RMSNormOutput forward(
+      ConstTensorView input, ConstTensorView residual,
+      cudaStream_t stream = nullptr) const;
   [[nodiscard]] std::size_t normalized_size() const noexcept;
   [[nodiscard]] float epsilon() const noexcept;
   [[nodiscard]] Parameter& weight() noexcept;
@@ -66,7 +79,8 @@ class Qwen3Embedding final : public Module {
   Qwen3Embedding(std::size_t vocab_size, std::size_t hidden_size,
                  DataType dtype, Device device);
 
-  [[nodiscard]] Tensor forward(ConstTensorView input_ids) const;
+  [[nodiscard]] Tensor forward(ConstTensorView input_ids,
+                               cudaStream_t stream = nullptr) const;
   [[nodiscard]] Parameter& weight() noexcept;
   [[nodiscard]] const Parameter& weight() const noexcept;
 
@@ -136,6 +150,7 @@ class Qwen3Attention final : public Module {
   Qwen3Linear o_proj_;
   std::unique_ptr<Qwen3RMSNorm> q_norm_;
   std::unique_ptr<Qwen3RMSNorm> k_norm_;
+  Tensor rope_cache_;
 
   TensorView key_cache_;
   TensorView value_cache_;
@@ -145,7 +160,8 @@ class Qwen3MLP final : public Module {
  public:
   Qwen3MLP(const ModelConfig& config, DataType dtype, Device device);
 
-  [[nodiscard]] Tensor forward(ConstTensorView hidden_states) const;
+  [[nodiscard]] Tensor forward(ConstTensorView hidden_states,
+                               cudaStream_t stream = nullptr) const;
 
  private:
   std::size_t hidden_size_;

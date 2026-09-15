@@ -1,5 +1,9 @@
 #include "engine/scheduler.hh"
 
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+
 #include "engine/block_manager.hh"
 
 namespace nanovllm {
@@ -7,22 +11,41 @@ namespace nanovllm {
 Scheduler::Scheduler(std::size_t num_blocks, std::size_t block_size,
                      std::size_t max_num_seqs,
                      std::size_t max_num_batched_tokens,
-                     std::int32_t eos_token_id)
+                     std::int32_t eos_token_id, std::size_t max_model_len)
     : num_blocks_(num_blocks),
       block_size_(block_size),
       max_num_seqs_(max_num_seqs),
       max_num_batched_tokens_(max_num_batched_tokens),
       eos_token_id_(eos_token_id),
-      block_manager_(num_blocks, block_size) {}
+      max_model_len_(max_model_len),
+      block_manager_(num_blocks, block_size) {
+  if (max_num_seqs == 0 || max_num_batched_tokens == 0 || max_model_len == 0) {
+    throw std::invalid_argument("scheduler limits must be positive");
+  }
+}
 
-void Scheduler::append_sequence(std::span<const std::int32_t> token_ids,
-                                const SamplingParams& sampling_params) {
+std::size_t Scheduler::append_sequence(std::span<const std::int32_t> token_ids,
+                                       const SamplingParams& sampling_params) {
+  if (token_ids.empty() || token_ids.size() > max_model_len_
+      || !std::isfinite(sampling_params.temperature)
+      || sampling_params.temperature < 0
+      || std::ranges::any_of(token_ids, [](auto token) { return token < 0; })) {
+    throw std::invalid_argument("invalid prompt tokens, length or sampling temperature");
+  }
   const std::size_t seq_id = sequences_.size();
   sequences_.emplace_back(spawn_sequence(seq_id, token_ids, sampling_params));
-  waitings_.push_back(seq_id);
+  if (sampling_params.max_tokens == 0 || token_ids.size() == max_model_len_) {
+    sequences_.back().status = SequenceStatus::Finished;
+  } else {
+    waitings_.push_back(seq_id);
+  }
+  return seq_id;
 }
 
 Scheduled Scheduler::schedule() {
+  if (pending_) {
+    throw std::logic_error("postprocess or clear the current batch before scheduling");
+  }
   std::vector<std::size_t> scheduled_seqs;
   std::size_t num_batched_tokens = 0;
 
@@ -37,10 +60,16 @@ Scheduled Scheduler::schedule() {
     BlockAllocation alloc;
 
     if (seq.block_ids.empty()) {
+      if (seq.num_blocks() > num_blocks_) {
+        throw std::runtime_error("sequence exceeds KV cache capacity");
+      }
       // This sequence needs to be allocated blocks
       alloc = block_manager_.predict_prefill_allocation(seq);
 
       if (!block_manager_.can_allocate(alloc)) {
+        if (runnings_.empty() && scheduled_seqs.empty()) {
+          throw std::runtime_error("no KV cache capacity available for prefill");
+        }
         // Cannot allocate blocks for this sequence
         // Skip prefill, schedule decode for other sequences
         break;
@@ -79,14 +108,13 @@ Scheduled Scheduler::schedule() {
   }
 
   if (!scheduled_seqs.empty()) {
-    return {
-        .seq_ids = {scheduled_seqs.begin(), scheduled_seqs.end()},
-        .prefill = true,
-    };
+    pending_ = Scheduled{.seq_ids = std::move(scheduled_seqs), .prefill = true};
+    return *pending_;
   }
 
   // Decode
-  while (!runnings_.empty() && scheduled_seqs.size() < max_num_seqs_) {
+  while (!runnings_.empty()
+         && scheduled_seqs.size() < std::min(max_num_seqs_, max_num_batched_tokens_)) {
     const auto seq_id = runnings_.front();
     runnings_.pop_front();
     auto& seq = sequences_[seq_id];
@@ -111,14 +139,64 @@ Scheduled Scheduler::schedule() {
     }
   }
 
-  for (int i = scheduled_seqs.size() - 1; i >= 0; --i) {
-    runnings_.push_front(scheduled_seqs[i]);
+  for (auto it = scheduled_seqs.rbegin(); it != scheduled_seqs.rend(); ++it) {
+    runnings_.push_front(*it);
   }
 
-  return {
-      .seq_ids = {scheduled_seqs.begin(), scheduled_seqs.end()},
-      .prefill = false,
-  };
+  // A sequence preempted itself after exhausting the final block. Its released
+  // blocks can now be reused for prefill; do not leave the engine spinning.
+  if (scheduled_seqs.empty() && !waitings_.empty()) return schedule();
+
+  if (scheduled_seqs.empty()) return {.seq_ids = {}, .prefill = false};
+  pending_ = Scheduled{.seq_ids = std::move(scheduled_seqs), .prefill = false};
+  return *pending_;
+}
+
+void Scheduler::postprocess(const Scheduled& scheduled,
+                            std::span<const std::int32_t> token_ids) {
+  if (scheduled.seq_ids.size() != token_ids.size()) {
+    throw std::invalid_argument("model returned the wrong number of tokens");
+  }
+  if (scheduled.seq_ids.empty() && !pending_) return;
+  if (!pending_ || pending_->prefill != scheduled.prefill
+      || pending_->seq_ids != scheduled.seq_ids) {
+    throw std::invalid_argument("postprocess batch does not match the scheduled batch");
+  }
+  // Validate the entire response before publishing hashes or changing tokens.
+  for (std::size_t i = 0; i < token_ids.size(); ++i) {
+    const auto& seq = sequences_.at(scheduled.seq_ids[i]);
+    if (token_ids[i] < 0 || seq.num_scheduled_tokens == 0
+        || seq.num_cached_tokens > seq.num_tokens()
+        || seq.num_scheduled_tokens > seq.num_tokens() - seq.num_cached_tokens) {
+      throw std::invalid_argument("invalid sampled token or scheduled token range");
+    }
+  }
+  for (std::size_t i = 0; i < token_ids.size(); ++i) {
+    auto& seq = sequences_.at(scheduled.seq_ids[i]);
+    block_manager_.hash_completed_blocks(seq);
+    seq.num_cached_tokens += seq.num_scheduled_tokens;
+    seq.num_scheduled_tokens = 0;
+    if (scheduled.prefill && seq.num_cached_tokens < seq.num_tokens()) continue;
+    seq.append_token(token_ids[i]);
+    if ((!seq.sampling_params.ignore_eos && token_ids[i] == eos_token_id_)
+        || seq.num_generated_tokens() >= seq.sampling_params.max_tokens
+        || seq.num_tokens() >= max_model_len_) {
+      seq.status = SequenceStatus::Finished;
+      block_manager_.deallocate(seq);
+      std::erase(runnings_, seq.id);
+    }
+  }
+  pending_.reset();
+}
+
+void Scheduler::clear() {
+  for (auto& seq : sequences_) {
+    if (!seq.block_ids.empty()) block_manager_.deallocate(seq);
+  }
+  sequences_.clear();
+  waitings_.clear();
+  runnings_.clear();
+  pending_.reset();
 }
 
 Sequence Scheduler::spawn_sequence(std::size_t seq_id,

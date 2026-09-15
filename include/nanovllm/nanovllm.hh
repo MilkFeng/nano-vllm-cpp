@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -11,6 +12,7 @@
 namespace nanovllm {
 
 struct SamplingParams {
+  // Zero selects greedy decoding; positive values use temperature sampling.
   float temperature = 1.0f;
   std::size_t max_tokens = 64;
   bool ignore_eos = false;
@@ -22,6 +24,7 @@ struct EngineParams {
   std::size_t max_model_len = 4096;
   float gpu_memory_utilization = 0.9;
   std::size_t kvcache_block_size = 256;
+  std::uint64_t seed = 0;
 };
 
 enum class LogLevel { Trace, Debug, Info, Warning, Error };

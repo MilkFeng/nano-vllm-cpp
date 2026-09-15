@@ -5,11 +5,16 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-set(CMAKE_CUDA_STANDARD 23)
+# CUDA translation units use C++20; CMake/NVCC do not support CUDA23 here.
+set(CMAKE_CUDA_STANDARD 20)
 set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# clangd cannot expand NVCC's --options-file include response files. Keep the
+# same include directories directly in compile_commands.json instead.
+set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES OFF)
 
 include(FetchContent)
 
@@ -80,6 +85,7 @@ target_link_libraries(
   nano-vllm-cpp
   PRIVATE
     CUDA::cudart
+    CUDA::cublas
     nlohmann_json::nlohmann_json
     spdlog::spdlog
     tokenizers_cpp
@@ -99,6 +105,7 @@ target_link_libraries(
   PRIVATE
     nano-vllm-cpp::nano-vllm-cpp
     CLI11::CLI11
+    nlohmann_json::nlohmann_json
 )
 
 set_target_properties(
@@ -106,3 +113,38 @@ set_target_properties(
   PROPERTIES
     OUTPUT_NAME nano-vllm-cpp
 )
+
+include(CTest)
+if(BUILD_TESTING)
+  foreach(test_name IN ITEMS inference_kernels attention_kernels scheduler)
+    if(test_name STREQUAL "scheduler")
+      set(test_source tests/${test_name}_test.cc)
+    else()
+      set(test_source tests/${test_name}_test.cu)
+    endif()
+    add_executable(nano-vllm-cpp-${test_name}-test ${test_source})
+    target_include_directories(nano-vllm-cpp-${test_name}-test PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_link_libraries(nano-vllm-cpp-${test_name}-test PRIVATE
+      nano-vllm-cpp::nano-vllm-cpp CUDA::cudart)
+    add_test(NAME ${test_name} COMMAND nano-vllm-cpp-${test_name}-test)
+    if(NOT test_name STREQUAL "scheduler")
+      set_tests_properties(${test_name} PROPERTIES SKIP_RETURN_CODE 77)
+    endif()
+  endforeach()
+  add_executable(nano-vllm-cpp-kernels-test tests/kernels_test.cu)
+  target_include_directories(nano-vllm-cpp-kernels-test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(nano-vllm-cpp-kernels-test PRIVATE
+    nano-vllm-cpp::nano-vllm-cpp CUDA::cudart)
+  add_test(NAME kernels COMMAND nano-vllm-cpp-kernels-test)
+  set_tests_properties(kernels PROPERTIES SKIP_RETURN_CODE 77)
+
+  add_executable(nano-vllm-cpp-model-kernels-test tests/model_kernels_test.cc)
+  target_include_directories(nano-vllm-cpp-model-kernels-test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(nano-vllm-cpp-model-kernels-test PRIVATE
+    nano-vllm-cpp::nano-vllm-cpp CUDA::cudart nlohmann_json::nlohmann_json)
+  add_test(NAME model-kernels COMMAND nano-vllm-cpp-model-kernels-test)
+  set_tests_properties(model-kernels PROPERTIES SKIP_RETURN_CODE 77)
+endif()

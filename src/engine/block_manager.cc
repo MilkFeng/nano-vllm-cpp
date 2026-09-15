@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <stdexcept>
 
 #include "common/hasher.hh"
 
@@ -16,6 +17,9 @@ void Block::reset() {
 BlockManager::BlockManager(std::size_t num_blocks, std::size_t block_size)
     : blocks_(num_blocks),
       block_size_(block_size) {
+  if (num_blocks == 0 || block_size == 0) {
+    throw std::invalid_argument("KV cache must have positive block count and size");
+  }
   for (std::size_t i = 0; i < num_blocks; ++i) {
     blocks_[i].id = i;
     free_block_ids_.push_back(i);
@@ -36,7 +40,7 @@ BlockAllocation BlockManager::predict_prefill_allocation(
       .num_allocate_blocks = seq.num_blocks(),
   };
 
-  for (std::size_t i = 0; i < seq.num_blocks() - 1; ++i) {
+  for (std::size_t i = 0; i + 1 < seq.num_blocks(); ++i) {
     const auto token_ids = seq.block_token_ids(i);
     hash = compute_hash(token_ids, hash);
 
@@ -46,8 +50,7 @@ BlockAllocation BlockManager::predict_prefill_allocation(
     }
 
     const auto block_id = it->second;
-    if (!std::equal(token_ids.begin(), token_ids.end(),
-                    blocks_[block_id].token_ids.begin())) {
+    if (!std::ranges::equal(token_ids, blocks_[block_id].token_ids)) {
       break;
     }
 
@@ -64,6 +67,13 @@ BlockAllocation BlockManager::predict_prefill_allocation(
 }
 
 void BlockManager::prefill_allocate(Sequence& seq, BlockAllocation allocation) {
+  const auto predicted = predict_prefill_allocation(seq);
+  if (!seq.block_ids.empty() || !can_allocate(allocation)
+      || allocation.num_reused_blocks != predicted.num_reused_blocks
+      || allocation.num_new_blocks != predicted.num_new_blocks
+      || allocation.num_allocate_blocks != predicted.num_allocate_blocks) {
+    throw std::logic_error("invalid or unavailable prefill block allocation");
+  }
   std::optional<std::uint64_t> hash = std::nullopt;
   for (std::size_t i = 0; i < allocation.num_reused_blocks; ++i) {
     const auto token_ids = seq.block_token_ids(i);
@@ -93,7 +103,10 @@ void BlockManager::prefill_allocate(Sequence& seq, BlockAllocation allocation) {
 
 BlockAllocation BlockManager::predict_decode_allocation(
     const Sequence& seq) const {
-  const auto num_allocate_blocks = (seq.num_tokens() % block_size_ == 1);
+  if (seq.num_allocated_blocks() > seq.num_blocks()) {
+    throw std::logic_error("sequence owns more KV blocks than its token count");
+  }
+  const auto num_allocate_blocks = seq.num_blocks() - seq.num_allocated_blocks();
   return {
       .num_reused_blocks = 0,
       .num_new_blocks = num_allocate_blocks,
@@ -102,26 +115,54 @@ BlockAllocation BlockManager::predict_decode_allocation(
 }
 
 void BlockManager::decode_allocate(Sequence& seq, BlockAllocation allocation) {
-  if (allocation.num_allocate_blocks == 1) {
+  const auto predicted = predict_decode_allocation(seq);
+  if (!can_allocate(allocation)
+      || allocation.num_reused_blocks != predicted.num_reused_blocks
+      || allocation.num_new_blocks != predicted.num_new_blocks
+      || allocation.num_allocate_blocks != predicted.num_allocate_blocks) {
+    throw std::logic_error("invalid or unavailable decode block allocation");
+  }
+  for (std::size_t i = 0; i < allocation.num_allocate_blocks; ++i) {
     const auto block_id = allocate_block();
     seq.block_ids.push_back(block_id);
   }
 }
 
 void BlockManager::decode_allocate(Sequence& seq) {
-  const auto allocation = predict_decode_allocation(seq);
-  if (allocation.num_allocate_blocks == 1) {
-    const auto block_id = allocate_block();
-    seq.block_ids.push_back(block_id);
-  }
+  decode_allocate(seq, predict_decode_allocation(seq));
 }
 
 void BlockManager::deallocate(Sequence& seq) {
-  for (int i = seq.block_ids.size() - 1; i >= 0; --i) {
-    deallocate_block(seq.block_ids[i]);
+  for (auto it = seq.block_ids.rbegin(); it != seq.block_ids.rend(); ++it) {
+    deallocate_block(*it);
   }
   seq.num_cached_tokens = 0;
+  seq.num_scheduled_tokens = 0;
   seq.block_ids.clear();
+}
+
+void BlockManager::hash_completed_blocks(const Sequence& seq) {
+  if (seq.num_cached_tokens > seq.num_tokens()
+      || seq.num_scheduled_tokens > seq.num_tokens() - seq.num_cached_tokens
+      || seq.num_blocks() > seq.num_allocated_blocks()) {
+    throw std::logic_error("cannot publish KV blocks outside the computed token range");
+  }
+  const auto begin = seq.num_cached_tokens / block_size_;
+  const auto end = (seq.num_cached_tokens + seq.num_scheduled_tokens) / block_size_;
+  if (begin == end) return;
+  std::optional<std::uint64_t> hash;
+  if (begin != 0) {
+    hash = blocks_.at(seq.block_ids.at(begin - 1)).hash;
+    if (!hash) throw std::logic_error("computed KV prefix is missing its hash");
+  }
+  for (auto index = begin; index < end; ++index) {
+    auto& block = blocks_.at(seq.block_ids.at(index));
+    const auto tokens = seq.block_token_ids(index);
+    hash = compute_hash(tokens, hash);
+    block.hash = hash;
+    block.token_ids.assign(tokens.begin(), tokens.end());
+    hash_to_block_id_[*hash] = block.id;
+  }
 }
 
 std::uint64_t BlockManager::compute_hash(
@@ -138,6 +179,7 @@ std::uint64_t BlockManager::compute_hash(
 }
 
 std::size_t BlockManager::allocate_block() {
+  if (free_block_ids_.empty()) throw std::runtime_error("KV cache is full");
   const auto block_id = free_block_ids_.front();
   free_block_ids_.pop_front();
 
@@ -168,7 +210,10 @@ void BlockManager::allocate_block(std::size_t block_id) {
 }
 
 void BlockManager::deallocate_block(std::size_t block_id) {
-  auto& block = blocks_[block_id];
+  auto& block = blocks_.at(block_id);
+  if (block.ref_count == 0 || !used_block_ids_.contains(block_id)) {
+    throw std::logic_error("cannot release an unreferenced KV block");
+  }
   --block.ref_count;
   if (block.ref_count == 0) {
     used_block_ids_.erase(block_id);

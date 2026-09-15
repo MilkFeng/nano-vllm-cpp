@@ -4,6 +4,9 @@
 #include "model/model_config.hh"
 #include "nanovllm/nanovllm.hh"
 
+#include <cmath>
+#include <stdexcept>
+
 namespace nanovllm {
 
 namespace {
@@ -65,11 +68,12 @@ class LLMEngine::Impl {
             ModelConfig::read_from_file(model_path_.model_config_path())),
         tokenizer_(model_path_.tokenizer_path(),
                    model_path_.tokenizer_config_path()),
-        model_runner_(params, model_config_),
+        model_runner_(params, model_config_, model_path_.model_safetensors_path()),
         scheduler_(model_runner_.num_blocks(), params.kvcache_block_size,
                    params.max_num_seqs, params.max_num_batched_tokens,
-                   tokenizer_.eos_token_id()) {
-    logger_->info("Initializing LLM engine");
+                   tokenizer_.eos_token_id(), params.max_model_len) {
+    logger_->info("Loaded Qwen3 with " + std::to_string(model_runner_.num_blocks())
+                   + " KV cache blocks");
   }
 
   ~Impl() = default;
@@ -77,20 +81,46 @@ class LLMEngine::Impl {
   Impl(const Impl&) = delete;
   Impl& operator=(const Impl&) = delete;
 
-  Impl(Impl&&) = default;
-  Impl& operator=(Impl&&) = default;
+  // LLMEngine moves the owning unique_ptr; the Impl object stays in place.
+  Impl(Impl&&) = delete;
+  Impl& operator=(Impl&&) = delete;
 
   std::vector<GenerationOutput> generate(std::span<const std::string> prompts,
                                          SamplingParams sampling_params) {
+    if (!std::isfinite(sampling_params.temperature) || sampling_params.temperature < 0) {
+      throw std::invalid_argument("sampling temperature must be finite and nonnegative");
+    }
+    std::vector<std::vector<std::int32_t>> encoded;
     for (const auto& prompt : prompts) {
-      const auto token_ids = tokenizer_.encode(prompt);
-      scheduler_.append_sequence(token_ids, sampling_params);
+      auto ids = tokenizer_.encode(prompt);
+      if (ids.empty() || ids.size() > params_.max_model_len) {
+        throw std::invalid_argument("prompt token count must be between 1 and max_model_len");
+      }
+      encoded.push_back(std::move(ids));
     }
-
-    while (!scheduler_.finished()) {
-      const auto scheduled = scheduler_.schedule();
+    scheduler_.clear();
+    std::vector<std::size_t> request_ids;
+    try {
+      for (const auto& ids : encoded) request_ids.push_back(scheduler_.append_sequence(ids, sampling_params));
+      while (!scheduler_.finished()) {
+        const auto scheduled = scheduler_.schedule();
+        if (scheduled.seq_ids.empty()) throw std::runtime_error("scheduler made no progress");
+        std::vector<const Sequence*> batch;
+        for (const auto id : scheduled.seq_ids) batch.push_back(&scheduler_.sequence(id));
+        const auto tokens = model_runner_.run(batch, scheduled.prefill);
+        scheduler_.postprocess(scheduled, tokens);
+      }
+      std::vector<GenerationOutput> result;
+      for (const auto id : request_ids) {
+        const auto tokens = scheduler_.sequence(id).generated_token_ids();
+        result.push_back({tokenizer_.decode(tokens), {tokens.begin(), tokens.end()}});
+      }
+      scheduler_.clear();
+      return result;
+    } catch (...) {
+      scheduler_.clear();
+      throw;
     }
-    return {};
   }
 
  private:

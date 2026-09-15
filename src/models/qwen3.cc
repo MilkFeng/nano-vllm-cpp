@@ -1,12 +1,17 @@
 #include "models/qwen3.hh"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+
+#include "kernels/attention.hh"
+#include "kernels/inference.hh"
+#include "kernels/kernels.hh"
 
 namespace nanovllm {
 namespace {
@@ -24,6 +29,46 @@ float require_positive_finite(float value, std::string_view name) {
                                 + " must be positive and finite");
   }
   return value;
+}
+
+std::size_t validate_head_dim(std::size_t head_dim) {
+  if (head_dim == 0 || head_dim > 256 || head_dim % 2 != 0) {
+    throw std::invalid_argument("Qwen3 head_dim must be even and in [2, 256]");
+  }
+  return head_dim;
+}
+
+void check_cuda(cudaError_t status, const char* operation) {
+  if (status != cudaSuccess) {
+    throw std::runtime_error(std::string(operation) + ": "
+                             + cudaGetErrorString(status));
+  }
+}
+
+Tensor make_rope_cache(std::size_t max_positions, std::size_t head_dim,
+                       float theta, Device device) {
+  // CPU construction remains useful for checkpoint inspection and loading.
+  if (device.type != DeviceType::Cuda) return {};
+  auto cache = Tensor::empty({max_positions, head_dim}, DataType::Float32, device);
+  int previous_device = 0;
+  check_cuda(cudaGetDevice(&previous_device), "cudaGetDevice");
+  check_cuda(cudaSetDevice(device.index), "cudaSetDevice");
+  try {
+    kernels::build_rope_cache(cache.view(), theta);
+    // Publish fully initialized cache data to forwards on any CUDA stream.
+    // This synchronization occurs once during construction, never in forward.
+    check_cuda(cudaStreamSynchronize(nullptr), "initialize RoPE cache");
+  } catch (...) {
+    (void)cudaSetDevice(previous_device);
+    throw;
+  }
+  check_cuda(cudaSetDevice(previous_device), "restore CUDA device");
+  return cache;
+}
+
+bool is_index_vector(ConstTensorView tensor, Device device) {
+  return tensor.rank() == 1 && tensor.dtype() == DataType::Int32
+         && tensor.device() == device && tensor.is_contiguous();
 }
 
 std::size_t checked_product(std::size_t lhs, std::size_t rhs,
@@ -70,7 +115,7 @@ ModelConfig validate_config(ModelConfig config) {
 
   require_positive(config.vocab_size, "vocab_size");
   require_positive(config.hidden_size, "hidden_size");
-  require_positive(config.head_dim, "head_dim");
+  validate_head_dim(config.head_dim);
   require_positive(config.intermediate_size, "intermediate_size");
   require_positive(config.num_hidden_layers, "num_hidden_layers");
   const auto num_heads =
@@ -81,6 +126,9 @@ ModelConfig validate_config(ModelConfig config) {
   require_positive_finite(config.rms_norm_eps, "rms_norm_eps");
   if (config.hidden_act != HiddenAct::SiLU) {
     throw std::invalid_argument("Qwen3 requires hidden_act 'silu'");
+  }
+  if (config.rope_scaling) {
+    throw std::invalid_argument("Qwen3 RoPE scaling is not implemented");
   }
 
   // Validate derived projection sizes before any parameter storage is created.
@@ -109,12 +157,6 @@ Tensor make_lm_head_weight(std::size_t vocab_size, std::size_t hidden_size,
   return *tied_weight;
 }
 
-[[noreturn]] void throw_kernels_not_implemented(std::string_view operation) {
-  throw std::logic_error(std::string(operation)
-                         + " requires Qwen3 compute kernels that have not been "
-                           "implemented yet");
-}
-
 } // namespace
 
 Qwen3Linear::Qwen3Linear(std::size_t in_features, std::size_t out_features,
@@ -130,10 +172,20 @@ Qwen3Linear::Qwen3Linear(std::size_t in_features, std::size_t out_features,
   }
 }
 
-Tensor Qwen3Linear::forward(ConstTensorView input) const {
-  (void)input;
-  // TODO(kernel): return linear(input, weight_.view(), bias());
-  throw_kernels_not_implemented("Qwen3Linear::forward");
+Tensor Qwen3Linear::forward(ConstTensorView input, cudaStream_t stream) const {
+  const auto weight = weight_.view();
+  if (input.rank() != 2 || input.shape()[1] != in_features_
+      || input.device().type != DeviceType::Cuda
+      || input.device() != weight.device() || input.dtype() != weight.dtype()) {
+    throw std::invalid_argument("Qwen3Linear requires matching CUDA input "
+                                "with shape [tokens, in_features]");
+  }
+  auto output = Tensor::empty({input.shape()[0], out_features_}, input.dtype(),
+                              input.device());
+  std::optional<ConstTensorView> bias;
+  if (bias_) bias = std::as_const(*bias_).view();
+  kernels::linear(input, weight, output.view(), bias, stream);
+  return output;
 }
 
 std::size_t Qwen3Linear::in_features() const noexcept {
@@ -169,11 +221,41 @@ Qwen3RMSNorm::Qwen3RMSNorm(std::size_t normalized_size, float epsilon,
   register_parameter("weight", weight_);
 }
 
-Tensor Qwen3RMSNorm::forward(ConstTensorView input) const {
-  (void)input;
-  // TODO(kernel): compute rms = rsqrt(mean(input * input) + epsilon_), then
-  // multiply input * rms * weight_.view() in the model dtype.
-  throw_kernels_not_implemented("Qwen3RMSNorm::forward");
+Tensor Qwen3RMSNorm::forward(ConstTensorView input, cudaStream_t stream) const {
+  const auto weight = weight_.view();
+  if (input.rank() < 1 || input.rank() > 3
+      || input.shape().back() != normalized_size_
+      || input.device() != weight.device() || input.dtype() != weight.dtype()
+      || input.device().type != DeviceType::Cuda) {
+    throw std::invalid_argument("Qwen3RMSNorm requires a matching CUDA input "
+                                "of rank 1 to 3 and the configured width");
+  }
+  auto output = Tensor::empty({input.shape().begin(), input.shape().end()},
+                              input.dtype(), input.device());
+  kernels::rms_norm(input, weight, output.view(), epsilon_, stream);
+  return output;
+}
+
+Qwen3RMSNormOutput Qwen3RMSNorm::forward(ConstTensorView input,
+                                       ConstTensorView residual,
+                                       cudaStream_t stream) const {
+  const auto weight = weight_.view();
+  if (input.rank() < 1 || input.rank() > 3
+      || input.shape().back() != normalized_size_
+      || input.device() != weight.device() || input.dtype() != weight.dtype()
+      || input.device().type != DeviceType::Cuda
+      || !std::ranges::equal(input.shape(), residual.shape())
+      || input.device() != residual.device() || input.dtype() != residual.dtype()) {
+    throw std::invalid_argument("Qwen3RMSNorm requires matching CUDA input and "
+                                "residual of rank 1 to 3 and the configured width");
+  }
+  const std::vector<std::size_t> shape(input.shape().begin(), input.shape().end());
+  Qwen3RMSNormOutput result{
+      Tensor::empty(shape, input.dtype(), input.device()),
+      Tensor::empty(shape, input.dtype(), input.device())};
+  kernels::fused_add_rms_norm(input, residual, weight, result.hidden_states.view(),
+                             result.residual.view(), epsilon_, stream);
+  return result;
 }
 
 std::size_t Qwen3RMSNorm::normalized_size() const noexcept {
@@ -200,12 +282,19 @@ Qwen3Embedding::Qwen3Embedding(std::size_t vocab_size, std::size_t hidden_size,
   register_parameter("weight", weight_);
 }
 
-Tensor Qwen3Embedding::forward(ConstTensorView input_ids) const {
-  (void)input_ids;
-  // TODO(kernel): gather rows from weight_.view() for every token in input_ids.
-  // A tensor-parallel implementation should mask out non-local vocabulary IDs
-  // and all-reduce the local embedding outputs.
-  throw_kernels_not_implemented("Qwen3Embedding::forward");
+Tensor Qwen3Embedding::forward(ConstTensorView input_ids,
+                               cudaStream_t stream) const {
+  const auto weight = weight_.view();
+  if (input_ids.rank() != 1 || input_ids.dtype() != DataType::Int32
+      || input_ids.device() != weight.device()
+      || input_ids.device().type != DeviceType::Cuda) {
+    throw std::invalid_argument("Qwen3Embedding requires rank-1 Int32 token IDs "
+                                "on the weight's CUDA device");
+  }
+  auto output = Tensor::empty({input_ids.shape()[0], hidden_size_}, weight.dtype(),
+                              weight.device());
+  kernels::embedding(input_ids, weight, output.view(), stream);
+  return output;
 }
 
 Parameter& Qwen3Embedding::weight() noexcept {
@@ -228,12 +317,34 @@ Qwen3LMHead::Qwen3LMHead(std::size_t vocab_size, std::size_t hidden_size,
 
 Tensor Qwen3LMHead::forward(ConstTensorView hidden_states,
                             const Qwen3ForwardContext& context) const {
-  (void)hidden_states;
-  (void)context;
-  // TODO(kernel): during prefill, gather only each sequence's last hidden state
-  // using context.cu_seqlens_q; then compute hidden_states @ weight_.view().T.
-  // A tensor-parallel implementation should gather vocabulary shards on rank 0.
-  throw_kernels_not_implemented("Qwen3LMHead::forward");
+  const auto weight = weight_.view();
+  if (hidden_states.rank() != 2 || hidden_states.shape()[1] != hidden_size_
+      || hidden_states.device().type != DeviceType::Cuda
+      || hidden_states.device() != weight.device()
+      || hidden_states.dtype() != weight.dtype()) {
+    throw std::invalid_argument("Qwen3LMHead requires matching CUDA hidden states "
+                                "with shape [tokens, hidden_size]");
+  }
+  Tensor last_hidden;
+  auto selected_hidden = hidden_states;
+  if (context.is_prefill) {
+    if (!is_index_vector(context.cu_seqlens_q, hidden_states.device())
+        || context.cu_seqlens_q.shape()[0] == 0) {
+      throw std::invalid_argument("Prefill LM head requires CUDA Int32 "
+                                  "cu_seqlens_q of shape [batch + 1]");
+    }
+    const auto batch = context.cu_seqlens_q.shape()[0] - 1;
+    last_hidden = Tensor::empty({batch, hidden_size_}, hidden_states.dtype(),
+                                hidden_states.device());
+    kernels::gather_last_hidden(hidden_states, context.cu_seqlens_q,
+                                last_hidden.view(), context.stream);
+    selected_hidden = last_hidden.view().as_const();
+  }
+  auto logits = Tensor::empty({selected_hidden.shape()[0], vocab_size_},
+                              hidden_states.dtype(), hidden_states.device());
+  kernels::linear(selected_hidden, weight, logits.view(), std::nullopt,
+                   context.stream);
+  return logits;
 }
 
 Parameter& Qwen3LMHead::weight() noexcept {
@@ -251,7 +362,7 @@ Qwen3Attention::Qwen3Attention(const ModelConfig& config, DataType dtype,
           require_positive(config.num_attention_heads, "num_attention_heads")),
       num_kv_heads_(
           validate_num_kv_heads(num_heads_, config.num_key_value_heads)),
-      head_dim_(require_positive(config.head_dim, "head_dim")),
+      head_dim_(validate_head_dim(config.head_dim)),
       q_size_(checked_product(num_heads_, head_dim_, "query projection size")),
       kv_size_(checked_product(num_kv_heads_, head_dim_,
                                "key/value projection size")),
@@ -265,6 +376,9 @@ Qwen3Attention::Qwen3Attention(const ModelConfig& config, DataType dtype,
       k_proj_(hidden_size_, kv_size_, qkv_bias_, dtype, device),
       v_proj_(hidden_size_, kv_size_, qkv_bias_, dtype, device),
       o_proj_(q_size_, hidden_size_, false, dtype, device) {
+  if (rope_scaling_) {
+    throw std::invalid_argument("Qwen3 RoPE scaling is not implemented");
+  }
   register_module("q_proj", q_proj_);
   register_module("k_proj", k_proj_);
   register_module("v_proj", v_proj_);
@@ -280,25 +394,88 @@ Qwen3Attention::Qwen3Attention(const ModelConfig& config, DataType dtype,
     register_module("q_norm", *q_norm_);
     register_module("k_norm", *k_norm_);
   }
+  rope_cache_ = make_rope_cache(max_position_embeddings_, head_dim_, rope_theta_,
+                               device);
 }
 
 Tensor Qwen3Attention::forward(ConstTensorView positions,
                                ConstTensorView hidden_states,
                                const Qwen3ForwardContext& context) const {
-  (void)positions;
-  (void)hidden_states;
-  (void)context;
-  // TODO(kernel):
-  // 1. Project hidden_states with q_proj_, k_proj_ and v_proj_. A fused GEMM
-  //    may consume the three checkpoint-compatible weights as packed views.
-  // 2. Reshape Q/K/V to [tokens, heads, head_dim_].
-  // 3. Apply q_norm_/k_norm_ when present, then apply RoPE using positions,
-  //    rope_theta_, rope_scaling_ and max_position_embeddings_.
-  // 4. Store new K/V in key_cache_/value_cache_ using context.slot_mapping.
-  // 5. Run causal variable-length attention for prefill or paged KV-cache
-  //    attention for decode, scaled by scaling_.
-  // 6. Flatten the attention heads and apply o_proj_.
-  throw_kernels_not_implemented("Qwen3Attention::forward");
+  const auto device = q_proj_.weight().view().device();
+  if (device.type != DeviceType::Cuda || hidden_states.rank() != 2
+      || hidden_states.shape()[1] != hidden_size_
+      || hidden_states.device() != device
+      || !is_index_vector(positions, device)
+      || positions.shape()[0] != hidden_states.shape()[0]) {
+    throw std::invalid_argument("Qwen3Attention requires CUDA hidden states "
+                                "[tokens, hidden_size] and Int32 positions [tokens]");
+  }
+  const auto tokens = hidden_states.shape()[0];
+  const bool have_cache = key_cache_.numel() != 0 && value_cache_.numel() != 0;
+  const bool paged_prefill = context.block_tables.numel() != 0;
+  if (have_cache
+      && (!is_index_vector(context.slot_mapping, device)
+          || context.slot_mapping.shape()[0] != tokens)) {
+    throw std::invalid_argument("Cached Qwen3 attention requires slot_mapping "
+                                "for every input token");
+  }
+  if (context.is_prefill) {
+    if (!is_index_vector(context.cu_seqlens_q, device)
+        || !is_index_vector(context.cu_seqlens_k, device)
+        || context.cu_seqlens_q.shape()[0] == 0
+        || context.cu_seqlens_q.shape()[0] != context.cu_seqlens_k.shape()[0]) {
+      throw std::invalid_argument("Prefill attention requires matching CUDA "
+                                  "Int32 cu_seqlens_q/k [batch + 1]");
+    }
+    if (paged_prefill && !have_cache) {
+      throw std::invalid_argument("Paged prefill requires initialized KV caches");
+    }
+  } else if (!have_cache || !is_index_vector(context.context_lens, device)
+             || context.context_lens.shape()[0] != tokens
+             || context.block_tables.rank() != 2
+             || context.block_tables.shape()[0] != tokens) {
+    throw std::invalid_argument("Decode attention requires initialized KV caches, "
+                                "context_lens and block_tables");
+  }
+
+  const auto stream = context.stream;
+  auto query_projection = q_proj_.forward(hidden_states, stream);
+  auto key_projection = k_proj_.forward(hidden_states, stream);
+  auto value_projection = v_proj_.forward(hidden_states, stream);
+  auto query_heads = query_projection.reshape(
+      std::array{tokens, num_heads_, head_dim_});
+  auto key_heads = key_projection.reshape(
+      std::array{tokens, num_kv_heads_, head_dim_});
+  auto value = value_projection.reshape(std::array{tokens, num_kv_heads_, head_dim_});
+  auto query = q_norm_ ? q_norm_->forward(query_heads.view().as_const(), stream)
+                       : query_heads;
+  auto key = k_norm_ ? k_norm_->forward(key_heads.view().as_const(), stream)
+                     : key_heads;
+  kernels::apply_rotary_embedding(positions, query.view().as_const(),
+                                   key.view().as_const(), rope_cache_.view(),
+                                   query.view(), key.view(), stream);
+  if (have_cache) {
+    kernels::store_kvcache(key.view().as_const(), value.view().as_const(),
+                            key_cache_, value_cache_, context.slot_mapping, stream);
+  }
+  auto attention_output = Tensor::empty({tokens, num_heads_, head_dim_},
+                                         hidden_states.dtype(), device);
+  if (context.is_prefill) {
+    const auto attention_key = paged_prefill ? key_cache() : key.view().as_const();
+    const auto attention_value = paged_prefill ? value_cache()
+                                               : value.view().as_const();
+    kernels::prefill_attention(query.view().as_const(), attention_key,
+                                attention_value, context.cu_seqlens_q,
+                                context.cu_seqlens_k, context.block_tables,
+                                attention_output.view(), scaling_, stream);
+  } else {
+    kernels::paged_attention_decode(query.view().as_const(), key_cache(),
+                                     value_cache(), context.context_lens,
+                                     context.block_tables, attention_output.view(),
+                                     scaling_, stream);
+  }
+  const auto flattened = attention_output.reshape(std::array{tokens, q_size_});
+  return o_proj_.forward(flattened.view(), stream);
 }
 
 void Qwen3Attention::set_kv_cache(TensorView key_cache,
@@ -373,12 +550,14 @@ Qwen3MLP::Qwen3MLP(const ModelConfig& config, DataType dtype, Device device)
   register_module("down_proj", down_proj_);
 }
 
-Tensor Qwen3MLP::forward(ConstTensorView hidden_states) const {
-  (void)hidden_states;
-  // TODO(kernel): gate = gate_proj_(hidden_states),
-  // up = up_proj_(hidden_states), then return down_proj_(SiLU(gate) * up).
-  // gate_proj_ and up_proj_ can share one merged-column GEMM/SwiGLU kernel.
-  throw_kernels_not_implemented("Qwen3MLP::forward");
+Tensor Qwen3MLP::forward(ConstTensorView hidden_states, cudaStream_t stream) const {
+  auto gate = gate_proj_.forward(hidden_states, stream);
+  auto up = up_proj_.forward(hidden_states, stream);
+  auto activated = Tensor::empty({hidden_states.shape()[0], intermediate_size_},
+                                  hidden_states.dtype(), hidden_states.device());
+  kernels::silu_and_mul(gate.view().as_const(), up.view().as_const(),
+                        activated.view(), stream);
+  return down_proj_.forward(activated.view().as_const(), stream);
 }
 
 Qwen3DecoderLayer::Qwen3DecoderLayer(const ModelConfig& config, DataType dtype,
@@ -398,15 +577,25 @@ Qwen3DecoderLayerOutput Qwen3DecoderLayer::forward(
     ConstTensorView positions, ConstTensorView hidden_states,
     std::optional<ConstTensorView> residual,
     const Qwen3ForwardContext& context) const {
-  (void)positions;
-  (void)hidden_states;
-  (void)residual;
-  (void)context;
-  // TODO(kernel): fuse residual-add + RMSNorm where possible:
-  // - Normalize the input and preserve/update residual.
-  // - Run self_attn_ and post_attention_layernorm_.
-  // - Run mlp_; the next layer consumes the MLP result plus residual.
-  throw_kernels_not_implemented("Qwen3DecoderLayer::forward");
+  Qwen3RMSNormOutput before_attention;
+  auto residual_view = hidden_states;
+  if (residual) {
+    before_attention = input_layernorm_.forward(hidden_states, *residual,
+                                                 context.stream);
+    residual_view = before_attention.residual.view().as_const();
+  } else {
+    before_attention.hidden_states = input_layernorm_.forward(hidden_states,
+                                                               context.stream);
+  }
+  auto attention = self_attn_.forward(
+      positions, before_attention.hidden_states.view().as_const(), context);
+  // The initial residual borrows hidden_states only until this fused operation
+  // creates the owning updated residual returned to the next decoder layer.
+  auto after_attention = post_attention_layernorm_.forward(
+      attention.view().as_const(), residual_view, context.stream);
+  auto output = mlp_.forward(after_attention.hidden_states.view().as_const(),
+                              context.stream);
+  return {std::move(output), std::move(after_attention.residual)};
 }
 
 Qwen3Attention& Qwen3DecoderLayer::self_attention() noexcept {
@@ -434,13 +623,20 @@ Qwen3Model::Qwen3Model(const ModelConfig& config, DataType dtype, Device device)
 
 Tensor Qwen3Model::forward(ConstTensorView input_ids, ConstTensorView positions,
                            const Qwen3ForwardContext& context) const {
-  (void)input_ids;
-  (void)positions;
-  (void)context;
-  // TODO(kernel): gather token embeddings, execute every decoder layer while
-  // carrying the fused residual stream, then apply the final residual-add and
-  // norm_.
-  throw_kernels_not_implemented("Qwen3Model::forward");
+  auto hidden_states = embed_tokens_.forward(input_ids, context.stream);
+  Tensor residual;
+  for (std::size_t index = 0; index < layers_.size(); ++index) {
+    const auto residual_view = index == 0
+        ? std::nullopt
+        : std::optional<ConstTensorView>(residual.view().as_const());
+    auto output = layer(index).forward(positions, hidden_states.view().as_const(),
+                                        residual_view, context);
+    hidden_states = std::move(output.hidden_states);
+    residual = std::move(output.residual);
+  }
+  auto normalized = norm_.forward(hidden_states.view().as_const(),
+                                   residual.view().as_const(), context.stream);
+  return std::move(normalized.hidden_states);
 }
 
 Qwen3Embedding& Qwen3Model::embed_tokens() noexcept {
@@ -479,19 +675,12 @@ Qwen3ForCausalLM::Qwen3ForCausalLM(const ModelConfig& config, Device device)
 Tensor Qwen3ForCausalLM::forward(ConstTensorView input_ids,
                                  ConstTensorView positions,
                                  const Qwen3ForwardContext& context) const {
-  (void)input_ids;
-  (void)positions;
-  (void)context;
-  // TODO(kernel): return model_.forward(input_ids, positions, context).
-  throw_kernels_not_implemented("Qwen3ForCausalLM::forward");
+  return model_.forward(input_ids, positions, context);
 }
 
 Tensor Qwen3ForCausalLM::compute_logits(
     ConstTensorView hidden_states, const Qwen3ForwardContext& context) const {
-  (void)hidden_states;
-  (void)context;
-  // TODO(kernel): return lm_head_.forward(hidden_states, context).
-  throw_kernels_not_implemented("Qwen3ForCausalLM::compute_logits");
+  return lm_head_.forward(hidden_states, context);
 }
 
 const ModelConfig& Qwen3ForCausalLM::config() const noexcept {

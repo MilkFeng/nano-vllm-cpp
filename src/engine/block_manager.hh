@@ -61,6 +61,9 @@ class BlockManager {
 
   void deallocate(Sequence& seq);
 
+  // Publish only blocks whose K/V has been computed successfully in all layers.
+  void hash_completed_blocks(const Sequence& seq);
+
  private:
   [[nodiscard]] std::uint64_t compute_hash(
       std::span<const std::int32_t> token_ids,
@@ -80,7 +83,6 @@ class BlockManager {
   std::unordered_set<std::size_t> used_block_ids_;
   std::deque<std::size_t> free_block_ids_;
 
-  std::hash<std::int32_t> hasher_;
 };
 
 } // namespace nanovllm

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <deque>
+#include <limits>
+#include <optional>
 #include <span>
 
 #include "engine/block_manager.hh"
@@ -18,7 +20,8 @@ class Scheduler {
  public:
   Scheduler(std::size_t num_blocks, std::size_t block_size,
             std::size_t max_num_seqs, std::size_t max_num_batched_tokens,
-            std::int32_t eos_token_id);
+            std::int32_t eos_token_id,
+            std::size_t max_model_len = std::numeric_limits<std::size_t>::max());
   ~Scheduler() = default;
 
   Scheduler(const Scheduler&) = delete;
@@ -27,13 +30,17 @@ class Scheduler {
   Scheduler(Scheduler&&) = default;
   Scheduler& operator=(Scheduler&&) = default;
 
-  void append_sequence(std::span<const std::int32_t> token_ids,
-                       const SamplingParams& sampling_params);
+  std::size_t append_sequence(std::span<const std::int32_t> token_ids,
+                              const SamplingParams& sampling_params);
 
   [[nodiscard]] Scheduled schedule();
+  void postprocess(const Scheduled& scheduled,
+                   std::span<const std::int32_t> token_ids);
+  // Release requests, retaining reusable completed KV blocks across calls.
+  void clear();
 
   [[nodiscard]] const Sequence& sequence(std::size_t seq_id) const {
-    return sequences_[seq_id];
+    return sequences_.at(seq_id);
   }
 
   [[nodiscard]] bool finished() const {
@@ -53,6 +60,7 @@ class Scheduler {
   std::size_t max_num_seqs_;
   std::size_t max_num_batched_tokens_;
   std::int32_t eos_token_id_;
+  std::size_t max_model_len_;
 
   BlockManager block_manager_;
 
@@ -60,5 +68,8 @@ class Scheduler {
 
   std::deque<std::size_t> waitings_;
   std::deque<std::size_t> runnings_;
+  // Scheduling reserves blocks; only successful model execution may publish
+  // their hashes and advance the sequences through postprocess().
+  std::optional<Scheduled> pending_;
 };
 } // namespace nanovllm

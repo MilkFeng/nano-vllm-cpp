@@ -1,6 +1,9 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <optional>
+#include <span>
 #include <vector>
 
 #include "nanovllm/nanovllm.hh"
