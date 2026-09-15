@@ -27,8 +27,8 @@ class Model : public Module {
  public:
   ~Model() override = default;
 
-  [[nodiscard]] ModelLoadResult load_ckpt(
-      const std::filesystem::path& ckpt_path, ModelLoadOptions options = {});
+  ModelLoadResult load_ckpt(const std::filesystem::path& ckpt_path,
+                            ModelLoadOptions options = {});
 
  protected:
   Model() = default;

@@ -49,8 +49,8 @@ void build_rope_cache(TensorView cos_sin_cache, float theta,
 // token strides may include padding. Each output has its input's shape.
 // Rotates pairs (i, i+D/2), using the FP32 cache built above.
 void apply_rotary_embedding(ConstTensorView positions, ConstTensorView query,
-                           ConstTensorView key, ConstTensorView cos_sin_cache,
-                           TensorView query_output, TensorView key_output,
-                           cudaStream_t stream = nullptr);
+                            ConstTensorView key, ConstTensorView cos_sin_cache,
+                            TensorView query_output, TensorView key_output,
+                            cudaStream_t stream = nullptr);
 
 } // namespace nanovllm::kernels

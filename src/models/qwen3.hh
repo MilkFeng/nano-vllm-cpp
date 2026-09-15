@@ -60,9 +60,9 @@ class Qwen3RMSNorm final : public Module {
 
   [[nodiscard]] Tensor forward(ConstTensorView input,
                                cudaStream_t stream = nullptr) const;
-  [[nodiscard]] Qwen3RMSNormOutput forward(
-      ConstTensorView input, ConstTensorView residual,
-      cudaStream_t stream = nullptr) const;
+  [[nodiscard]] Qwen3RMSNormOutput forward(ConstTensorView input,
+                                           ConstTensorView residual,
+                                           cudaStream_t stream = nullptr) const;
   [[nodiscard]] std::size_t normalized_size() const noexcept;
   [[nodiscard]] float epsilon() const noexcept;
   [[nodiscard]] Parameter& weight() noexcept;

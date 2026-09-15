@@ -18,10 +18,10 @@ struct Scheduled {
 
 class Scheduler {
  public:
-  Scheduler(std::size_t num_blocks, std::size_t block_size,
-            std::size_t max_num_seqs, std::size_t max_num_batched_tokens,
-            std::int32_t eos_token_id,
-            std::size_t max_model_len = std::numeric_limits<std::size_t>::max());
+  Scheduler(
+      std::size_t num_blocks, std::size_t block_size, std::size_t max_num_seqs,
+      std::size_t max_num_batched_tokens, std::int32_t eos_token_id,
+      std::size_t max_model_len = std::numeric_limits<std::size_t>::max());
   ~Scheduler() = default;
 
   Scheduler(const Scheduler&) = delete;

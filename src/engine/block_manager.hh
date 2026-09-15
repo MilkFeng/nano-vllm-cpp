@@ -82,7 +82,6 @@ class BlockManager {
 
   std::unordered_set<std::size_t> used_block_ids_;
   std::deque<std::size_t> free_block_ids_;
-
 };
 
 } // namespace nanovllm

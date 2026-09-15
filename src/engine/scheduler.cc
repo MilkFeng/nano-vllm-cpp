@@ -30,7 +30,8 @@ std::size_t Scheduler::append_sequence(std::span<const std::int32_t> token_ids,
       || !std::isfinite(sampling_params.temperature)
       || sampling_params.temperature < 0
       || std::ranges::any_of(token_ids, [](auto token) { return token < 0; })) {
-    throw std::invalid_argument("invalid prompt tokens, length or sampling temperature");
+    throw std::invalid_argument(
+        "invalid prompt tokens, length or sampling temperature");
   }
   const std::size_t seq_id = sequences_.size();
   sequences_.emplace_back(spawn_sequence(seq_id, token_ids, sampling_params));
@@ -44,7 +45,8 @@ std::size_t Scheduler::append_sequence(std::span<const std::int32_t> token_ids,
 
 Scheduled Scheduler::schedule() {
   if (pending_) {
-    throw std::logic_error("postprocess or clear the current batch before scheduling");
+    throw std::logic_error(
+        "postprocess or clear the current batch before scheduling");
   }
   std::vector<std::size_t> scheduled_seqs;
   std::size_t num_batched_tokens = 0;
@@ -68,7 +70,8 @@ Scheduled Scheduler::schedule() {
 
       if (!block_manager_.can_allocate(alloc)) {
         if (runnings_.empty() && scheduled_seqs.empty()) {
-          throw std::runtime_error("no KV cache capacity available for prefill");
+          throw std::runtime_error(
+              "no KV cache capacity available for prefill");
         }
         // Cannot allocate blocks for this sequence
         // Skip prefill, schedule decode for other sequences
@@ -114,7 +117,8 @@ Scheduled Scheduler::schedule() {
 
   // Decode
   while (!runnings_.empty()
-         && scheduled_seqs.size() < std::min(max_num_seqs_, max_num_batched_tokens_)) {
+         && scheduled_seqs.size()
+                < std::min(max_num_seqs_, max_num_batched_tokens_)) {
     const auto seq_id = runnings_.front();
     runnings_.pop_front();
     auto& seq = sequences_[seq_id];
@@ -160,15 +164,18 @@ void Scheduler::postprocess(const Scheduled& scheduled,
   if (scheduled.seq_ids.empty() && !pending_) return;
   if (!pending_ || pending_->prefill != scheduled.prefill
       || pending_->seq_ids != scheduled.seq_ids) {
-    throw std::invalid_argument("postprocess batch does not match the scheduled batch");
+    throw std::invalid_argument(
+        "postprocess batch does not match the scheduled batch");
   }
   // Validate the entire response before publishing hashes or changing tokens.
   for (std::size_t i = 0; i < token_ids.size(); ++i) {
     const auto& seq = sequences_.at(scheduled.seq_ids[i]);
     if (token_ids[i] < 0 || seq.num_scheduled_tokens == 0
         || seq.num_cached_tokens > seq.num_tokens()
-        || seq.num_scheduled_tokens > seq.num_tokens() - seq.num_cached_tokens) {
-      throw std::invalid_argument("invalid sampled token or scheduled token range");
+        || seq.num_scheduled_tokens
+               > seq.num_tokens() - seq.num_cached_tokens) {
+      throw std::invalid_argument(
+          "invalid sampled token or scheduled token range");
     }
   }
   for (std::size_t i = 0; i < token_ids.size(); ++i) {

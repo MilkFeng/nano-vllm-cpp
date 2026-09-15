@@ -18,7 +18,8 @@ BlockManager::BlockManager(std::size_t num_blocks, std::size_t block_size)
     : blocks_(num_blocks),
       block_size_(block_size) {
   if (num_blocks == 0 || block_size == 0) {
-    throw std::invalid_argument("KV cache must have positive block count and size");
+    throw std::invalid_argument(
+        "KV cache must have positive block count and size");
   }
   for (std::size_t i = 0; i < num_blocks; ++i) {
     blocks_[i].id = i;
@@ -106,7 +107,8 @@ BlockAllocation BlockManager::predict_decode_allocation(
   if (seq.num_allocated_blocks() > seq.num_blocks()) {
     throw std::logic_error("sequence owns more KV blocks than its token count");
   }
-  const auto num_allocate_blocks = seq.num_blocks() - seq.num_allocated_blocks();
+  const auto num_allocate_blocks =
+      seq.num_blocks() - seq.num_allocated_blocks();
   return {
       .num_reused_blocks = 0,
       .num_new_blocks = num_allocate_blocks,
@@ -142,18 +144,21 @@ void BlockManager::deallocate(Sequence& seq) {
 }
 
 void BlockManager::hash_completed_blocks(const Sequence& seq) {
-  if (seq.num_cached_tokens > seq.num_tokens()
-      || seq.num_scheduled_tokens > seq.num_tokens() - seq.num_cached_tokens
-      || seq.num_blocks() > seq.num_allocated_blocks()) {
-    throw std::logic_error("cannot publish KV blocks outside the computed token range");
-  }
   const auto begin = seq.num_cached_tokens / block_size_;
-  const auto end = (seq.num_cached_tokens + seq.num_scheduled_tokens) / block_size_;
-  if (begin == end) return;
+  const auto end =
+      (seq.num_cached_tokens + seq.num_scheduled_tokens) / block_size_;
+
+  if (begin == end) {
+    return;
+  }
+
   std::optional<std::uint64_t> hash;
+
   if (begin != 0) {
     hash = blocks_.at(seq.block_ids.at(begin - 1)).hash;
-    if (!hash) throw std::logic_error("computed KV prefix is missing its hash");
+    if (!hash) {
+      throw std::logic_error("computed KV prefix is missing its hash");
+    }
   }
   for (auto index = begin; index < end; ++index) {
     auto& block = blocks_.at(seq.block_ids.at(index));

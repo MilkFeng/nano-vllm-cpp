@@ -17,9 +17,10 @@ namespace nanovllm::kernels {
 
 // X: [M,K], W: [N,K], Y: [M,N], optional bias: [N]. Computes X @ W^T + bias
 // with FP32 accumulation. X may have a padded row stride; W is contiguous.
-// FP32 reduction order can vary with GEMM batch shape, changing output rounding.
-// The first call on a host thread/device initializes a reusable cuBLAS handle;
-// subsequent calls reuse it. Initialize before CUDA Graph capture.
+// FP32 reduction order can vary with GEMM batch shape, changing output
+// rounding. The first call on a host thread/device initializes a reusable
+// cuBLAS handle; subsequent calls reuse it. Initialize before CUDA Graph
+// capture.
 void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
             std::optional<ConstTensorView> bias = std::nullopt,
             cudaStream_t stream = nullptr);

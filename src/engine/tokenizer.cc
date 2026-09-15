@@ -126,9 +126,10 @@ class TokenizerBackend {
     if (!chat_template_ast_) {
       // Match Transformers' Jinja whitespace settings. Compile lazily so raw
       // tokenization still works when a checkpoint has no usable chat template.
-      chat_template_ast_ = minja::Parser::parse(
-          source, {.trim_blocks = true, .lstrip_blocks = true,
-                   .keep_trailing_newline = false});
+      chat_template_ast_ =
+          minja::Parser::parse(source, {.trim_blocks = true,
+                                        .lstrip_blocks = true,
+                                        .keep_trailing_newline = false});
     }
     // Template variables and namespace state belong to a single render.
     auto context = minja::Context::make(minja::Value(values));
@@ -144,7 +145,7 @@ class TokenizerBackend {
 namespace {
 
 std::optional<std::string> read_token_string(const nlohmann::json& config,
-                                            std::string_view field) {
+                                             std::string_view field) {
   const auto key = std::string(field);
   const auto it = config.find(key);
 
@@ -210,8 +211,9 @@ Tokenizer::Tokenizer(const std::filesystem::path& tokenizer_path,
   const auto chat_template = config.find("chat_template");
   if (chat_template != config.end() && !chat_template->is_null()) {
     if (!chat_template->is_string()) {
-      throw std::runtime_error("tokenizer chat_template must be a Jinja string; "
-                                "named template collections are not supported");
+      throw std::runtime_error(
+          "tokenizer chat_template must be a Jinja string; "
+          "named template collections are not supported");
     }
     chat_template_ = chat_template->get<std::string>();
   }
@@ -231,36 +233,49 @@ std::string Tokenizer::decode(std::span<const std::int32_t> token_ids,
   return backend_->decode(token_ids, skip_special_tokens);
 }
 
-std::string Tokenizer::apply_chat_template(std::span<const ChatMessage> messages,
-                                          ChatTemplateOptions options) const {
+std::string Tokenizer::apply_chat_template(
+    std::span<const ChatMessage> messages, ChatTemplateOptions options) const {
   if (messages.empty()) {
     throw std::invalid_argument("chat messages must not be empty");
   }
   if (chat_template_.empty()) {
-    throw std::runtime_error("tokenizer config does not define a chat_template");
+    throw std::runtime_error(
+        "tokenizer config does not define a chat_template");
   }
   auto message_values = nlohmann::ordered_json::array();
+
   for (const auto& message : messages) {
     if (message.role != "system" && message.role != "user"
         && message.role != "assistant") {
-      throw std::invalid_argument("text chat messages support system, user and "
-                                   "assistant roles; tools are not supported");
+      throw std::invalid_argument(
+          "text chat messages support system, user and "
+          "assistant roles; tools are not supported");
     }
-    message_values.push_back({{"role", message.role}, {"content", message.content}});
+    message_values.push_back(
+        {{"role", message.role}, {"content", message.content}});
   }
+
   nlohmann::ordered_json values{
       {"messages", std::move(message_values)},
       {"add_generation_prompt", options.add_generation_prompt},
       {"enable_thinking", options.enable_thinking}};
+
   // Transformers passes special_tokens_map, which omits unset token fields.
-  if (bos_token_) values["bos_token"] = *bos_token_;
-  if (eos_token_) values["eos_token"] = *eos_token_;
-  if (pad_token_) values["pad_token"] = *pad_token_;
+  if (bos_token_) {
+    values["bos_token"] = *bos_token_;
+  }
+  if (eos_token_) {
+    values["eos_token"] = *eos_token_;
+  }
+  if (pad_token_) {
+    values["pad_token"] = *pad_token_;
+  }
   try {
     return backend_->render_chat_template(chat_template_, values);
   } catch (const std::exception& error) {
-    throw std::runtime_error(std::string("failed to render tokenizer chat_template: ")
-                             + error.what());
+    throw std::runtime_error(
+        std::string("failed to render tokenizer chat_template: ")
+        + error.what());
   }
 }
 
