@@ -46,6 +46,16 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(tokenizers_cpp)
 
+# minja is header-only. Import its headers without its standalone build, which
+# would fetch a second nlohmann/json and enable upstream examples/tests.
+FetchContent_Declare(
+  minja
+  GIT_REPOSITORY https://github.com/google/minja.git
+  GIT_TAG 021c2293c187789ef13d56c6cfd89c9b134fd80f
+  SOURCE_SUBDIR include
+)
+FetchContent_MakeAvailable(minja)
+
 file(
   GLOB_RECURSE NANO_VLLM_CPP_SOURCES
   CONFIGURE_DEPENDS
@@ -73,6 +83,7 @@ target_include_directories(
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+target_include_directories(nano-vllm-cpp SYSTEM PRIVATE ${minja_SOURCE_DIR}/include)
 
 target_compile_options(
   nano-vllm-cpp
@@ -116,6 +127,15 @@ set_target_properties(
 
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(nano-vllm-cpp-chat-template-test tests/chat_template_test.cc)
+  target_include_directories(nano-vllm-cpp-chat-template-test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_link_libraries(nano-vllm-cpp-chat-template-test PRIVATE
+    nano-vllm-cpp::nano-vllm-cpp nlohmann_json::nlohmann_json)
+  target_compile_definitions(nano-vllm-cpp-chat-template-test PRIVATE
+    NANO_VLLM_TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
+  add_test(NAME chat-template COMMAND nano-vllm-cpp-chat-template-test)
+
   foreach(test_name IN ITEMS inference_kernels attention_kernels scheduler)
     if(test_name STREQUAL "scheduler")
       set(test_source tests/${test_name}_test.cc)

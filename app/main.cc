@@ -1,5 +1,6 @@
 #include <CLI/CLI.hpp>
 
+#include <array>
 #include <iostream>
 #include <mutex>
 #include <nanovllm/nanovllm.hh>
@@ -43,9 +44,13 @@ int main(int argc, char** argv) {
   nanovllm::EngineParams params;
   nanovllm::SamplingParams sampling;
   bool json_output = false;
+  bool raw_prompt = false;
+  bool thinking = false;
   std::size_t repeat = 1;
   app.add_option("-m,--model", model_path, "Directory containing Qwen3 model.safetensors and tokenizer files")->required();
-  app.add_option("-p,--prompt", prompts, "Raw prompt text; may be repeated")->required();
+  app.add_option("-p,--prompt", prompts, "User message; the model chat template is applied by default; may be repeated")->required();
+  auto* raw_option = app.add_flag("--raw-prompt", raw_prompt, "Generate from raw text without applying a chat template");
+  app.add_flag("--thinking", thinking, "Enable thinking in the model chat template (disabled by default)")->excludes(raw_option);
   app.add_option("--max-tokens", sampling.max_tokens, "Maximum new tokens per prompt");
   app.add_option("--temperature", sampling.temperature, "Sampling temperature; 0 selects greedy decoding");
   app.add_flag("--ignore-eos", sampling.ignore_eos, "Continue generation after EOS");
@@ -62,6 +67,12 @@ int main(int argc, char** argv) {
     if (repeat == 0) throw std::invalid_argument("repeat must be positive");
     const auto logger = std::make_shared<ConsoleLogger>();
     nanovllm::LLMEngine engine(model_path, params, logger);
+    if (!raw_prompt) {
+      for (auto& prompt : prompts) {
+        const std::array messages{nanovllm::ChatMessage{"user", prompt}};
+        prompt = engine.apply_chat_template(messages, {.enable_thinking = thinking});
+      }
+    }
     std::vector<nanovllm::GenerationOutput> outputs;
     for (std::size_t i = 0; i < repeat; ++i) outputs = engine.generate(prompts, sampling);
     if (json_output) {

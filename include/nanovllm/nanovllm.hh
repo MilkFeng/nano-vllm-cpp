@@ -11,6 +11,16 @@
 
 namespace nanovllm {
 
+struct ChatMessage {
+  std::string role;
+  std::string content;
+};
+
+struct ChatTemplateOptions {
+  bool add_generation_prompt = true;
+  bool enable_thinking = true;
+};
+
 struct SamplingParams {
   // Zero selects greedy decoding; positive values use temperature sampling.
   float temperature = 1.0f;
@@ -60,6 +70,12 @@ class LLMEngine {
   LLMEngine& operator=(LLMEngine&&) noexcept;
 
  public:
+  // Render text messages using the checkpoint's tokenizer chat template.
+  [[nodiscard]] std::string apply_chat_template(
+      std::span<const ChatMessage> messages,
+      ChatTemplateOptions options = {}) const;
+
+  // Prompts are already formatted; this method performs raw text generation.
   [[nodiscard]] std::vector<GenerationOutput> generate(
       std::span<const std::string> prompts,
       SamplingParams sampling_params = {});

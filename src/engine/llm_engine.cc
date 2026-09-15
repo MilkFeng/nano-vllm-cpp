@@ -85,6 +85,11 @@ class LLMEngine::Impl {
   Impl(Impl&&) = delete;
   Impl& operator=(Impl&&) = delete;
 
+  std::string apply_chat_template(std::span<const ChatMessage> messages,
+                                   ChatTemplateOptions options) const {
+    return tokenizer_.apply_chat_template(messages, options);
+  }
+
   std::vector<GenerationOutput> generate(std::span<const std::string> prompts,
                                          SamplingParams sampling_params) {
     if (!std::isfinite(sampling_params.temperature) || sampling_params.temperature < 0) {
@@ -150,6 +155,11 @@ LLMEngine& LLMEngine::operator=(LLMEngine&& other) noexcept {
     pimpl_ = std::move(other.pimpl_);
   }
   return *this;
+}
+
+std::string LLMEngine::apply_chat_template(
+    std::span<const ChatMessage> messages, ChatTemplateOptions options) const {
+  return pimpl_->apply_chat_template(messages, options);
 }
 
 std::vector<GenerationOutput> LLMEngine::generate(
