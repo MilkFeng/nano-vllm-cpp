@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "common/cuda_utils.hh"
+#include "core/forward_context.hh"
 #include "kernels/inference.hh"
 #include "models/qwen3.hh"
 
@@ -221,7 +222,7 @@ std::vector<std::int32_t> ModelRunner::run(
                              stream_),
              "upload temperatures");
 
-  Qwen3ForwardContext context;
+  ForwardContext context;
   context.is_prefill = prefill;
   context.cu_seqlens_q = boundaries_q.view().as_const();
   context.cu_seqlens_k = boundaries_k.view().as_const();
