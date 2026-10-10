@@ -30,7 +30,7 @@ class CudaDeviceGuard {
 
   ~CudaDeviceGuard() {
     if (restore_) {
-      (void)cudaSetDevice(previous_device_);
+      cudaSetDevice(previous_device_);
     }
   }
 
@@ -73,7 +73,9 @@ Storage::Storage(std::size_t size_bytes, Device device)
 }
 
 Storage::~Storage() noexcept {
-  if (data_ == nullptr) return;
+  if (data_ == nullptr) {
+    return;
+  }
 
   switch (device_.type) {
     case DeviceType::Cpu:
@@ -84,8 +86,10 @@ Storage::~Storage() noexcept {
       const bool have_previous = cudaGetDevice(&previous_device) == cudaSuccess;
       const bool restore = have_previous && previous_device != device_.index
                            && cudaSetDevice(device_.index) == cudaSuccess;
-      (void)cudaFree(data_);
-      if (restore) (void)cudaSetDevice(previous_device);
+      cudaFree(data_);
+      if (restore) {
+        cudaSetDevice(previous_device);
+      }
       return;
     }
   }

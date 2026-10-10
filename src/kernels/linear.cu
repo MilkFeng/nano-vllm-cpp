@@ -1,17 +1,17 @@
 #include <cublas_v2.h>
 
 #include <algorithm>
-#include <limits>
-#include <memory>
+#include <climits>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 
 #include "kernels/common.cuh"
 #include "kernels/inference.hh"
 
 namespace nanovllm::kernels {
 namespace {
+
+constexpr unsigned kThreads = 256;
 
 void check_blas(cublasStatus_t status, const char* operation) {
   if (status != CUBLAS_STATUS_SUCCESS) {
@@ -22,8 +22,7 @@ void check_blas(cublasStatus_t status, const char* operation) {
 
 class BlasHandle {
  public:
-  explicit BlasHandle(int device)
-      : device_(device) {
+  BlasHandle() {
     check_blas(cublasCreate(&handle_), "cublasCreate");
     // Keep split-K reductions in the FP32 accumulator type even when the
     // output uses FP16/BF16. The compute type alone permits reduced reductions.
@@ -32,32 +31,23 @@ class BlasHandle {
                      CUBLAS_DEFAULT_MATH
                      | CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION));
     if (status != CUBLAS_STATUS_SUCCESS) {
-      (void)cublasDestroy(handle_);
+      cublasDestroy(handle_);
       handle_ = nullptr;
       check_blas(status, "cublasSetMathMode");
     }
   }
-  ~BlasHandle() {
-    int previous = device_;
-    const bool have_device = cudaGetDevice(&previous) == cudaSuccess;
-    if (!have_device || previous != device_) (void)cudaSetDevice(device_);
-    (void)cublasDestroy(handle_);
-    if (have_device && previous != device_) (void)cudaSetDevice(previous);
-  }
+  ~BlasHandle() { cublasDestroy(handle_); }
   BlasHandle(const BlasHandle&) = delete;
   BlasHandle& operator=(const BlasHandle&) = delete;
   cublasHandle_t get() const { return handle_; }
 
  private:
   cublasHandle_t handle_ = nullptr;
-  int device_;
 };
 
-cublasHandle_t blas_handle(int device) {
-  thread_local std::unordered_map<int, std::unique_ptr<BlasHandle>> handles;
-  auto& handle = handles[device];
-  if (!handle) handle = std::make_unique<BlasHandle>(device);
-  return handle->get();
+cublasHandle_t blas_handle() {
+  thread_local BlasHandle handle;
+  return handle.get();
 }
 
 cudaDataType_t cuda_dtype(DataType type) {
@@ -86,57 +76,33 @@ __global__ void broadcast_bias(const T* bias, T* output, std::size_t count,
 
 void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
             std::optional<ConstTensorView> bias, cudaStream_t stream) {
-  detail::require_cuda(input);
-  detail::require_cuda(weight);
-  detail::require_cuda(output.as_const());
-  detail::require_float(input);
-  detail::require_same_device_dtype(input, weight);
-  detail::require_same_device_dtype(input, output.as_const());
-  detail::require(input.rank() == 2 && weight.rank() == 2 && output.rank() == 2,
-                  "linear expects rank-2 input, weight, and output");
+  detail::assert_tensor(input);
+  detail::assert_tensor(weight);
+  detail::assert_tensor(output);
+  assert(input.dtype() == weight.dtype() && input.dtype() == output.dtype());
+  assert(input.rank() == 2 && weight.rank() == 2 && output.rank() == 2);
   const auto m = input.shape()[0], k = input.shape()[1], n = weight.shape()[0];
-  detail::require(
-      k > 0 && n > 0 && weight.shape()[1] == k && output.shape()[0] == m
-          && output.shape()[1] == n,
-      "linear requires X[M,K], W[N,K], and Y[M,N] with positive K,N");
-  detail::require(input.strides().size() == 2 && input.strides()[1] == 1
-                      && input.strides()[0] >= k && weight.is_contiguous()
-                      && output.is_contiguous(),
-                  "linear requires contiguous columns and weights/output");
-  constexpr auto maximum =
-      static_cast<std::size_t>(std::numeric_limits<int>::max());
-  detail::require(
-      m <= maximum && n <= maximum && k <= maximum
-          && input.strides()[0] <= maximum,
-      "linear dimensions and input row stride must fit cuBLAS int parameters");
-  detail::require(!detail::overlaps(input, output.as_const())
-                      && !detail::overlaps(weight, output.as_const()),
-                  "linear output must not overlap input or weight");
+  assert(k > 0 && n > 0 && weight.shape()[1] == k);
+  assert(output.shape()[0] == m && output.shape()[1] == n);
+  assert(m <= INT_MAX && n <= INT_MAX && k <= INT_MAX);
   if (bias) {
-    detail::require_cuda(*bias);
-    detail::require_same_device_dtype(input, *bias);
-    detail::require(
-        bias->rank() == 1 && bias->shape()[0] == n && bias->is_contiguous(),
-        "linear bias must be a contiguous vector of output features");
-    detail::require(!detail::overlaps(*bias, output.as_const()),
-                    "linear output must not overlap bias");
+    detail::assert_tensor(*bias);
+    assert(bias->dtype() == input.dtype());
+    assert(bias->rank() == 1 && bias->shape()[0] == n);
   }
   if (m == 0) {
     return;
   }
 
-  const detail::DeviceGuard guard(input.device().index);
-  const auto handle = blas_handle(input.device().index);
+  const auto handle = blas_handle();
   check_blas(cublasSetStream(handle, stream), "cublasSetStream");
 
   if (bias) {
-    const auto count = detail::checked_mul(m, n);
-    constexpr std::uint32_t threads = 256;
-    const auto blocks = static_cast<std::uint32_t>(
-        std::min<std::size_t>((count - 1) / threads + 1, 65535));
-
+    const auto count = m * n;
+    const auto blocks = static_cast<unsigned>(
+        std::min<std::size_t>((count + kThreads - 1) / kThreads, 65535));
     detail::dispatch_float(input.dtype(), [&]<typename T> {
-      broadcast_bias<<<blocks, 256, 0, stream>>>(
+      broadcast_bias<<<blocks, kThreads, 0, stream>>>(
           static_cast<const T*>(bias->data()), static_cast<T*>(output.data()),
           count, n);
     });
@@ -148,14 +114,13 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
   // conversion.
   const float alpha = 1.0f, beta = bias ? 1.0f : 0.0f;
   const auto type = cuda_dtype(input.dtype());
-  check_blas(
-      cublasGemmEx(handle, CUBLAS_OP_T, CUBLAS_OP_N, static_cast<int>(n),
-                   static_cast<int>(m), static_cast<int>(k), &alpha,
-                   weight.data(), type, static_cast<int>(k), input.data(), type,
-                   static_cast<int>(input.strides()[0]), &beta, output.data(),
-                   type, static_cast<int>(n), CUBLAS_COMPUTE_32F,
-                   CUBLAS_GEMM_DEFAULT),
-      "cublasGemmEx");
+  check_blas(cublasGemmEx(handle, CUBLAS_OP_T, CUBLAS_OP_N, static_cast<int>(n),
+                          static_cast<int>(m), static_cast<int>(k), &alpha,
+                          weight.data(), type, static_cast<int>(k),
+                          input.data(), type, static_cast<int>(k), &beta,
+                          output.data(), type, static_cast<int>(n),
+                          CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT),
+             "cublasGemmEx");
 }
 
 } // namespace nanovllm::kernels

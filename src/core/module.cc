@@ -146,8 +146,9 @@ void Module::append_named_parameters(std::string_view prefix,
 bool Module::contains_module(const Module* target) const noexcept {
   if (this == target) return true;
   for (const auto& [name, module] : modules_) {
-    (void)name;
-    if (module->contains_module(target)) return true;
+    if (module->contains_module(target)) {
+      return true;
+    }
   }
   return false;
 }

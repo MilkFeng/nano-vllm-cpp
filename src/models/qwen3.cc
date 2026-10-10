@@ -60,7 +60,7 @@ Tensor make_rope_cache(std::size_t max_positions, std::size_t head_dim,
     // This synchronization occurs once during construction, never in forward.
     check_cuda(cudaStreamSynchronize(nullptr), "initialize RoPE cache");
   } catch (...) {
-    (void)cudaSetDevice(previous_device);
+    cudaSetDevice(previous_device);
     throw;
   }
   check_cuda(cudaSetDevice(previous_device), "restore CUDA device");
@@ -72,14 +72,6 @@ bool is_index_vector(ConstTensorView tensor, Device device) {
          && tensor.device() == device && tensor.is_contiguous();
 }
 
-std::size_t checked_product(std::size_t lhs, std::size_t rhs,
-                            std::string_view name) {
-  if (lhs != 0 && rhs > std::numeric_limits<std::size_t>::max() / lhs) {
-    throw std::overflow_error(std::string(name) + " is too large");
-  }
-  return lhs * rhs;
-}
-
 std::size_t validate_num_kv_heads(std::size_t num_heads,
                                   std::size_t num_kv_heads) {
   require_positive(num_kv_heads, "num_key_value_heads");
@@ -88,13 +80,6 @@ std::size_t validate_num_kv_heads(std::size_t num_heads,
         "num_attention_heads must be divisible by num_key_value_heads");
   }
   return num_kv_heads;
-}
-
-std::size_t validate_intermediate_size(const ModelConfig& config) {
-  if (config.hidden_act != HiddenAct::SiLU) {
-    throw std::invalid_argument("Qwen3 requires the SiLU activation");
-  }
-  return require_positive(config.intermediate_size, "intermediate_size");
 }
 
 DataType model_data_type(TorchDataType dtype) {
@@ -131,12 +116,6 @@ ModelConfig validate_config(ModelConfig config) {
   if (config.rope_scaling) {
     throw std::invalid_argument("Qwen3 RoPE scaling is not implemented");
   }
-
-  // Validate derived projection sizes before any parameter storage is created.
-  (void)checked_product(config.num_attention_heads, config.head_dim,
-                        "query projection size");
-  (void)checked_product(config.num_key_value_heads, config.head_dim,
-                        "key/value projection size");
   return config;
 }
 
@@ -367,19 +346,15 @@ const Parameter& Qwen3LMHead::weight() const noexcept {
 
 Qwen3Attention::Qwen3Attention(const ModelConfig& config, DataType dtype,
                                Device device)
-    : hidden_size_(require_positive(config.hidden_size, "hidden_size")),
-      num_heads_(
-          require_positive(config.num_attention_heads, "num_attention_heads")),
-      num_kv_heads_(
-          validate_num_kv_heads(num_heads_, config.num_key_value_heads)),
+    : hidden_size_(config.hidden_size),
+      num_heads_(config.num_attention_heads),
+      num_kv_heads_(config.num_key_value_heads),
       head_dim_(validate_head_dim(config.head_dim)),
-      q_size_(checked_product(num_heads_, head_dim_, "query projection size")),
-      kv_size_(checked_product(num_kv_heads_, head_dim_,
-                               "key/value projection size")),
-      max_position_embeddings_(require_positive(config.max_position_embeddings,
-                                                "max_position_embeddings")),
-      rope_theta_(require_positive_finite(config.rope_theta, "rope_theta")),
-      scaling_(1.0f / std::sqrt(static_cast<float>(head_dim_))),
+      q_size_(num_heads_ * head_dim_),
+      kv_size_(num_kv_heads_ * head_dim_),
+      max_position_embeddings_(config.max_position_embeddings),
+      rope_theta_(config.rope_theta),
+      scaling_(1.0f / std::sqrtf(head_dim_)),
       qkv_bias_(config.attention_bias),
       rope_scaling_(config.rope_scaling),
       q_proj_(hidden_size_, q_size_, qkv_bias_, dtype, device),
@@ -466,9 +441,8 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
                        : query_heads;
   auto key = k_norm_ ? k_norm_->forward(key_heads.view().as_const(), stream)
                      : key_heads;
-  kernels::apply_rotary_embedding(positions, query.view().as_const(),
-                                  key.view().as_const(), rope_cache_.view(),
-                                  query.view(), key.view(), stream);
+  kernels::apply_rotary_embedding(positions, query.view(), key.view(),
+                                  rope_cache_.view(), stream);
   if (have_cache) {
     kernels::store_kvcache(key.view().as_const(), value.view().as_const(),
                            key_cache_, value_cache_, context.slot_mapping,
@@ -557,8 +531,8 @@ float Qwen3Attention::scaling() const noexcept {
 }
 
 Qwen3MLP::Qwen3MLP(const ModelConfig& config, DataType dtype, Device device)
-    : hidden_size_(require_positive(config.hidden_size, "hidden_size")),
-      intermediate_size_(validate_intermediate_size(config)),
+    : hidden_size_(config.hidden_size),
+      intermediate_size_(config.intermediate_size),
       gate_proj_(hidden_size_, intermediate_size_, false, dtype, device),
       up_proj_(hidden_size_, intermediate_size_, false, dtype, device),
       down_proj_(intermediate_size_, hidden_size_, false, dtype, device) {
@@ -625,15 +599,14 @@ const Qwen3Attention& Qwen3DecoderLayer::self_attention() const noexcept {
 }
 
 Qwen3Model::Qwen3Model(const ModelConfig& config, DataType dtype, Device device)
-    : hidden_size_(require_positive(config.hidden_size, "hidden_size")),
+    : hidden_size_(config.hidden_size),
       embed_tokens_(config.vocab_size, hidden_size_, dtype, device),
       norm_(hidden_size_, config.rms_norm_eps, dtype, device) {
   register_module("embed_tokens", embed_tokens_);
   register_module("layers", layers_);
   register_module("norm", norm_);
 
-  const auto num_layers =
-      require_positive(config.num_hidden_layers, "num_hidden_layers");
+  const auto num_layers = config.num_hidden_layers;
   for (std::size_t index = 0; index < num_layers; ++index) {
     layers_.emplace_back<Qwen3DecoderLayer>(config, dtype, device);
   }

@@ -7,15 +7,13 @@
 namespace nanovllm::kernels {
 
 // All operations enqueue work on stream without allocating or synchronizing.
-// Floating point inputs/outputs use Float32, Float16 or BFloat16 on one CUDA
-// device. Outputs are contiguous; callers retain buffers until work completes.
-// Shape/dtype/layout errors throw std::invalid_argument; CUDA errors throw
-// std::runtime_error. Indices must be in range (a device-side precondition).
-// Partial input/output overlap is unsupported. Exact in-place use is allowed
-// for normalization, activation and RoPE when the aliased input is contiguous.
+// All tensors are contiguous on CUDA device 0, which the caller selects.
+// Floating point tensors use Float32, Float16 or BFloat16. Shape/dtype/index
+// preconditions use debug assertions; CUDA errors throw std::runtime_error.
+// Callers retain buffers until work completes and prevent partial overlap.
+// Normalization and activation allow exact in-place use; RoPE is in-place.
 
-// input: [D], [T,D] or [T,H,D]; weight: [D]. Last dimension is contiguous;
-// rank-3 heads are contiguous, while the token/row stride may include padding.
+// input: [D], [T,D] or [T,H,D]; weight: [D]; output matches input shape.
 // Accumulation is FP32. The normalized value is rounded to the input dtype
 // before multiplying by weight, matching nano-vllm's RMSNorm.
 void rms_norm(ConstTensorView input, ConstTensorView weight, TensorView output,
@@ -29,8 +27,7 @@ void fused_add_rms_norm(ConstTensorView input, ConstTensorView residual,
                         TensorView residual_output, float epsilon,
                         cudaStream_t stream = nullptr);
 
-// gate, up, output: [T,I]. Inputs may be slices of a packed [T,2I] tensor,
-// with contiguous columns and independent row strides.
+// gate, up, output: [T,I].
 void silu_and_mul(ConstTensorView gate, ConstTensorView up, TensorView output,
                   cudaStream_t stream = nullptr);
 
@@ -45,12 +42,10 @@ void build_rope_cache(TensorView cos_sin_cache, float theta,
                       cudaStream_t stream = nullptr);
 
 // positions: contiguous Int32 [T], in [0,max_positions).
-// query/key: [T,Nq,D] / [T,Nkv,D]. Each token's heads are contiguous;
-// token strides may include padding. Each output has its input's shape.
-// Rotates pairs (i, i+D/2), using the FP32 cache built above.
-void apply_rotary_embedding(ConstTensorView positions, ConstTensorView query,
-                            ConstTensorView key, ConstTensorView cos_sin_cache,
-                            TensorView query_output, TensorView key_output,
+// query/key: [T,Nq,D] / [T,Nkv,D], disjoint from each other, cache and positions.
+// Rotates pairs (i, i+D/2) in place, using the FP32 cache built above.
+void apply_rotary_embedding(ConstTensorView positions, TensorView query,
+                            TensorView key, ConstTensorView cos_sin_cache,
                             cudaStream_t stream = nullptr);
 
 } // namespace nanovllm::kernels

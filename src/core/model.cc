@@ -72,7 +72,9 @@ void copy_parameter(std::string_view name, const TensorView& destination,
 
   status = cudaMemcpy(destination.data(), bytes.data(), bytes.size(),
                       cudaMemcpyHostToDevice);
-  if (restore_device) (void)cudaSetDevice(previous_device);
+  if (restore_device) {
+    cudaSetDevice(previous_device);
+  }
   if (status != cudaSuccess) {
     throw std::runtime_error(
         std::format("failed to copy tensor '{}' to CUDA device {}: {}", name,
@@ -115,7 +117,6 @@ ModelLoadResult Model::load_ckpt(const std::filesystem::path& ckpt_path,
 
   if (!options.allow_unexpected_tensors) {
     for (const auto& [name, source] : checkpoint_tensors) {
-      (void)source;
       if (!destinations.contains(name)) {
         throw std::runtime_error(
             std::format("checkpoint '{}' contains unexpected tensor '{}'",
@@ -127,7 +128,6 @@ ModelLoadResult Model::load_ckpt(const std::filesystem::path& ckpt_path,
   ModelLoadResult result;
   result.num_tensors = destinations.size();
   for (const auto& [name, destination] : destinations) {
-    (void)destination;
     const auto source_size = checkpoint_tensors.at(name).byte_size();
     if (source_size
         > std::numeric_limits<std::uint64_t>::max() - result.num_bytes) {

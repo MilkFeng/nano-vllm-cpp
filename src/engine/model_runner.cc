@@ -117,7 +117,7 @@ ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
           value_cache_.view().slice(0, i, 1).reshape(layer_shape));
     }
   } catch (...) {
-    (void)cudaStreamDestroy(stream_);
+    cudaStreamDestroy(stream_);
     stream_ = nullptr;
     throw;
   }

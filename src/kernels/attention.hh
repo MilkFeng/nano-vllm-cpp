@@ -7,13 +7,10 @@
 namespace nanovllm::kernels {
 
 // These baseline kernels enqueue work without allocation or synchronization.
-// Floating point tensors share a CUDA device and Float32/Float16/BFloat16
-// dtype. Head dimension D is in [1,256]; token/row strides may include padding,
-// but each token's heads and head dimensions must be contiguous. Cache and
-// output tensors are contiguous. Writable tensors must not overlap any other
-// tensor. Index contents are device-side preconditions, checked by debug
-// assertions; callers retain all buffers until the supplied stream finishes
-// their use.
+// All tensors are contiguous on CUDA device 0, which the caller selects.
+// Floating point tensors share a Float32/Float16/BFloat16 dtype; D is in
+// [1,256]. Writable tensors must not overlap other tensors. Preconditions use
+// debug assertions; callers retain buffers until the stream finishes.
 
 // key/value: [T,Hkv,D]; caches: [P,block_size,Hkv,D]; slot_mapping: Int32 [T].
 // A slot of -1 skips that token. Other slots must be in [0,P*block_size) and
