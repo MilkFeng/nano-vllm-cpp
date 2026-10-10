@@ -37,11 +37,8 @@ set(MLC_ENABLE_SENTENCEPIECE_TOKENIZER OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(
   tokenizers_cpp
   GIT_REPOSITORY https://github.com/mlc-ai/tokenizers-cpp.git
-  GIT_TAG v0.1.1
+  GIT_TAG main
   GIT_SUBMODULES_RECURSE TRUE
-  PATCH_COMMAND
-  ${CMAKE_SOURCE_DIR}/scripts/apply_patch.sh
-  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/tokenizers-cpp-v0.1.1.patch
 )
 FetchContent_MakeAvailable(tokenizers_cpp)
 
@@ -50,7 +47,7 @@ FetchContent_MakeAvailable(tokenizers_cpp)
 FetchContent_Declare(
   minja
   GIT_REPOSITORY https://github.com/google/minja.git
-  GIT_TAG 021c2293c187789ef13d56c6cfd89c9b134fd80f
+  GIT_TAG main
   SOURCE_SUBDIR include
 )
 FetchContent_MakeAvailable(minja)
