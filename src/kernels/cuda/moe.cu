@@ -14,8 +14,9 @@ namespace {
 
 constexpr unsigned kThreads = 256;
 
-__global__ void route_kernel(const float* logits, std::int32_t* ids,
-                             float* weights, std::size_t experts,
+__global__ void route_kernel(const float* __restrict__ logits,
+                             std::int32_t* __restrict__ ids,
+                             float* __restrict__ weights, std::size_t experts,
                              std::size_t top_k) {
   extern __shared__ float storage[];
   float* scores = storage;
@@ -54,7 +55,7 @@ __global__ void route_kernel(const float* logits, std::int32_t* ids,
       ids[rank] = static_cast<std::int32_t>(best);
       weights[rank] = probabilities[best];
       selected_sum += weights[rank];
-      scores[best] = -CUDART_INF_F; // Do not select this expert again.
+      scores[best] = -CUDART_INF_F;
     }
     for (std::size_t rank = 0; rank < top_k; ++rank) {
       weights[rank] /= selected_sum;
@@ -62,11 +63,14 @@ __global__ void route_kernel(const float* logits, std::int32_t* ids,
   }
 }
 
-__global__ void combine_kernel(const float* parts, const float* weights,
-                               float* output, std::size_t hidden_size,
-                               std::size_t top_k) {
-  for (std::size_t d = std::size_t{blockIdx.x} * blockDim.x + threadIdx.x;
-       d < hidden_size; d += std::size_t{blockDim.x} * gridDim.x) {
+__global__ void combine_kernel(const float* __restrict__ parts,
+                               const float* __restrict__ weights,
+                               float* __restrict__ output,
+                               std::size_t hidden_size, std::size_t top_k) {
+  const std::size_t start_d =
+      static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
+  for (std::size_t d = start_d; d < hidden_size; d += step) {
     float sum = 0.0f;
     for (std::size_t rank = 0; rank < top_k; ++rank) {
       sum += weights[rank] * parts[rank * hidden_size + d];

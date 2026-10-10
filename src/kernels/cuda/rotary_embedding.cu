@@ -10,8 +10,9 @@ namespace {
 
 constexpr unsigned kThreads = 256;
 
-__global__ void build_rope_cache_kernel(float* cache, std::size_t pairs,
-                                        std::size_t half_dim, float theta) {
+__global__ void build_rope_cache_kernel(float* __restrict__ cache,
+                                        std::size_t pairs, std::size_t half_dim,
+                                        float theta) {
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
   const std::size_t start_index =
       static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -33,9 +34,10 @@ __global__ void build_rope_cache_kernel(float* cache, std::size_t pairs,
 
 template <typename T>
 __global__ void rotary_embedding_kernel(
-    const std::int32_t* positions, T* query, T* key, const float* cache,
-    std::size_t pairs, std::size_t query_heads, std::size_t key_heads,
-    std::size_t half_dim, std::size_t max_positions) {
+    const std::int32_t* __restrict__ positions, T* __restrict__ query,
+    T* __restrict__ key, const float* __restrict__ cache, std::size_t pairs,
+    std::size_t query_heads, std::size_t key_heads, std::size_t half_dim,
+    std::size_t max_positions) {
   const auto head_dim = 2 * half_dim;
   const auto total_heads = query_heads + key_heads;
 

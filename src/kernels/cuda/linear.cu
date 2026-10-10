@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cassert>
 #include <climits>
+#include <cstddef>
 #include <stdexcept>
 
 #include "common/cuda_utils.hh"
@@ -56,11 +57,14 @@ cudaDataType_t cuda_dtype(DataType type) {
 }
 
 template <typename T>
-__global__ void broadcast_bias(const T* bias, T* output, std::size_t count,
+__global__ void broadcast_bias(const T* __restrict__ bias,
+                               T* __restrict__ output, std::size_t count,
                                std::size_t width) {
-  for (std::size_t i = std::size_t{blockIdx.x} * blockDim.x + threadIdx.x;
-       i < count; i += std::size_t{blockDim.x} * gridDim.x) {
-    output[i] = bias[i % width];
+  const std::size_t start_index =
+      static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
+  for (std::size_t index = start_index; index < count; index += step) {
+    output[index] = bias[index % width];
   }
 }
 

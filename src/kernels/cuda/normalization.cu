@@ -23,10 +23,13 @@ void assert_norm(const ConstTensorView& input, const ConstTensorView& weight,
 }
 
 template <typename T, bool Fused>
-__global__ void normalization_kernel(const T* input, const T* residual,
-                                     const T* weight, T* output,
-                                     T* residual_output, std::size_t rows,
-                                     std::size_t width, float epsilon) {
+__global__ void normalization_kernel(const T* __restrict__ input,
+                                     const T* __restrict__ residual,
+                                     const T* __restrict__ weight,
+                                     T* __restrict__ output,
+                                     T* __restrict__ residual_output,
+                                     std::size_t rows, std::size_t width,
+                                     float epsilon) {
   for (std::size_t row = blockIdx.x; row < rows; row += gridDim.x) {
     const auto offset = row * width;
     float sum = 0.0f;

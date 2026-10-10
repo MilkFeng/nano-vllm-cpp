@@ -31,10 +31,11 @@ __device__ void reduce_best(float* scores, int* indices) {
 }
 
 template <typename T>
-__global__ void sample_kernel(const T* logits, const float* temperatures,
-                              std::int32_t* output, std::size_t batch,
-                              std::size_t vocab, std::uint64_t seed,
-                              std::uint64_t step) {
+__global__ void sample_kernel(const T* __restrict__ logits,
+                              const float* __restrict__ temperatures,
+                              std::int32_t* __restrict__ output,
+                              std::size_t batch, std::size_t vocab,
+                              std::uint64_t seed, std::uint64_t step) {
   __shared__ float scores[kThreads];
   __shared__ int indices[kThreads];
   for (std::size_t row = blockIdx.x; row < batch; row += gridDim.x) {

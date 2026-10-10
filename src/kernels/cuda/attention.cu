@@ -52,8 +52,11 @@ void assert_gqa(const ConstTensorView& query, const ConstTensorView& key,
 }
 
 template <typename T>
-__global__ void store_kernel(const T* key, const T* value, T* key_cache,
-                             T* value_cache, const std::int32_t* slots,
+__global__ void store_kernel(const T* __restrict__ key,
+                             const T* __restrict__ value,
+                             T* __restrict__ key_cache,
+                             T* __restrict__ value_cache,
+                             const std::int32_t* __restrict__ slots,
                              std::size_t tokens, std::size_t token_width,
                              std::size_t num_slots) {
   for (std::size_t token = blockIdx.x; token < tokens; token += gridDim.x) {
@@ -87,13 +90,15 @@ struct AttentionShape {
 // each, and share a dot product with shuffle reductions. No temporary scores
 // or device allocations are needed, including when sequences cross pages.
 template <typename T, bool Paged, bool Decode>
-__global__ void attention_kernel(const T* query, const T* key, const T* value,
-                                 const std::int32_t* cu_query,
-                                 const std::int32_t* cu_key,
-                                 const std::int32_t* context_lens,
-                                 const std::int32_t* block_tables, T* output,
-                                 AttentionShape shape, float scale,
-                                 std::size_t rows) {
+__global__ void attention_kernel(const T* __restrict__ query,
+                                 const T* __restrict__ key,
+                                 const T* __restrict__ value,
+                                 const std::int32_t* __restrict__ cu_query,
+                                 const std::int32_t* __restrict__ cu_key,
+                                 const std::int32_t* __restrict__ context_lens,
+                                 const std::int32_t* __restrict__ block_tables,
+                                 T* __restrict__ output, AttentionShape shape,
+                                 float scale, std::size_t rows) {
   const auto lane = threadIdx.x;
   for (std::size_t row = blockIdx.x; row < rows; row += gridDim.x) {
     const auto token = row / shape.query_heads;

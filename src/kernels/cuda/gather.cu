@@ -12,9 +12,11 @@ namespace {
 constexpr unsigned kThreads = 256;
 
 template <typename T>
-__global__ void gather_kernel(const T* hidden, const std::int32_t* boundaries,
-                              T* output, std::size_t count, std::size_t tokens,
-                              std::size_t batch, std::size_t width) {
+__global__ void gather_kernel(const T* __restrict__ hidden,
+                              const std::int32_t* __restrict__ boundaries,
+                              T* __restrict__ output, std::size_t count,
+                              std::size_t tokens, std::size_t batch,
+                              std::size_t width) {
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
   const std::size_t start_index =
       static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
