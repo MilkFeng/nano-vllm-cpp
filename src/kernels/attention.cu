@@ -260,9 +260,8 @@ void store_kvcache(ConstTensorView key, ConstTensorView value,
       static_cast<unsigned>(std::min<std::size_t>(tokens, 65535));
   detail::dispatch_float(dtype, [&]<typename T>() {
     store_kernel<<<blocks, kThreads, 0, stream>>>(
-        static_cast<const T*>(key.data()), static_cast<const T*>(value.data()),
-        static_cast<T*>(key_cache.data()), static_cast<T*>(value_cache.data()),
-        static_cast<const std::int32_t*>(slot_mapping.data()), tokens,
+        key.data<T>(), value.data<T>(), key_cache.data<T>(),
+        value_cache.data<T>(), slot_mapping.data<std::int32_t>(), tokens,
         token_width, slots);
   });
   check_cuda(cudaGetLastError(), "store_kvcache launch");
@@ -303,21 +302,15 @@ void prefill_attention(ConstTensorView query, ConstTensorView key,
   detail::dispatch_float(query.dtype(), [&]<typename T>() {
     if (paged) {
       attention_kernel<T, true, false><<<blocks, kWarpSize, 0, stream>>>(
-          static_cast<const T*>(query.data()),
-          static_cast<const T*>(key.data()),
-          static_cast<const T*>(value.data()),
-          static_cast<const std::int32_t*>(cu_seqlens_q.data()),
-          static_cast<const std::int32_t*>(cu_seqlens_k.data()), nullptr,
-          static_cast<const std::int32_t*>(block_tables.data()),
-          static_cast<T*>(output.data()), shape, scale, rows);
+          query.data<T>(), key.data<T>(), value.data<T>(),
+          cu_seqlens_q.data<std::int32_t>(), cu_seqlens_k.data<std::int32_t>(),
+          nullptr, block_tables.data<std::int32_t>(), output.data<T>(), shape,
+          scale, rows);
     } else {
       attention_kernel<T, false, false><<<blocks, kWarpSize, 0, stream>>>(
-          static_cast<const T*>(query.data()),
-          static_cast<const T*>(key.data()),
-          static_cast<const T*>(value.data()),
-          static_cast<const std::int32_t*>(cu_seqlens_q.data()),
-          static_cast<const std::int32_t*>(cu_seqlens_k.data()), nullptr,
-          nullptr, static_cast<T*>(output.data()), shape, scale, rows);
+          query.data<T>(), key.data<T>(), value.data<T>(),
+          cu_seqlens_q.data<std::int32_t>(), cu_seqlens_k.data<std::int32_t>(),
+          nullptr, nullptr, output.data<T>(), shape, scale, rows);
     }
   });
   check_cuda(cudaGetLastError(), "prefill_attention launch");
@@ -347,12 +340,10 @@ void paged_attention_decode(ConstTensorView query, ConstTensorView key_cache,
   const auto blocks = static_cast<unsigned>(std::min<std::size_t>(rows, 65535));
   detail::dispatch_float(dtype, [&]<typename T>() {
     attention_kernel<T, true, true><<<blocks, kWarpSize, 0, stream>>>(
-        static_cast<const T*>(query.data()),
-        static_cast<const T*>(key_cache.data()),
-        static_cast<const T*>(value_cache.data()), nullptr, nullptr,
-        static_cast<const std::int32_t*>(context_lens.data()),
-        static_cast<const std::int32_t*>(block_tables.data()),
-        static_cast<T*>(output.data()), shape, scale, rows);
+        query.data<T>(), key_cache.data<T>(), value_cache.data<T>(), nullptr,
+        nullptr, context_lens.data<std::int32_t>(),
+        block_tables.data<std::int32_t>(), output.data<T>(), shape, scale,
+        rows);
   });
   check_cuda(cudaGetLastError(), "paged_attention_decode launch");
 }

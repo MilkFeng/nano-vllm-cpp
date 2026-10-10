@@ -90,8 +90,7 @@ void build_rope_cache(TensorView cos_sin_cache, float theta,
   const auto blocks = static_cast<unsigned>(
       std::min<std::size_t>((pairs + kThreads - 1) / kThreads, 65535));
   build_rope_cache_kernel<<<blocks, kThreads, 0, stream>>>(
-      static_cast<float*>(cos_sin_cache.data()), pairs,
-      cos_sin_cache.shape()[1] / 2, theta);
+      cos_sin_cache.data<float>(), pairs, cos_sin_cache.shape()[1] / 2, theta);
 
   check_cuda(cudaGetLastError(), "build_rope_cache launch");
 }
@@ -120,11 +119,9 @@ void apply_rotary_embedding(ConstTensorView positions, TensorView query,
       std::min<std::size_t>((pairs + kThreads - 1) / kThreads, 65535));
   detail::dispatch_float(dtype, [&]<typename T> {
     rotary_embedding_kernel<<<blocks, kThreads, 0, stream>>>(
-        static_cast<const std::int32_t*>(positions.data()),
-        static_cast<T*>(query.data()), static_cast<T*>(key.data()),
-        static_cast<const float*>(cos_sin_cache.data()), pairs,
-        query.shape()[1], key.shape()[1], query.shape()[2] / 2,
-        cos_sin_cache.shape()[0]);
+        positions.data<std::int32_t>(), query.data<T>(), key.data<T>(),
+        cos_sin_cache.data<float>(), pairs, query.shape()[1], key.shape()[1],
+        query.shape()[2] / 2, cos_sin_cache.shape()[0]);
   });
 
   check_cuda(cudaGetLastError(), "apply_rotary_embedding launch");

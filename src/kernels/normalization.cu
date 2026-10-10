@@ -71,12 +71,12 @@ void rms_norm(ConstTensorView input, ConstTensorView weight, TensorView output,
     return;
   }
 
+  const auto dtype = input.dtype();
   const auto blocks = static_cast<unsigned>(std::min<std::size_t>(rows, 65535));
-  detail::dispatch_float(input.dtype(), [&]<typename T>() {
+  detail::dispatch_float(dtype, [&]<typename T>() {
     normalization_kernel<T, false><<<blocks, kThreads, 0, stream>>>(
-        static_cast<const T*>(input.data()), nullptr,
-        static_cast<const T*>(weight.data()), static_cast<T*>(output.data()),
-        nullptr, rows, width, epsilon);
+        input.data<T>(), nullptr, weight.data<T>(), output.data<T>(), nullptr,
+        rows, width, epsilon);
   });
 
   check_cuda(cudaGetLastError(), "launch rms_norm");
@@ -101,10 +101,8 @@ void fused_add_rms_norm(ConstTensorView input, ConstTensorView residual,
   const auto blocks = static_cast<unsigned>(std::min<std::size_t>(rows, 65535));
   detail::dispatch_float(dtype, [&]<typename T>() {
     normalization_kernel<T, true><<<blocks, kThreads, 0, stream>>>(
-        static_cast<const T*>(input.data()),
-        static_cast<const T*>(residual.data()),
-        static_cast<const T*>(weight.data()), static_cast<T*>(output.data()),
-        static_cast<T*>(residual_output.data()), rows, width, epsilon);
+        input.data<T>(), residual.data<T>(), weight.data<T>(), output.data<T>(),
+        residual_output.data<T>(), rows, width, epsilon);
   });
   check_cuda(cudaGetLastError(), "launch fused_add_rms_norm");
 }

@@ -95,8 +95,7 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
         std::min<std::size_t>((count + kThreads - 1) / kThreads, 65535));
     detail::dispatch_float(input.dtype(), [&]<typename T> {
       broadcast_bias<<<blocks, kThreads, 0, stream>>>(
-          static_cast<const T*>(bias->data()), static_cast<T*>(output.data()),
-          count, n);
+          bias->data<T>(), output.data<T>(), count, n);
     });
 
     check_cuda(cudaGetLastError(), "linear bias launch");

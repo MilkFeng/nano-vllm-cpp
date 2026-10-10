@@ -49,8 +49,7 @@ void embedding(ConstTensorView input_ids, ConstTensorView weight,
       std::min<std::size_t>((count + kThreads - 1) / kThreads, 65535));
   detail::dispatch_float(dtype, [&]<typename T>() {
     embedding_kernel<<<blocks, kThreads, 0, stream>>>(
-        static_cast<const std::int32_t*>(input_ids.data()),
-        static_cast<const T*>(weight.data()), static_cast<T*>(output.data()),
+        input_ids.data<std::int32_t>(), weight.data<T>(), output.data<T>(),
         count, weight.shape()[0], weight.shape()[1]);
   });
 

@@ -57,9 +57,8 @@ void gather_last_hidden(ConstTensorView hidden, ConstTensorView cu_seqlens_q,
       std::min<std::size_t>((count + kThreads - 1) / kThreads, 65535));
   detail::dispatch_float(dtype, [&]<typename T> {
     gather_kernel<<<blocks, kThreads, 0, stream>>>(
-        static_cast<const T*>(hidden.data()),
-        static_cast<const std::int32_t*>(cu_seqlens_q.data()),
-        static_cast<T*>(output.data()), count, tokens, batch, width);
+        hidden.data<T>(), cu_seqlens_q.data<std::int32_t>(), output.data<T>(),
+        count, tokens, batch, width);
   });
 
   check_cuda(cudaGetLastError(), "gather_last_hidden launch");

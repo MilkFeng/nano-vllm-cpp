@@ -12,7 +12,10 @@ namespace nanovllm {
 template <bool IsConst>
 class BasicTensorView {
  public:
-  using DataPointer = std::conditional_t<IsConst, const void*, void*>;
+  template <typename T>
+  using TypedDataPointer = std::conditional_t<IsConst, const T*, T*>;
+
+  using DataPointer = TypedDataPointer<void>;
 
   BasicTensorView() = default;
   BasicTensorView(DataPointer data, DataType dtype, TensorLayout layout,
@@ -25,6 +28,12 @@ class BasicTensorView {
                         view.device()) {}
 
   [[nodiscard]] DataPointer data() const noexcept;
+
+  template <typename T>
+  [[nodiscard]] TypedDataPointer<T> data() const noexcept {
+    return static_cast<TypedDataPointer<T>>(data());
+  }
+
   [[nodiscard]] DataType dtype() const noexcept;
   [[nodiscard]] const TensorLayout& layout() const noexcept;
   [[nodiscard]] Device device() const noexcept;

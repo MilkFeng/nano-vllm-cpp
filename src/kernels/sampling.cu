@@ -124,9 +124,8 @@ void sample(ConstTensorView logits, ConstTensorView temperatures,
       static_cast<unsigned>(std::min<std::size_t>(batch, 65535));
   detail::dispatch_float(dtype, [&]<typename T> {
     sample_kernel<<<blocks, kThreads, 0, stream>>>(
-        static_cast<const T*>(logits.data()),
-        static_cast<const float*>(temperatures.data()),
-        static_cast<std::int32_t*>(output.data()), batch, vocab, seed, step);
+        logits.data<T>(), temperatures.data<float>(),
+        output.data<std::int32_t>(), batch, vocab, seed, step);
   });
 
   check_cuda(cudaGetLastError(), "sample launch");

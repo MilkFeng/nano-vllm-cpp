@@ -42,8 +42,7 @@ void silu_and_mul(ConstTensorView gate, ConstTensorView up, TensorView output,
       std::min<std::size_t>((count + kThreads - 1) / kThreads, 65535));
   detail::dispatch_float(dtype, [&]<typename T>() {
     silu_and_mul_kernel<<<blocks, kThreads, 0, stream>>>(
-        static_cast<const T*>(gate.data()), static_cast<const T*>(up.data()),
-        static_cast<T*>(output.data()), count);
+        gate.data<T>(), up.data<T>(), output.data<T>(), count);
   });
 
   check_cuda(cudaGetLastError(), "silu_and_mul kernel launch");
