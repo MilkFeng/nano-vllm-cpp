@@ -71,7 +71,7 @@ Token IDs → Embedding
 
 基础算子支持 FP32、FP16 和 BF16。Linear 使用 cuBLAS；attention 使用 FP32 在线 softmax，支持 GQA、变长 prefill、缓存前缀和分页 decode。引擎包含分块 prefill、KV 块管理、前缀缓存、显存不足时的请求抢占和停止条件处理。
 
-内部 CUDA 算子只接受连续 Tensor，并使用调用线程已经选好的 device 0。模型配置和用户参数在外层检查；算子中的 shape、dtype 和索引约束使用 Debug 断言，缓冲区重叠关系由调用者保证。RoPE 直接原地修改 Q/K。
+内部 CUDA 算子只接受连续 Tensor，并使用调用线程已经选好的 device 0。通用模型配置约束，以及模型和算子内部的 shape、dtype 和索引约束使用 Debug 断言；Qwen3 支持范围、用户参数和 CUDA/cuBLAS 运行错误在 Release 中也会检查。缓冲区重叠关系由调用者保证。RoPE 直接原地修改 Q/K。
 
 当前支持 CUDA device 0 上的 dense Qwen3、单文件 safetensors 权重、未缩放的 RoPE，以及偶数且不超过 256 的 head dimension。Attention 是用于打通计算链路的基础实现；FlashAttention 级优化、CUDA Graph、张量并行和分片权重加载仍待实现。KV 容量根据可用显存和工作区估算确定。
 

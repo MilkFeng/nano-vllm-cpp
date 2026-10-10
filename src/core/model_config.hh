@@ -66,6 +66,9 @@ struct ModelConfig {
   [[nodiscard]] static ModelConfig read_from_file(
       const std::filesystem::path& path);
 
+  // Debug preconditions shared by JSON loading and direct model construction.
+  void assert_valid() const;
+
   [[nodiscard]] std::size_t q_size() const noexcept {
     return num_attention_heads * head_dim;
   }

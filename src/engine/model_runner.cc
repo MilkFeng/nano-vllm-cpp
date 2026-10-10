@@ -5,21 +5,14 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
-#include <string>
 #include <utility>
 
+#include "common/cuda_utils.hh"
 #include "kernels/inference.hh"
 #include "models/qwen3.hh"
 
 namespace nanovllm {
 namespace {
-
-void check_cuda(cudaError_t status, const char* operation) {
-  if (status != cudaSuccess) {
-    throw std::runtime_error(std::string(operation) + ": "
-                             + cudaGetErrorString(status));
-  }
-}
 
 class DeviceGuard {
  public:

@@ -1,10 +1,8 @@
-#include <cublas_v2.h>
-
 #include <algorithm>
 #include <climits>
 #include <stdexcept>
-#include <string>
 
+#include "common/cuda_utils.hh"
 #include "kernels/common.cuh"
 #include "kernels/inference.hh"
 
@@ -12,13 +10,6 @@ namespace nanovllm::kernels {
 namespace {
 
 constexpr unsigned kThreads = 256;
-
-void check_blas(cublasStatus_t status, const char* operation) {
-  if (status != CUBLAS_STATUS_SUCCESS) {
-    throw std::runtime_error(std::string(operation) + ": cuBLAS status "
-                             + std::to_string(static_cast<int>(status)));
-  }
-}
 
 class BlasHandle {
  public:
@@ -107,7 +98,7 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
           count, n);
     });
 
-    detail::check_cuda(cudaGetLastError(), "linear bias launch");
+    check_cuda(cudaGetLastError(), "linear bias launch");
   }
   // Row-major Y = X * W^T is column-major Y^T = W * X^T. Initializing C
   // with bias and beta=1 adds it inside GEMM before the output dtype

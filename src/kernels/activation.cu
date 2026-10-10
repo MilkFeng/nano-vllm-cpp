@@ -1,5 +1,6 @@
 #include <algorithm>
 
+#include "common/cuda_utils.hh"
 #include "kernels/common.cuh"
 #include "kernels/kernels.hh"
 
@@ -10,7 +11,7 @@ constexpr unsigned kThreads = 256;
 
 template <typename T>
 __global__ void silu_and_mul_kernel(const T* gate, const T* up, T* output,
-                                  std::size_t count) {
+                                    std::size_t count) {
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
   const std::size_t start_index =
       static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -44,7 +45,7 @@ void silu_and_mul(ConstTensorView gate, ConstTensorView up, TensorView output,
         static_cast<T*>(output.data()), count);
   });
 
-  detail::check_cuda(cudaGetLastError(), "silu_and_mul kernel launch");
+  check_cuda(cudaGetLastError(), "silu_and_mul kernel launch");
 }
 
 } // namespace nanovllm::kernels

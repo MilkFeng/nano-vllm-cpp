@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "common/cuda_utils.hh"
 #include "kernels/common.cuh"
 #include "kernels/inference.hh"
 
@@ -11,8 +12,8 @@ constexpr unsigned kThreads = 256;
 
 template <typename T>
 __global__ void gather_kernel(const T* hidden, const std::int32_t* boundaries,
-                             T* output, std::size_t count, std::size_t tokens,
-                             std::size_t batch, std::size_t width) {
+                              T* output, std::size_t count, std::size_t tokens,
+                              std::size_t batch, std::size_t width) {
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
   const std::size_t start_index =
       static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -59,7 +60,7 @@ void gather_last_hidden(ConstTensorView hidden, ConstTensorView cu_seqlens_q,
         static_cast<T*>(output.data()), count, tokens, batch, width);
   });
 
-  detail::check_cuda(cudaGetLastError(), "gather_last_hidden launch");
+  check_cuda(cudaGetLastError(), "gather_last_hidden launch");
 }
 
 } // namespace nanovllm::kernels

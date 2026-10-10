@@ -1,7 +1,5 @@
 #include "core/model.hh"
 
-#include <cuda_runtime_api.h>
-
 #include <algorithm>
 #include <cstring>
 #include <format>
@@ -10,6 +8,7 @@
 #include <stdexcept>
 #include <string_view>
 
+#include "common/cuda_utils.hh"
 #include "core/safetensors.hh"
 
 namespace nanovllm {
@@ -53,33 +52,26 @@ void copy_parameter(std::string_view name, const TensorView& destination,
   }
 
   int previous_device = 0;
-  auto status = cudaGetDevice(&previous_device);
-  if (status != cudaSuccess) {
-    throw std::runtime_error(std::format(
-        "failed to get the current CUDA device while loading tensor '{}': {}",
-        name, cudaGetErrorString(status)));
-  }
+  check_cuda(cudaGetDevice(&previous_device),
+             std::format("failed to get the current CUDA device while loading "
+                         "tensor '{}'",
+                         name));
 
   const bool restore_device = previous_device != device.index;
   if (restore_device) {
-    status = cudaSetDevice(device.index);
-    if (status != cudaSuccess) {
-      throw std::runtime_error(std::format(
-          "failed to select CUDA device {} while loading tensor '{}': {}",
-          device.index, name, cudaGetErrorString(status)));
-    }
+    const auto operation =
+        std::format("failed to select CUDA device {} while loading tensor '{}'",
+                    device.index, name);
+    check_cuda(cudaSetDevice(device.index), operation);
   }
 
-  status = cudaMemcpy(destination.data(), bytes.data(), bytes.size(),
-                      cudaMemcpyHostToDevice);
+  const auto status = cudaMemcpy(destination.data(), bytes.data(), bytes.size(),
+                                 cudaMemcpyHostToDevice);
   if (restore_device) {
     cudaSetDevice(previous_device);
   }
-  if (status != cudaSuccess) {
-    throw std::runtime_error(
-        std::format("failed to copy tensor '{}' to CUDA device {}: {}", name,
-                    device.index, cudaGetErrorString(status)));
-  }
+  check_cuda(status, std::format("failed to copy tensor '{}' to CUDA device {}",
+                                 name, device.index));
 }
 
 } // namespace

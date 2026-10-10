@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "common/cuda_utils.hh"
 #include "kernels/common.cuh"
 #include "kernels/kernels.hh"
 
@@ -11,9 +12,9 @@ constexpr unsigned kThreads = 256;
 
 template <typename T>
 __global__ void embedding_kernel(const std::int32_t* input_ids, const T* weight,
-                                T* output, std::size_t count,
-                                std::size_t vocab_size,
-                                std::size_t hidden_size) {
+                                 T* output, std::size_t count,
+                                 std::size_t vocab_size,
+                                 std::size_t hidden_size) {
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
   const std::size_t start_index =
       static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -52,7 +53,7 @@ void embedding(ConstTensorView input_ids, ConstTensorView weight,
         count, weight.shape()[0], weight.shape()[1]);
   });
 
-  detail::check_cuda(cudaGetLastError(), "embedding kernel launch");
+  check_cuda(cudaGetLastError(), "embedding kernel launch");
 }
 
 } // namespace nanovllm::kernels

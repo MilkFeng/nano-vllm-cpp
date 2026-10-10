@@ -1,9 +1,9 @@
 #include "core/storage.hh"
 
-#include <cuda_runtime_api.h>
-
 #include <format>
 #include <stdexcept>
+
+#include "common/cuda_utils.hh"
 
 namespace nanovllm {
 
@@ -11,20 +11,12 @@ namespace {
 class CudaDeviceGuard {
  public:
   explicit CudaDeviceGuard(int index) {
-    const auto get_status = cudaGetDevice(&previous_device_);
-    if (get_status != cudaSuccess) {
-      throw std::runtime_error(
-          std::format("failed to get the current CUDA device: {}",
-                      cudaGetErrorString(get_status)));
-    }
+    check_cuda(cudaGetDevice(&previous_device_),
+               "failed to get the current CUDA device");
     if (previous_device_ == index) return;
 
-    const auto set_status = cudaSetDevice(index);
-    if (set_status != cudaSuccess) {
-      throw std::runtime_error(
-          std::format("failed to select CUDA device {}: {}", index,
-                      cudaGetErrorString(set_status)));
-    }
+    const auto operation = std::format("failed to select CUDA device {}", index);
+    check_cuda(cudaSetDevice(index), operation);
     restore_ = true;
   }
 
@@ -59,12 +51,10 @@ Storage::Storage(std::size_t size_bytes, Device device)
       if (size_bytes_ == 0) return;
 
       CudaDeviceGuard guard(device_.index);
-      const auto status = cudaMalloc(&data_, size_bytes_);
-      if (status != cudaSuccess) {
-        throw std::runtime_error(
-            std::format("failed to allocate {} bytes on CUDA device {}",
-                        size_bytes_, device_.index));
-      }
+      const auto operation =
+          std::format("failed to allocate {} bytes on CUDA device {}",
+                      size_bytes_, device_.index);
+      check_cuda(cudaMalloc(&data_, size_bytes_), operation);
       return;
     }
   }

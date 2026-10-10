@@ -42,8 +42,9 @@ void build_rope_cache(TensorView cos_sin_cache, float theta,
                       cudaStream_t stream = nullptr);
 
 // positions: contiguous Int32 [T], in [0,max_positions).
-// query/key: [T,Nq,D] / [T,Nkv,D], disjoint from each other, cache and positions.
-// Rotates pairs (i, i+D/2) in place, using the FP32 cache built above.
+// query/key: [T,Nq,D] / [T,Nkv,D], disjoint from each other, cache and
+// positions. Rotates pairs (i, i+D/2) in place, using the FP32 cache built
+// above.
 void apply_rotary_embedding(ConstTensorView positions, TensorView query,
                             TensorView key, ConstTensorView cos_sin_cache,
                             cudaStream_t stream = nullptr);

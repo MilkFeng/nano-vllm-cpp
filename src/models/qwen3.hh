@@ -11,6 +11,9 @@
 
 namespace nanovllm {
 
+// Tensor shapes, dtypes and execution metadata are internal preconditions,
+// checked with debug assertions. CUDA/cuBLAS failures throw in all builds.
+
 // Non-owning execution metadata prepared by ModelRunner. Empty tensor views
 // mean that the corresponding metadata is not used by the current execution
 // mode.

@@ -7,19 +7,11 @@
 #include <algorithm>
 #include <cassert>
 #include <stdexcept>
-#include <string>
 #include <utility>
 
 #include "core/tensor_view.hh"
 
 namespace nanovllm::kernels::detail {
-
-inline void check_cuda(cudaError_t status, const char* operation) {
-  if (status != cudaSuccess) {
-    throw std::runtime_error(std::string(operation) + ": "
-                             + cudaGetErrorString(status));
-  }
-}
 
 template <bool IsConst>
 void assert_tensor(const BasicTensorView<IsConst>& tensor) {

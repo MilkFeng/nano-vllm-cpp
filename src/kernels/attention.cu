@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 
+#include "common/cuda_utils.hh"
 #include "kernels/attention.hh"
 #include "kernels/common.cuh"
 
@@ -51,9 +52,9 @@ void assert_gqa(const ConstTensorView& query, const ConstTensorView& key,
 
 template <typename T>
 __global__ void store_kernel(const T* key, const T* value, T* key_cache,
-                            T* value_cache, const std::int32_t* slots,
-                            std::size_t tokens, std::size_t token_width,
-                            std::size_t num_slots) {
+                             T* value_cache, const std::int32_t* slots,
+                             std::size_t tokens, std::size_t token_width,
+                             std::size_t num_slots) {
   for (std::size_t token = blockIdx.x; token < tokens; token += gridDim.x) {
     const auto slot = slots[token];
     if (slot == -1) {
@@ -86,12 +87,12 @@ struct AttentionShape {
 // or device allocations are needed, including when sequences cross pages.
 template <typename T, bool Paged, bool Decode>
 __global__ void attention_kernel(const T* query, const T* key, const T* value,
-                                const std::int32_t* cu_query,
-                                const std::int32_t* cu_key,
-                                const std::int32_t* context_lens,
-                                const std::int32_t* block_tables, T* output,
-                                AttentionShape shape, float scale,
-                                std::size_t rows) {
+                                 const std::int32_t* cu_query,
+                                 const std::int32_t* cu_key,
+                                 const std::int32_t* context_lens,
+                                 const std::int32_t* block_tables, T* output,
+                                 AttentionShape shape, float scale,
+                                 std::size_t rows) {
   const auto lane = threadIdx.x;
   for (std::size_t row = blockIdx.x; row < rows; row += gridDim.x) {
     const auto token = row / shape.query_heads;
@@ -196,9 +197,8 @@ __global__ void attention_kernel(const T* query, const T* key, const T* value,
       for (unsigned part = 0; part < kValuesPerLane; ++part) {
         const auto d = lane + part * kWarpSize;
         if (d < shape.width) {
-          accumulator[part] =
-              accumulator[part] * alpha
-              + detail::to_float(value[kv_offset + d]) * beta;
+          accumulator[part] = accumulator[part] * alpha
+                              + detail::to_float(value[kv_offset + d]) * beta;
         }
       }
     }
@@ -216,8 +216,8 @@ __global__ void attention_kernel(const T* query, const T* key, const T* value,
 }
 
 AttentionShape make_shape(const ConstTensorView& query,
-                         const ConstTensorView& key, std::size_t batch,
-                         const ConstTensorView& block_tables, bool paged) {
+                          const ConstTensorView& key, std::size_t batch,
+                          const ConstTensorView& block_tables, bool paged) {
   AttentionShape shape{};
   shape.tokens = query.shape()[0];
   shape.query_heads = query.shape()[1];
@@ -256,7 +256,8 @@ void store_kvcache(ConstTensorView key, ConstTensorView value,
   if (tokens == 0) return;
   const auto token_width = key.shape()[1] * key.shape()[2];
   const auto slots = key_cache.shape()[0] * key_cache.shape()[1];
-  const auto blocks = static_cast<unsigned>(std::min<std::size_t>(tokens, 65535));
+  const auto blocks =
+      static_cast<unsigned>(std::min<std::size_t>(tokens, 65535));
   detail::dispatch_float(key.dtype(), [&]<typename T>() {
     store_kernel<<<blocks, kThreads, 0, stream>>>(
         static_cast<const T*>(key.data()), static_cast<const T*>(value.data()),
@@ -264,7 +265,7 @@ void store_kvcache(ConstTensorView key, ConstTensorView value,
         static_cast<const std::int32_t*>(slot_mapping.data()), tokens,
         token_width, slots);
   });
-  detail::check_cuda(cudaGetLastError(), "store_kvcache launch");
+  check_cuda(cudaGetLastError(), "store_kvcache launch");
 }
 
 void prefill_attention(ConstTensorView query, ConstTensorView key,
@@ -302,24 +303,24 @@ void prefill_attention(ConstTensorView query, ConstTensorView key,
   detail::dispatch_float(query.dtype(), [&]<typename T>() {
     if (paged) {
       attention_kernel<T, true, false><<<blocks, kWarpSize, 0, stream>>>(
-              static_cast<const T*>(query.data()),
-              static_cast<const T*>(key.data()),
-              static_cast<const T*>(value.data()),
-              static_cast<const std::int32_t*>(cu_seqlens_q.data()),
-              static_cast<const std::int32_t*>(cu_seqlens_k.data()), nullptr,
-              static_cast<const std::int32_t*>(block_tables.data()),
-              static_cast<T*>(output.data()), shape, scale, rows);
+          static_cast<const T*>(query.data()),
+          static_cast<const T*>(key.data()),
+          static_cast<const T*>(value.data()),
+          static_cast<const std::int32_t*>(cu_seqlens_q.data()),
+          static_cast<const std::int32_t*>(cu_seqlens_k.data()), nullptr,
+          static_cast<const std::int32_t*>(block_tables.data()),
+          static_cast<T*>(output.data()), shape, scale, rows);
     } else {
       attention_kernel<T, false, false><<<blocks, kWarpSize, 0, stream>>>(
-              static_cast<const T*>(query.data()),
-              static_cast<const T*>(key.data()),
-              static_cast<const T*>(value.data()),
-              static_cast<const std::int32_t*>(cu_seqlens_q.data()),
-              static_cast<const std::int32_t*>(cu_seqlens_k.data()), nullptr,
-              nullptr, static_cast<T*>(output.data()), shape, scale, rows);
+          static_cast<const T*>(query.data()),
+          static_cast<const T*>(key.data()),
+          static_cast<const T*>(value.data()),
+          static_cast<const std::int32_t*>(cu_seqlens_q.data()),
+          static_cast<const std::int32_t*>(cu_seqlens_k.data()), nullptr,
+          nullptr, static_cast<T*>(output.data()), shape, scale, rows);
     }
   });
-  detail::check_cuda(cudaGetLastError(), "prefill_attention launch");
+  check_cuda(cudaGetLastError(), "prefill_attention launch");
 }
 
 void paged_attention_decode(ConstTensorView query, ConstTensorView key_cache,
@@ -351,7 +352,7 @@ void paged_attention_decode(ConstTensorView query, ConstTensorView key_cache,
         static_cast<const std::int32_t*>(block_tables.data()),
         static_cast<T*>(output.data()), shape, scale, rows);
   });
-  detail::check_cuda(cudaGetLastError(), "paged_attention_decode launch");
+  check_cuda(cudaGetLastError(), "paged_attention_decode launch");
 }
 
 } // namespace nanovllm::kernels

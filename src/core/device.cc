@@ -1,9 +1,8 @@
 #include "core/device.hh"
 
-#include <cuda_runtime_api.h>
-
-#include <format>
 #include <stdexcept>
+
+#include "common/cuda_utils.hh"
 
 namespace nanovllm {
 std::size_t data_type_size(DataType dtype) {
@@ -43,12 +42,8 @@ bool Device::is_valid() const {
       if (index < 0) return false;
 
       int device_count = 0;
-      const auto status = cudaGetDeviceCount(&device_count);
-      if (status != cudaSuccess) {
-        throw std::runtime_error(std::format("{}: {}",
-                                             "failed to query CUDA devices",
-                                             cudaGetErrorString(status)));
-      }
+      check_cuda(cudaGetDeviceCount(&device_count),
+                 "failed to query CUDA devices");
 
       return index < device_count;
     }

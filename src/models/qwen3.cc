@@ -1,49 +1,18 @@
 #include "models/qwen3.hh"
 
-#include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
-#include <limits>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <utility>
 
+#include "common/cuda_utils.hh"
 #include "kernels/attention.hh"
 #include "kernels/inference.hh"
 #include "kernels/kernels.hh"
 
 namespace nanovllm {
 namespace {
-
-std::size_t require_positive(std::size_t value, std::string_view name) {
-  if (value == 0) {
-    throw std::invalid_argument(std::string(name) + " must be positive");
-  }
-  return value;
-}
-
-float require_positive_finite(float value, std::string_view name) {
-  if (!(value > 0.0f) || !std::isfinite(value)) {
-    throw std::invalid_argument(std::string(name)
-                                + " must be positive and finite");
-  }
-  return value;
-}
-
-std::size_t validate_head_dim(std::size_t head_dim) {
-  if (head_dim == 0 || head_dim > 256 || head_dim % 2 != 0) {
-    throw std::invalid_argument("Qwen3 head_dim must be even and in [2, 256]");
-  }
-  return head_dim;
-}
-
-void check_cuda(cudaError_t status, const char* operation) {
-  if (status != cudaSuccess) {
-    throw std::runtime_error(std::string(operation) + ": "
-                             + cudaGetErrorString(status));
-  }
-}
 
 Tensor make_rope_cache(std::size_t max_positions, std::size_t head_dim,
                        float theta, Device device) {
@@ -67,19 +36,9 @@ Tensor make_rope_cache(std::size_t max_positions, std::size_t head_dim,
   return cache;
 }
 
-bool is_index_vector(ConstTensorView tensor, Device device) {
+[[maybe_unused]] bool is_index_vector(ConstTensorView tensor, Device device) {
   return tensor.rank() == 1 && tensor.dtype() == DataType::Int32
          && tensor.device() == device && tensor.is_contiguous();
-}
-
-std::size_t validate_num_kv_heads(std::size_t num_heads,
-                                  std::size_t num_kv_heads) {
-  require_positive(num_kv_heads, "num_key_value_heads");
-  if (num_heads % num_kv_heads != 0) {
-    throw std::invalid_argument(
-        "num_attention_heads must be divisible by num_key_value_heads");
-  }
-  return num_kv_heads;
 }
 
 DataType model_data_type(TorchDataType dtype) {
@@ -94,22 +53,15 @@ DataType model_data_type(TorchDataType dtype) {
   throw std::invalid_argument("unsupported Qwen3 model dtype");
 }
 
-ModelConfig validate_config(ModelConfig config) {
+ModelConfig validate_qwen3_config(ModelConfig config) {
+  config.assert_valid();
   if (config.model_type != "qwen3") {
     throw std::invalid_argument("Qwen3ForCausalLM requires model_type 'qwen3'");
   }
-
-  require_positive(config.vocab_size, "vocab_size");
-  require_positive(config.hidden_size, "hidden_size");
-  validate_head_dim(config.head_dim);
-  require_positive(config.intermediate_size, "intermediate_size");
-  require_positive(config.num_hidden_layers, "num_hidden_layers");
-  const auto num_heads =
-      require_positive(config.num_attention_heads, "num_attention_heads");
-  validate_num_kv_heads(num_heads, config.num_key_value_heads);
-  require_positive(config.max_position_embeddings, "max_position_embeddings");
-  require_positive_finite(config.rope_theta, "rope_theta");
-  require_positive_finite(config.rms_norm_eps, "rms_norm_eps");
+  if (config.head_dim == 0 || config.head_dim > 256
+      || config.head_dim % 2 != 0) {
+    throw std::invalid_argument("Qwen3 head_dim must be even and in [2, 256]");
+  }
   if (config.hidden_act != HiddenAct::SiLU) {
     throw std::invalid_argument("Qwen3 requires hidden_act 'silu'");
   }
@@ -126,12 +78,10 @@ Tensor make_lm_head_weight(std::size_t vocab_size, std::size_t hidden_size,
     return Tensor::empty({vocab_size, hidden_size}, dtype, device);
   }
 
-  const auto shape = tied_weight->shape();
-  if (shape.size() != 2 || shape[0] != vocab_size || shape[1] != hidden_size
-      || tied_weight->dtype() != dtype || tied_weight->device() != device) {
-    throw std::invalid_argument(
-        "the tied embedding is incompatible with the Qwen3 LM head");
-  }
+  assert(tied_weight->shape().size() == 2);
+  assert(tied_weight->shape()[0] == vocab_size
+         && tied_weight->shape()[1] == hidden_size);
+  assert(tied_weight->dtype() == dtype && tied_weight->device() == device);
 
   // Tensor copies share Storage, matching tie_word_embeddings semantics.
   return *tied_weight;
@@ -141,9 +91,10 @@ Tensor make_lm_head_weight(std::size_t vocab_size, std::size_t hidden_size,
 
 Qwen3Linear::Qwen3Linear(std::size_t in_features, std::size_t out_features,
                          bool bias, DataType dtype, Device device)
-    : in_features_(require_positive(in_features, "linear in_features")),
-      out_features_(require_positive(out_features, "linear out_features")),
+    : in_features_(in_features),
+      out_features_(out_features),
       weight_(Tensor::empty({out_features_, in_features_}, dtype, device)) {
+  assert(in_features_ > 0 && out_features_ > 0);
   register_parameter("weight", weight_);
   if (bias) {
     bias_ = std::make_unique<Parameter>(
@@ -154,17 +105,15 @@ Qwen3Linear::Qwen3Linear(std::size_t in_features, std::size_t out_features,
 
 Tensor Qwen3Linear::forward(ConstTensorView input, cudaStream_t stream) const {
   const auto weight = weight_.view();
-  if (input.rank() != 2 || input.shape()[1] != in_features_
-      || input.device().type != DeviceType::Cuda
-      || input.device() != weight.device() || input.dtype() != weight.dtype()) {
-    throw std::invalid_argument(
-        "Qwen3Linear requires matching CUDA input "
-        "with shape [tokens, in_features]");
-  }
+  assert(input.rank() == 2 && input.shape()[1] == in_features_);
+  assert(input.device().type == DeviceType::Cuda);
+  assert(input.device() == weight.device() && input.dtype() == weight.dtype());
   auto output = Tensor::empty({input.shape()[0], out_features_}, input.dtype(),
                               input.device());
   std::optional<ConstTensorView> bias;
-  if (bias_) bias = std::as_const(*bias_).view();
+  if (bias_) {
+    bias = std::as_const(*bias_).view();
+  }
   kernels::linear(input, weight, output.view(), bias, stream);
   return output;
 }
@@ -195,23 +144,20 @@ const Parameter* Qwen3Linear::bias() const noexcept {
 
 Qwen3RMSNorm::Qwen3RMSNorm(std::size_t normalized_size, float epsilon,
                            DataType dtype, Device device)
-    : normalized_size_(
-          require_positive(normalized_size, "RMSNorm normalized_size")),
-      epsilon_(require_positive_finite(epsilon, "RMSNorm epsilon")),
+    : normalized_size_(normalized_size),
+      epsilon_(epsilon),
       weight_(Tensor::empty({normalized_size_}, dtype, device)) {
+  assert(normalized_size_ > 0);
+  assert(std::isfinite(epsilon_) && epsilon_ > 0);
   register_parameter("weight", weight_);
 }
 
 Tensor Qwen3RMSNorm::forward(ConstTensorView input, cudaStream_t stream) const {
   const auto weight = weight_.view();
-  if (input.rank() < 1 || input.rank() > 3
-      || input.shape().back() != normalized_size_
-      || input.device() != weight.device() || input.dtype() != weight.dtype()
-      || input.device().type != DeviceType::Cuda) {
-    throw std::invalid_argument(
-        "Qwen3RMSNorm requires a matching CUDA input "
-        "of rank 1 to 3 and the configured width");
-  }
+  assert(input.rank() >= 1 && input.rank() <= 3);
+  assert(input.shape().back() == normalized_size_);
+  assert(input.device().type == DeviceType::Cuda);
+  assert(input.device() == weight.device() && input.dtype() == weight.dtype());
   auto output = Tensor::empty({input.shape().begin(), input.shape().end()},
                               input.dtype(), input.device());
   kernels::rms_norm(input, weight, output.view(), epsilon_, stream);
@@ -222,17 +168,13 @@ Qwen3RMSNormOutput Qwen3RMSNorm::forward(ConstTensorView input,
                                          ConstTensorView residual,
                                          cudaStream_t stream) const {
   const auto weight = weight_.view();
-  if (input.rank() < 1 || input.rank() > 3
-      || input.shape().back() != normalized_size_
-      || input.device() != weight.device() || input.dtype() != weight.dtype()
-      || input.device().type != DeviceType::Cuda
-      || !std::ranges::equal(input.shape(), residual.shape())
-      || input.device() != residual.device()
-      || input.dtype() != residual.dtype()) {
-    throw std::invalid_argument(
-        "Qwen3RMSNorm requires matching CUDA input and "
-        "residual of rank 1 to 3 and the configured width");
-  }
+  assert(input.rank() >= 1 && input.rank() <= 3);
+  assert(input.shape().back() == normalized_size_);
+  assert(input.device().type == DeviceType::Cuda);
+  assert(input.device() == weight.device() && input.dtype() == weight.dtype());
+  assert(std::ranges::equal(input.shape(), residual.shape()));
+  assert(input.device() == residual.device()
+         && input.dtype() == residual.dtype());
   const std::vector<std::size_t> shape(input.shape().begin(),
                                        input.shape().end());
   Qwen3RMSNormOutput result{
@@ -262,22 +204,19 @@ const Parameter& Qwen3RMSNorm::weight() const noexcept {
 
 Qwen3Embedding::Qwen3Embedding(std::size_t vocab_size, std::size_t hidden_size,
                                DataType dtype, Device device)
-    : vocab_size_(require_positive(vocab_size, "embedding vocab_size")),
-      hidden_size_(require_positive(hidden_size, "embedding hidden_size")),
+    : vocab_size_(vocab_size),
+      hidden_size_(hidden_size),
       weight_(Tensor::empty({vocab_size_, hidden_size_}, dtype, device)) {
+  assert(vocab_size_ > 0 && hidden_size_ > 0);
   register_parameter("weight", weight_);
 }
 
 Tensor Qwen3Embedding::forward(ConstTensorView input_ids,
                                cudaStream_t stream) const {
   const auto weight = weight_.view();
-  if (input_ids.rank() != 1 || input_ids.dtype() != DataType::Int32
-      || input_ids.device() != weight.device()
-      || input_ids.device().type != DeviceType::Cuda) {
-    throw std::invalid_argument(
-        "Qwen3Embedding requires rank-1 Int32 token IDs "
-        "on the weight's CUDA device");
-  }
+  assert(input_ids.rank() == 1 && input_ids.dtype() == DataType::Int32);
+  assert(input_ids.device().type == DeviceType::Cuda);
+  assert(input_ids.device() == weight.device());
   auto output = Tensor::empty({input_ids.shape()[0], hidden_size_},
                               weight.dtype(), weight.device());
   kernels::embedding(input_ids, weight, output.view(), stream);
@@ -295,33 +234,26 @@ const Parameter& Qwen3Embedding::weight() const noexcept {
 Qwen3LMHead::Qwen3LMHead(std::size_t vocab_size, std::size_t hidden_size,
                          DataType dtype, Device device,
                          const Tensor* tied_weight)
-    : vocab_size_(require_positive(vocab_size, "LM head vocab_size")),
-      hidden_size_(require_positive(hidden_size, "LM head hidden_size")),
+    : vocab_size_(vocab_size),
+      hidden_size_(hidden_size),
       weight_(make_lm_head_weight(vocab_size_, hidden_size_, dtype, device,
                                   tied_weight)) {
+  assert(vocab_size_ > 0 && hidden_size_ > 0);
   register_parameter("weight", weight_);
 }
 
 Tensor Qwen3LMHead::forward(ConstTensorView hidden_states,
                             const Qwen3ForwardContext& context) const {
   const auto weight = weight_.view();
-  if (hidden_states.rank() != 2 || hidden_states.shape()[1] != hidden_size_
-      || hidden_states.device().type != DeviceType::Cuda
-      || hidden_states.device() != weight.device()
-      || hidden_states.dtype() != weight.dtype()) {
-    throw std::invalid_argument(
-        "Qwen3LMHead requires matching CUDA hidden states "
-        "with shape [tokens, hidden_size]");
-  }
+  assert(hidden_states.rank() == 2 && hidden_states.shape()[1] == hidden_size_);
+  assert(hidden_states.device().type == DeviceType::Cuda);
+  assert(hidden_states.device() == weight.device()
+         && hidden_states.dtype() == weight.dtype());
   Tensor last_hidden;
   auto selected_hidden = hidden_states;
   if (context.is_prefill) {
-    if (!is_index_vector(context.cu_seqlens_q, hidden_states.device())
-        || context.cu_seqlens_q.shape()[0] == 0) {
-      throw std::invalid_argument(
-          "Prefill LM head requires CUDA Int32 "
-          "cu_seqlens_q of shape [batch + 1]");
-    }
+    assert(is_index_vector(context.cu_seqlens_q, hidden_states.device()));
+    assert(context.cu_seqlens_q.shape()[0] > 0);
     const auto batch = context.cu_seqlens_q.shape()[0] - 1;
     last_hidden = Tensor::empty({batch, hidden_size_}, hidden_states.dtype(),
                                 hidden_states.device());
@@ -349,7 +281,7 @@ Qwen3Attention::Qwen3Attention(const ModelConfig& config, DataType dtype,
     : hidden_size_(config.hidden_size),
       num_heads_(config.num_attention_heads),
       num_kv_heads_(config.num_key_value_heads),
-      head_dim_(validate_head_dim(config.head_dim)),
+      head_dim_(config.head_dim),
       q_size_(num_heads_ * head_dim_),
       kv_size_(num_kv_heads_ * head_dim_),
       max_position_embeddings_(config.max_position_embeddings),
@@ -387,44 +319,29 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
                                ConstTensorView hidden_states,
                                const Qwen3ForwardContext& context) const {
   const auto device = q_proj_.weight().view().device();
-  if (device.type != DeviceType::Cuda || hidden_states.rank() != 2
-      || hidden_states.shape()[1] != hidden_size_
-      || hidden_states.device() != device || !is_index_vector(positions, device)
-      || positions.shape()[0] != hidden_states.shape()[0]) {
-    throw std::invalid_argument(
-        "Qwen3Attention requires CUDA hidden states "
-        "[tokens, hidden_size] and Int32 positions [tokens]");
-  }
+  assert(device.type == DeviceType::Cuda && hidden_states.device() == device);
+  assert(hidden_states.rank() == 2 && hidden_states.shape()[1] == hidden_size_);
+  assert(is_index_vector(positions, device));
+  assert(positions.shape()[0] == hidden_states.shape()[0]);
   const auto tokens = hidden_states.shape()[0];
   const bool have_cache = key_cache_.numel() != 0 && value_cache_.numel() != 0;
   const bool paged_prefill = context.block_tables.numel() != 0;
-  if (have_cache
-      && (!is_index_vector(context.slot_mapping, device)
-          || context.slot_mapping.shape()[0] != tokens)) {
-    throw std::invalid_argument(
-        "Cached Qwen3 attention requires slot_mapping "
-        "for every input token");
+  if (have_cache) {
+    assert(is_index_vector(context.slot_mapping, device));
+    assert(context.slot_mapping.shape()[0] == tokens);
   }
   if (context.is_prefill) {
-    if (!is_index_vector(context.cu_seqlens_q, device)
-        || !is_index_vector(context.cu_seqlens_k, device)
-        || context.cu_seqlens_q.shape()[0] == 0
-        || context.cu_seqlens_q.shape()[0] != context.cu_seqlens_k.shape()[0]) {
-      throw std::invalid_argument(
-          "Prefill attention requires matching CUDA "
-          "Int32 cu_seqlens_q/k [batch + 1]");
-    }
-    if (paged_prefill && !have_cache) {
-      throw std::invalid_argument(
-          "Paged prefill requires initialized KV caches");
-    }
-  } else if (!have_cache || !is_index_vector(context.context_lens, device)
-             || context.context_lens.shape()[0] != tokens
-             || context.block_tables.rank() != 2
-             || context.block_tables.shape()[0] != tokens) {
-    throw std::invalid_argument(
-        "Decode attention requires initialized KV caches, "
-        "context_lens and block_tables");
+    assert(is_index_vector(context.cu_seqlens_q, device));
+    assert(is_index_vector(context.cu_seqlens_k, device));
+    assert(context.cu_seqlens_q.shape()[0] > 0
+           && context.cu_seqlens_q.shape()[0]
+                  == context.cu_seqlens_k.shape()[0]);
+    assert(!paged_prefill || have_cache);
+  } else {
+    assert(have_cache && is_index_vector(context.context_lens, device));
+    assert(context.context_lens.shape()[0] == tokens);
+    assert(context.block_tables.rank() == 2
+           && context.block_tables.shape()[0] == tokens);
   }
 
   const auto stream = context.stream;
@@ -471,23 +388,18 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
 
 void Qwen3Attention::set_kv_cache(TensorView key_cache,
                                   TensorView value_cache) {
-  const auto key_shape = key_cache.shape();
-  const auto value_shape = value_cache.shape();
-  const auto parameter_view = q_proj_.weight().view();
-  if (key_cache.rank() != 4 || value_cache.rank() != 4
-      || !std::ranges::equal(key_shape, value_shape) || key_shape[0] == 0
-      || key_shape[1] == 0 || key_shape[2] != num_kv_heads_
-      || key_shape[3] != head_dim_ || key_cache.data() == value_cache.data()
-      || key_cache.dtype() != value_cache.dtype()
-      || key_cache.dtype() != parameter_view.dtype()
-      || key_cache.device() != value_cache.device()
-      || key_cache.device() != parameter_view.device()
-      || !key_cache.is_contiguous() || !value_cache.is_contiguous()) {
-    throw std::invalid_argument(
-        "Qwen3 KV caches must be matching contiguous "
-        "[blocks, block_size, num_kv_heads, head_dim] tensors on the model "
-        "device");
-  }
+  [[maybe_unused]] const auto key_shape = key_cache.shape();
+  [[maybe_unused]] const auto parameter_view = q_proj_.weight().view();
+  assert(key_cache.rank() == 4 && value_cache.rank() == 4);
+  assert(std::ranges::equal(key_shape, value_cache.shape()));
+  assert(key_shape[0] > 0 && key_shape[1] > 0 && key_shape[2] == num_kv_heads_
+         && key_shape[3] == head_dim_);
+  assert(key_cache.data() != value_cache.data());
+  assert(key_cache.dtype() == value_cache.dtype()
+         && key_cache.dtype() == parameter_view.dtype());
+  assert(key_cache.device() == value_cache.device()
+         && key_cache.device() == parameter_view.device());
+  assert(key_cache.is_contiguous() && value_cache.is_contiguous());
 
   key_cache_ = std::move(key_cache);
   value_cache_ = std::move(value_cache);
@@ -651,7 +563,7 @@ const Qwen3DecoderLayer& Qwen3Model::layer(std::size_t index) const {
 }
 
 Qwen3ForCausalLM::Qwen3ForCausalLM(const ModelConfig& config, Device device)
-    : config_(validate_config(config)),
+    : config_(validate_qwen3_config(config)),
       dtype_(model_data_type(config_.dtype)),
       device_(device),
       model_(config_, dtype_, device_),

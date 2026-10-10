@@ -1,7 +1,7 @@
 #include <algorithm>
-#include <cmath>
 #include <cstdint>
 
+#include "common/cuda_utils.hh"
 #include "kernels/common.cuh"
 #include "kernels/kernels.hh"
 
@@ -11,7 +11,7 @@ namespace {
 constexpr unsigned kThreads = 256;
 
 __global__ void build_rope_cache_kernel(float* cache, std::size_t pairs,
-                                      std::size_t half_dim, float theta) {
+                                        std::size_t half_dim, float theta) {
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
   const std::size_t start_index =
       static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -93,7 +93,7 @@ void build_rope_cache(TensorView cos_sin_cache, float theta,
       static_cast<float*>(cos_sin_cache.data()), pairs,
       cos_sin_cache.shape()[1] / 2, theta);
 
-  detail::check_cuda(cudaGetLastError(), "build_rope_cache launch");
+  check_cuda(cudaGetLastError(), "build_rope_cache launch");
 }
 
 void apply_rotary_embedding(ConstTensorView positions, TensorView query,
@@ -125,7 +125,7 @@ void apply_rotary_embedding(ConstTensorView positions, TensorView query,
         cos_sin_cache.shape()[0]);
   });
 
-  detail::check_cuda(cudaGetLastError(), "apply_rotary_embedding launch");
+  check_cuda(cudaGetLastError(), "apply_rotary_embedding launch");
 }
 
 } // namespace nanovllm::kernels

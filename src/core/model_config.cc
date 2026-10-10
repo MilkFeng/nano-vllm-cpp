@@ -1,6 +1,7 @@
 #include "core/model_config.hh"
 
 #include <cassert>
+#include <cmath>
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <optional>
@@ -99,21 +100,22 @@ ModelConfig ModelConfig::from_json(const nlohmann::json& j) {
       .dtype = j.at("torch_dtype").get<TorchDataType>(),
   };
 
-  assert(config.vocab_size > 0);
-  assert(config.hidden_size > 0);
-  assert(config.intermediate_size > 0);
-  assert(config.num_hidden_layers > 0);
-  assert(config.num_attention_heads > 0);
-  assert(config.num_key_value_heads > 0);
-  assert(config.head_dim > 0);
-
-  assert(config.num_attention_heads % config.num_key_value_heads == 0);
-  assert(config.max_position_embeddings > 0);
-
-  assert(config.rope_theta > 0);
-  assert(config.rms_norm_eps > 0);
-
+  config.assert_valid();
   return config;
+}
+
+void ModelConfig::assert_valid() const {
+  assert(vocab_size > 0);
+  assert(hidden_size > 0);
+  assert(intermediate_size > 0);
+  assert(num_hidden_layers > 0);
+  assert(num_attention_heads > 0);
+  assert(num_key_value_heads > 0);
+  assert(head_dim > 0);
+  assert(num_attention_heads % num_key_value_heads == 0);
+  assert(max_position_embeddings > 0);
+  assert(std::isfinite(rope_theta) && rope_theta > 0);
+  assert(std::isfinite(rms_norm_eps) && rms_norm_eps > 0);
 }
 
 ModelConfig ModelConfig::read_from_file(const std::filesystem::path& path) {

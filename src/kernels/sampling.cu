@@ -5,6 +5,7 @@
 #include <climits>
 #include <cstdint>
 
+#include "common/cuda_utils.hh"
 #include "kernels/common.cuh"
 #include "kernels/inference.hh"
 
@@ -31,9 +32,9 @@ __device__ void reduce_best(float* scores, int* indices) {
 
 template <typename T>
 __global__ void sample_kernel(const T* logits, const float* temperatures,
-                             std::int32_t* output, std::size_t batch,
-                             std::size_t vocab, std::uint64_t seed,
-                             std::uint64_t step) {
+                              std::int32_t* output, std::size_t batch,
+                              std::size_t vocab, std::uint64_t seed,
+                              std::uint64_t step) {
   __shared__ float scores[kThreads];
   __shared__ int indices[kThreads];
   for (std::size_t row = blockIdx.x; row < batch; row += gridDim.x) {
@@ -118,7 +119,8 @@ void sample(ConstTensorView logits, ConstTensorView temperatures,
     return;
   }
 
-  const auto blocks = static_cast<unsigned>(std::min<std::size_t>(batch, 65535));
+  const auto blocks =
+      static_cast<unsigned>(std::min<std::size_t>(batch, 65535));
   detail::dispatch_float(logits.dtype(), [&]<typename T> {
     sample_kernel<<<blocks, kThreads, 0, stream>>>(
         static_cast<const T*>(logits.data()),
@@ -126,7 +128,7 @@ void sample(ConstTensorView logits, ConstTensorView temperatures,
         static_cast<std::int32_t*>(output.data()), batch, vocab, seed, step);
   });
 
-  detail::check_cuda(cudaGetLastError(), "sample launch");
+  check_cuda(cudaGetLastError(), "sample launch");
 }
 
 } // namespace nanovllm::kernels

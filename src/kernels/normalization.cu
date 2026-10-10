@@ -1,6 +1,6 @@
 #include <algorithm>
-#include <cmath>
 
+#include "common/cuda_utils.hh"
 #include "kernels/common.cuh"
 #include "kernels/kernels.hh"
 
@@ -23,9 +23,9 @@ void assert_norm(const ConstTensorView& input, const ConstTensorView& weight,
 
 template <typename T, bool Fused>
 __global__ void normalization_kernel(const T* input, const T* residual,
-                                    const T* weight, T* output,
-                                    T* residual_output, std::size_t rows,
-                                    std::size_t width, float epsilon) {
+                                     const T* weight, T* output,
+                                     T* residual_output, std::size_t rows,
+                                     std::size_t width, float epsilon) {
   __shared__ float sums[kThreads];
   for (std::size_t row = blockIdx.x; row < rows; row += gridDim.x) {
     const auto offset = row * width;
@@ -79,7 +79,7 @@ void rms_norm(ConstTensorView input, ConstTensorView weight, TensorView output,
         nullptr, rows, width, epsilon);
   });
 
-  detail::check_cuda(cudaGetLastError(), "launch rms_norm");
+  check_cuda(cudaGetLastError(), "launch rms_norm");
 }
 
 void fused_add_rms_norm(ConstTensorView input, ConstTensorView residual,
@@ -107,7 +107,7 @@ void fused_add_rms_norm(ConstTensorView input, ConstTensorView residual,
         static_cast<const T*>(weight.data()), static_cast<T*>(output.data()),
         static_cast<T*>(residual_output.data()), rows, width, epsilon);
   });
-  detail::check_cuda(cudaGetLastError(), "launch fused_add_rms_norm");
+  check_cuda(cudaGetLastError(), "launch fused_add_rms_norm");
 }
 
 } // namespace nanovllm::kernels
