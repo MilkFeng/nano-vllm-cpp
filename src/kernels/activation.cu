@@ -14,14 +14,14 @@ __global__ void silu_and_mul_kernel(const T* gate, const T* up, T* output,
                                     std::size_t gate_stride,
                                     std::size_t up_stride) {
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
-  for (std::size_t index =
-           static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-       index < count; index += step) {
+  const std::size_t start_index =
+      static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  for (std::size_t index = start_index; index < count; index += step) {
     const std::size_t row = index / width;
     const std::size_t column = index % width;
     const float g = detail::to_float(gate[row * gate_stride + column]);
     const float u = detail::to_float(up[row * up_stride + column]);
-    output[index] = detail::from_float<T>((g / (1.0f + expf(-g))) * u);
+    output[index] = detail::from_float<T>((g / (1.0f + __expf(-g))) * u);
   }
 }
 
@@ -57,18 +57,22 @@ void silu_and_mul(ConstTensorView gate, ConstTensorView up, TensorView output,
       up, output.as_const(),
       "silu_and_mul permits only exact contiguous up/output aliases");
   const std::size_t count = output.numel();
-  if (count == 0) return;
+  if (count == 0) {
+    return;
+  }
 
   const detail::DeviceGuard guard(gate.device().index);
-  constexpr unsigned int threads = 256;
-  const auto blocks = static_cast<unsigned int>(
+  constexpr std::uint32_t threads = 256;
+  const auto blocks = static_cast<std::uint32_t>(
       std::min<std::size_t>((count - 1) / threads + 1, 65535));
+
   detail::dispatch_float(gate.dtype(), [&]<typename T>() {
     silu_and_mul_kernel<<<blocks, threads, 0, stream>>>(
         static_cast<const T*>(gate.data()), static_cast<const T*>(up.data()),
         static_cast<T*>(output.data()), count, width, gate.strides()[0],
         up.strides()[0]);
   });
+
   detail::check_cuda(cudaGetLastError(), "silu_and_mul kernel launch");
 }
 

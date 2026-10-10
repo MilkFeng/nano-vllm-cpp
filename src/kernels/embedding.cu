@@ -15,15 +15,11 @@ __global__ void embedding_kernel(const std::int32_t* input_ids, const T* weight,
                                  std::size_t vocab_size,
                                  std::size_t hidden_size) {
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
-  for (std::size_t index =
-           static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-       index < count; index += step) {
+  const std::size_t start_index =
+      static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  for (std::size_t index = start_index; index < count; index += step) {
     const std::int32_t token = input_ids[index / hidden_size];
-    const bool valid =
-        token >= 0 && static_cast<std::size_t>(token) < vocab_size;
-    assert(valid && "embedding token ID is outside the vocabulary");
-    // Keep the bounds check in release builds, where assert may be disabled.
-    if (!valid) {
+    if (token < 0 || token >= vocab_size) {
       continue;
     }
     output[index] = weight[static_cast<std::size_t>(token) * hidden_size
@@ -60,18 +56,22 @@ void embedding(ConstTensorView input_ids, ConstTensorView weight,
                       && !detail::overlaps(weight, output.as_const()),
                   "embedding output must not overlap token IDs or weights");
   const std::size_t count = output.numel();
-  if (count == 0) return;
+  if (count == 0) {
+    return;
+  }
 
   const detail::DeviceGuard guard(weight.device().index);
-  constexpr unsigned int threads = 256;
-  const auto blocks = static_cast<unsigned int>(
+  constexpr std::uint32_t threads = 256;
+  const auto blocks = static_cast<std::uint32_t>(
       std::min<std::size_t>((count - 1) / threads + 1, 65535));
+
   detail::dispatch_float(weight.dtype(), [&]<typename T>() {
     embedding_kernel<<<blocks, threads, 0, stream>>>(
         static_cast<const std::int32_t*>(input_ids.data()),
         static_cast<const T*>(weight.data()), static_cast<T*>(output.data()),
         count, weight.shape()[0], weight.shape()[1]);
   });
+
   detail::check_cuda(cudaGetLastError(), "embedding kernel launch");
 }
 

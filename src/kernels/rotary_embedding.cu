@@ -11,25 +11,28 @@
 namespace nanovllm::kernels {
 namespace {
 
-constexpr unsigned int kThreads = 256;
+constexpr std::uint32_t kThreads = 256;
 
-unsigned int block_count(std::size_t count) {
-  return static_cast<unsigned int>(
+std::uint32_t block_count(std::size_t count) {
+  return static_cast<std::uint32_t>(
       std::min<std::size_t>(1 + (count - 1) / kThreads, 65535));
 }
 
 __global__ void build_rope_cache_kernel(float* cache, std::size_t pairs,
                                         std::size_t half_dim, float theta) {
-  for (std::size_t index = blockIdx.x * std::size_t{blockDim.x} + threadIdx.x;
-       index < pairs; index += std::size_t{blockDim.x} * gridDim.x) {
+  const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
+  const std::size_t start_index =
+      static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+
+  for (std::size_t index = start_index; index < pairs; index += step) {
     const auto position = index / half_dim;
     const auto dimension = index % half_dim;
     const float exponent = static_cast<float>(dimension) / half_dim;
-    const float inverse_frequency = 1.0f / powf(theta, exponent);
+    const float inverse_frequency = 1.0f / __powf(theta, exponent);
     const float angle = static_cast<float>(position) * inverse_frequency;
     float sine;
     float cosine;
-    sincosf(angle, &sine, &cosine);
+    __sincosf(angle, &sine, &cosine);
     const auto offset = position * (2 * half_dim) + dimension;
     cache[offset] = cosine;
     cache[offset + half_dim] = sine;
@@ -45,16 +48,19 @@ __global__ void rotary_embedding_kernel(
     std::size_t max_positions) {
   const auto head_dim = 2 * half_dim;
   const auto total_heads = query_heads + key_heads;
-  for (std::size_t index = blockIdx.x * std::size_t{blockDim.x} + threadIdx.x;
-       index < pairs; index += std::size_t{blockDim.x} * gridDim.x) {
+
+  const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
+  const std::size_t start_index =
+      static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+
+  for (std::size_t index = start_index; index < pairs; index += step) {
     const auto dimension = index % half_dim;
     const auto head = (index / half_dim) % total_heads;
     const auto token = index / (half_dim * total_heads);
     const auto position = positions[token];
-    const bool valid_position =
-        position >= 0 && static_cast<std::size_t>(position) < max_positions;
-    assert(valid_position && "RoPE position is outside the cosine/sine cache");
-    if (!valid_position) continue;
+    if (position < 0 || position >= max_positions) {
+      continue;
+    }
 
     const bool is_query = head < query_heads;
     const auto local_head = is_query ? head : head - query_heads;
@@ -123,12 +129,17 @@ void build_rope_cache(TensorView cos_sin_cache, float theta,
   detail::require(std::isfinite(theta) && theta > 0,
                   "RoPE theta must be finite and positive");
   const auto pairs = cos_sin_cache.numel() / 2;
-  if (pairs == 0) return;
+  if (pairs == 0) {
+    return;
+  }
+
+  const auto blocks = block_count(pairs);
 
   const detail::DeviceGuard guard(cos_sin_cache.device().index);
-  build_rope_cache_kernel<<<block_count(pairs), kThreads, 0, stream>>>(
+  build_rope_cache_kernel<<<blocks, kThreads, 0, stream>>>(
       static_cast<float*>(cos_sin_cache.data()), pairs,
       cos_sin_cache.shape()[1] / 2, theta);
+
   detail::check_cuda(cudaGetLastError(), "build_rope_cache launch");
 }
 
@@ -152,7 +163,9 @@ void apply_rotary_embedding(ConstTensorView positions, ConstTensorView query,
                       && query.shape()[2] == key.shape()[2]
                       && query.shape()[2] == cos_sin_cache.shape()[1],
                   "RoPE token counts and head dimensions must match");
-  if (query.shape()[0] == 0) return;
+  if (query.shape()[0] == 0) {
+    return;
+  }
   detail::require(cos_sin_cache.shape()[0] > 0,
                   "Non-empty RoPE input requires a non-empty cache");
   const auto q_output = query_output.as_const();
@@ -174,10 +187,13 @@ void apply_rotary_embedding(ConstTensorView positions, ConstTensorView query,
   detail::require(query.numel() / 2 <= std::numeric_limits<std::size_t>::max()
                                            - key.numel() / 2,
                   "RoPE input is too large");
+
   const auto pairs = query.numel() / 2 + key.numel() / 2;
+  const auto blocks = block_count(pairs);
+
   const detail::DeviceGuard guard(query.device().index);
   detail::dispatch_float(query.dtype(), [&]<typename T> {
-    rotary_embedding_kernel<<<block_count(pairs), kThreads, 0, stream>>>(
+    rotary_embedding_kernel<<<blocks, kThreads, 0, stream>>>(
         static_cast<const std::int32_t*>(positions.data()),
         static_cast<const T*>(query.data()), static_cast<const T*>(key.data()),
         static_cast<const float*>(cos_sin_cache.data()),
@@ -186,6 +202,7 @@ void apply_rotary_embedding(ConstTensorView positions, ConstTensorView query,
         key.shape()[1], query.shape()[2] / 2, query.strides()[0],
         key.strides()[0], cos_sin_cache.shape()[0]);
   });
+
   detail::check_cuda(cudaGetLastError(), "apply_rotary_embedding launch");
 }
 

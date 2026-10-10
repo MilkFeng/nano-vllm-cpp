@@ -41,10 +41,7 @@ __global__ void sample_kernel(const T* logits, const float* temperatures,
   __shared__ int indices[kThreads];
   for (std::size_t row = blockIdx.x; row < batch; row += gridDim.x) {
     const float temperature = temperatures[row];
-    const bool valid_temperature = isfinite(temperature) && temperature >= 0.0f;
-    assert(valid_temperature
-           && "sampling temperature must be finite and nonnegative");
-    if (!valid_temperature) {
+    if (!isfinite(temperature) || temperature < 0.0f) {
       if (threadIdx.x == 0) output[row] = -1;
       continue;
     }
@@ -52,19 +49,19 @@ __global__ void sample_kernel(const T* logits, const float* temperatures,
     int best_index = INT_MAX;
     for (std::size_t col = threadIdx.x; col < vocab; col += blockDim.x) {
       const float logit = detail::to_float(logits[row * stride + col]);
-      const bool valid_logit = !isnan(logit) && logit != CUDART_INF_F;
-      assert(valid_logit
-             && "sampling logits cannot contain NaN or positive infinity");
-      if (valid_logit
+      if (!isnan(logit) && logit != CUDART_INF_F
           && better(logit, static_cast<int>(col), best, best_index)) {
         best = logit;
-        best_index = static_cast<int>(col);
+        best_index = col;
       }
     }
     scores[threadIdx.x] = best;
     indices[threadIdx.x] = best_index;
+
     __syncthreads();
+
     reduce_best(scores, indices);
+
     const float maximum = scores[0];
     const int greedy_index = indices[0];
     const bool valid_row = isfinite(maximum);
@@ -96,9 +93,15 @@ __global__ void sample_kernel(const T* logits, const float* temperatures,
     }
     scores[threadIdx.x] = best;
     indices[threadIdx.x] = best_index;
+
     __syncthreads();
+
     reduce_best(scores, indices);
-    if (threadIdx.x == 0) output[row] = indices[0];
+
+    if (threadIdx.x == 0) {
+      output[row] = indices[0];
+    }
+
     __syncthreads();
   }
 }
@@ -136,11 +139,15 @@ void sample(ConstTensorView logits, ConstTensorView temperatures,
   detail::require(!detail::overlaps(logits, output.as_const())
                       && !detail::overlaps(temperatures, output.as_const()),
                   "sample output must not overlap its inputs");
-  (void)detail::checked_mul(batch, vocab);
-  if (batch == 0) return;
+  detail::checked_mul(batch, vocab);
+  if (batch == 0) {
+    return;
+  }
+
   const detail::DeviceGuard guard(logits.device().index);
   const auto blocks =
-      static_cast<unsigned>(std::min<std::size_t>(batch, 65535));
+      static_cast<std::uint32_t>(std::min<std::size_t>(batch, 65535));
+
   detail::dispatch_float(logits.dtype(), [&]<typename T> {
     sample_kernel<<<blocks, kThreads, 0, stream>>>(
         static_cast<const T*>(logits.data()),
@@ -148,6 +155,7 @@ void sample(ConstTensorView logits, ConstTensorView temperatures,
         static_cast<std::int32_t*>(output.data()), batch, vocab,
         logits.strides()[0], seed, step);
   });
+
   detail::check_cuda(cudaGetLastError(), "sample launch");
 }
 

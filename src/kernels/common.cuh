@@ -39,7 +39,9 @@ class DeviceGuard {
   }
 
   ~DeviceGuard() {
-    if (restore_) (void)cudaSetDevice(previous_);
+    if (restore_) {
+      cudaSetDevice(previous_);
+    }
   }
 
   DeviceGuard(const DeviceGuard&) = delete;
@@ -107,7 +109,9 @@ struct AddressRange {
 
 inline AddressRange address_range(ConstTensorView tensor) {
   const auto bytes = storage_span(tensor);
-  if (bytes == 0) return {0, 0};
+  if (bytes == 0) {
+    return {0, 0};
+  }
   const auto begin = reinterpret_cast<std::uintptr_t>(tensor.data());
   require(bytes <= std::numeric_limits<std::uintptr_t>::max() - begin,
           "kernel tensor address range overflows");
@@ -127,7 +131,9 @@ inline bool same_shape(ConstTensorView lhs, ConstTensorView rhs) {
 inline void require_exact_or_disjoint(ConstTensorView input,
                                       ConstTensorView output,
                                       const char* message) {
-  if (!overlaps(input, output)) return;
+  if (!overlaps(input, output)) {
+    return;
+  }
   require(input.data() == output.data() && input.is_contiguous()
               && output.is_contiguous() && same_shape(input, output)
               && input.dtype() == output.dtype(),

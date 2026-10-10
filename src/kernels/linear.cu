@@ -121,20 +121,26 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
     detail::require(!detail::overlaps(*bias, output.as_const()),
                     "linear output must not overlap bias");
   }
-  if (m == 0) return;
+  if (m == 0) {
+    return;
+  }
 
   const detail::DeviceGuard guard(input.device().index);
   const auto handle = blas_handle(input.device().index);
   check_blas(cublasSetStream(handle, stream), "cublasSetStream");
+
   if (bias) {
     const auto count = detail::checked_mul(m, n);
-    const auto blocks = static_cast<unsigned>(
-        std::min<std::size_t>((count - 1) / 256 + 1, 65535));
+    constexpr std::uint32_t threads = 256;
+    const auto blocks = static_cast<std::uint32_t>(
+        std::min<std::size_t>((count - 1) / threads + 1, 65535));
+
     detail::dispatch_float(input.dtype(), [&]<typename T> {
       broadcast_bias<<<blocks, 256, 0, stream>>>(
           static_cast<const T*>(bias->data()), static_cast<T*>(output.data()),
           count, n);
     });
+
     detail::check_cuda(cudaGetLastError(), "linear bias launch");
   }
   // Row-major Y = X * W^T is column-major Y^T = W * X^T. Initializing C

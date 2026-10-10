@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 #include "kernels/common.cuh"
 #include "kernels/kernels.hh"
@@ -124,17 +125,21 @@ void rms_norm(ConstTensorView input, ConstTensorView weight, TensorView output,
   validate_output(input, output.as_const());
   validate_weight(input, weight, output.as_const(), epsilon);
   validate_alias(input, output.as_const());
-  if (rows.count == 0) return;
+  if (rows.count == 0) {
+    return;
+  }
 
   detail::DeviceGuard guard(input.device().index);
   const auto blocks =
-      static_cast<unsigned>(std::min(rows.count, std::size_t{65535}));
+      static_cast<std::uint32_t>(std::min<std::size_t>(rows.count, 65535));
+
   detail::dispatch_float(input.dtype(), [&]<typename T>() {
     normalization_kernel<T, false><<<blocks, kThreads, 0, stream>>>(
         static_cast<const T*>(input.data()), nullptr,
         static_cast<const T*>(weight.data()), static_cast<T*>(output.data()),
         nullptr, rows, 0, epsilon);
   });
+
   detail::check_cuda(cudaGetLastError(), "launch rms_norm");
 }
 
@@ -159,11 +164,14 @@ void fused_add_rms_norm(ConstTensorView input, ConstTensorView residual,
   validate_alias(input, residual_output.as_const());
   validate_alias(residual, output.as_const());
   validate_alias(residual, residual_output.as_const());
-  if (rows.count == 0) return;
+  if (rows.count == 0) {
+    return;
+  }
 
   detail::DeviceGuard guard(input.device().index);
   const auto blocks =
-      static_cast<unsigned>(std::min(rows.count, std::size_t{65535}));
+      static_cast<std::uint32_t>(std::min<std::size_t>(rows.count, 65535));
+
   detail::dispatch_float(input.dtype(), [&]<typename T>() {
     normalization_kernel<T, true><<<blocks, kThreads, 0, stream>>>(
         static_cast<const T*>(input.data()),
