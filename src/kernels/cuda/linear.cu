@@ -4,10 +4,10 @@
 #include <stdexcept>
 
 #include "common/cuda_utils.hh"
-#include "kernels/common.cuh"
-#include "kernels/inference.hh"
+#include "kernels/cuda/common.cuh"
+#include "kernels/cuda/inference.hh"
 
-namespace nanovllm::kernels {
+namespace nanovllm::kernels::cuda {
 namespace {
 
 constexpr unsigned kThreads = 256;
@@ -114,4 +114,4 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
              "cublasGemmEx");
 }
 
-} // namespace nanovllm::kernels
+} // namespace nanovllm::kernels::cuda

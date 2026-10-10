@@ -7,7 +7,7 @@
 
 #include "core/tensor_view.hh"
 
-namespace nanovllm::kernels {
+namespace nanovllm::kernels::cuda {
 
 // All tensors are contiguous on CUDA device 0, which the caller selects.
 // Floating point tensors use Float32, Float16 or BFloat16. Outputs do not
@@ -42,4 +42,4 @@ void sample(ConstTensorView logits, ConstTensorView temperatures,
             TensorView output, std::uint64_t seed, std::uint64_t step,
             cudaStream_t stream = nullptr);
 
-} // namespace nanovllm::kernels
+} // namespace nanovllm::kernels::cuda

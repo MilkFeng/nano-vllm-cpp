@@ -9,7 +9,7 @@
 
 #include "common/cuda_utils.hh"
 #include "core/forward_context.hh"
-#include "kernels/inference.hh"
+#include "kernels/cuda/inference.hh"
 #include "models/qwen3.hh"
 
 namespace nanovllm {
@@ -240,8 +240,8 @@ std::vector<std::int32_t> ModelRunner::run(
   auto logits = model_->compute_logits(hidden.view().as_const(), context);
 
   auto output = Tensor::empty({seqs.size()}, DataType::Int32, model_->device());
-  kernels::sample(logits.view().as_const(), temperature.view().as_const(),
-                  output.view(), params_.seed, sample_step_++, stream_);
+  kernels::cuda::sample(logits.view().as_const(), temperature.view().as_const(),
+                        output.view(), params_.seed, sample_step_++, stream_);
 
   std::vector<std::int32_t> result(seqs.size());
   check_cuda(cudaMemcpyAsync(result.data(), output.data(), output.size_bytes(),

@@ -120,3 +120,21 @@ set_target_properties(
   PROPERTIES
   OUTPUT_NAME nano-vllm-cpp
 )
+
+
+# ========== small MoE reference and CUDA checks ==========
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(nano-vllm-cpp-moe-test tests/test_moe.cc)
+  target_include_directories(nano-vllm-cpp-moe-test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_compile_options(nano-vllm-cpp-moe-test PRIVATE -Wall -Wextra -Wpedantic)
+  target_link_libraries(nano-vllm-cpp-moe-test PRIVATE
+    nano-vllm-cpp::nano-vllm-cpp CUDA::cudart CUDA::cublas)
+
+  add_test(NAME moe_cpu COMMAND nano-vllm-cpp-moe-test --cpu)
+  add_test(NAME moe_cuda COMMAND nano-vllm-cpp-moe-test --gpu)
+  set_tests_properties(moe_cpu PROPERTIES LABELS "cpu;moe")
+  set_tests_properties(moe_cuda PROPERTIES LABELS "cuda;moe" SKIP_RETURN_CODE 77)
+endif()

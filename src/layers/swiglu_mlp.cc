@@ -1,6 +1,6 @@
 #include "layers/swiglu_mlp.hh"
 
-#include "kernels/kernels.hh"
+#include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 
@@ -22,8 +22,8 @@ Tensor SwiGLUMLP::forward(ConstTensorView hidden_states,
   auto up = up_proj_.forward(hidden_states, stream);
   auto activated = Tensor::empty({hidden_states.shape()[0], intermediate_size_},
                                  hidden_states.dtype(), hidden_states.device());
-  kernels::silu_and_mul(gate.view().as_const(), up.view().as_const(),
-                        activated.view(), stream);
+  kernels::cuda::silu_and_mul(gate.view().as_const(), up.view().as_const(),
+                              activated.view(), stream);
   return down_proj_.forward(activated.view().as_const(), stream);
 }
 

@@ -3,10 +3,10 @@
 #include <cstdint>
 
 #include "common/cuda_utils.hh"
-#include "kernels/common.cuh"
-#include "kernels/inference.hh"
+#include "kernels/cuda/common.cuh"
+#include "kernels/cuda/inference.hh"
 
-namespace nanovllm::kernels {
+namespace nanovllm::kernels::cuda {
 namespace {
 
 constexpr unsigned kThreads = 256;
@@ -64,4 +64,4 @@ void gather_last_hidden(ConstTensorView hidden, ConstTensorView cu_seqlens_q,
   check_cuda(cudaGetLastError(), "gather_last_hidden launch");
 }
 
-} // namespace nanovllm::kernels
+} // namespace nanovllm::kernels::cuda

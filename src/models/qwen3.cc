@@ -6,8 +6,8 @@
 #include <stdexcept>
 #include <utility>
 
-#include "kernels/attention.hh"
-#include "kernels/inference.hh"
+#include "kernels/cuda/attention.hh"
+#include "kernels/cuda/inference.hh"
 
 namespace nanovllm {
 namespace {
@@ -117,9 +117,9 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
                      : key_heads;
   rotary_emb_.forward(positions, query.view(), key.view(), stream);
   if (have_cache) {
-    kernels::store_kvcache(key.view().as_const(), value.view().as_const(),
-                           key_cache_, value_cache_, context.slot_mapping,
-                           stream);
+    kernels::cuda::store_kvcache(key.view().as_const(), value.view().as_const(),
+                                 key_cache_, value_cache_, context.slot_mapping,
+                                 stream);
   }
   auto attention_output = Tensor::empty({tokens, num_heads_, head_dim_},
                                         hidden_states.dtype(), device);
@@ -128,15 +128,15 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
         paged_prefill ? key_cache() : key.view().as_const();
     const auto attention_value =
         paged_prefill ? value_cache() : value.view().as_const();
-    kernels::prefill_attention(query.view().as_const(), attention_key,
-                               attention_value, context.cu_seqlens_q,
-                               context.cu_seqlens_k, context.block_tables,
-                               attention_output.view(), scaling_, stream);
+    kernels::cuda::prefill_attention(query.view().as_const(), attention_key,
+                                     attention_value, context.cu_seqlens_q,
+                                     context.cu_seqlens_k, context.block_tables,
+                                     attention_output.view(), scaling_, stream);
   } else {
-    kernels::paged_attention_decode(query.view().as_const(), key_cache(),
-                                    value_cache(), context.context_lens,
-                                    context.block_tables,
-                                    attention_output.view(), scaling_, stream);
+    kernels::cuda::paged_attention_decode(
+        query.view().as_const(), key_cache(), value_cache(),
+        context.context_lens, context.block_tables, attention_output.view(),
+        scaling_, stream);
   }
   const auto flattened = attention_output.reshape(std::array{tokens, q_size_});
   return o_proj_.forward(flattened.view(), stream);
@@ -325,8 +325,8 @@ Tensor Qwen3ForCausalLM::compute_logits(ConstTensorView hidden_states,
     auto last_hidden =
         Tensor::empty({batch, config_.hidden_size}, hidden_states.dtype(),
                       hidden_states.device());
-    kernels::gather_last_hidden(hidden_states, context.cu_seqlens_q,
-                                last_hidden.view(), context.stream);
+    kernels::cuda::gather_last_hidden(hidden_states, context.cu_seqlens_q,
+                                      last_hidden.view(), context.stream);
     return lm_head_.forward(last_hidden.view().as_const(), context.stream);
   }
   return lm_head_.forward(hidden_states, context.stream);

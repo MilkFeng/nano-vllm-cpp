@@ -4,7 +4,7 @@
 #include <cmath>
 
 #include "common/cuda_utils.hh"
-#include "kernels/kernels.hh"
+#include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 
@@ -23,7 +23,7 @@ RotaryEmbedding::RotaryEmbedding(std::size_t max_positions,
   check_cuda(cudaGetDevice(&previous_device), "cudaGetDevice");
   check_cuda(cudaSetDevice(device.index), "cudaSetDevice");
   try {
-    kernels::build_rope_cache(rope_cache_.view(), theta);
+    kernels::cuda::build_rope_cache(rope_cache_.view(), theta);
     // Publish fully initialized cache data to forwards on any CUDA stream.
     // This synchronization occurs once during construction, never in forward.
     check_cuda(cudaStreamSynchronize(nullptr), "initialize RoPE cache");
@@ -36,8 +36,8 @@ RotaryEmbedding::RotaryEmbedding(std::size_t max_positions,
 
 void RotaryEmbedding::forward(ConstTensorView positions, TensorView query,
                               TensorView key, cudaStream_t stream) const {
-  kernels::apply_rotary_embedding(positions, query, key, rope_cache_.view(),
-                                  stream);
+  kernels::cuda::apply_rotary_embedding(positions, query, key,
+                                        rope_cache_.view(), stream);
 }
 
 } // namespace nanovllm

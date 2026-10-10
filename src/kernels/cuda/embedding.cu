@@ -2,10 +2,10 @@
 #include <cstdint>
 
 #include "common/cuda_utils.hh"
-#include "kernels/common.cuh"
-#include "kernels/kernels.hh"
+#include "kernels/cuda/common.cuh"
+#include "kernels/cuda/kernels.hh"
 
-namespace nanovllm::kernels {
+namespace nanovllm::kernels::cuda {
 namespace {
 
 constexpr unsigned kThreads = 256;
@@ -56,4 +56,4 @@ void embedding(ConstTensorView input_ids, ConstTensorView weight,
   check_cuda(cudaGetLastError(), "embedding kernel launch");
 }
 
-} // namespace nanovllm::kernels
+} // namespace nanovllm::kernels::cuda

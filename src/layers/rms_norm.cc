@@ -4,7 +4,7 @@
 #include <cmath>
 #include <vector>
 
-#include "kernels/kernels.hh"
+#include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 
@@ -26,7 +26,7 @@ Tensor RMSNorm::forward(ConstTensorView input, cudaStream_t stream) const {
   assert(input.device() == weight.device() && same_dtype(input, weight));
   auto output = Tensor::empty({input.shape().begin(), input.shape().end()},
                               input.dtype(), input.device());
-  kernels::rms_norm(input, weight, output.view(), epsilon_, stream);
+  kernels::cuda::rms_norm(input, weight, output.view(), epsilon_, stream);
   return output;
 }
 
@@ -44,9 +44,9 @@ RMSNormOutput RMSNorm::forward(ConstTensorView input, ConstTensorView residual,
                                        input.shape().end());
   RMSNormOutput result{Tensor::empty(shape, input.dtype(), input.device()),
                        Tensor::empty(shape, input.dtype(), input.device())};
-  kernels::fused_add_rms_norm(input, residual, weight,
-                              result.hidden_states.view(),
-                              result.residual.view(), epsilon_, stream);
+  kernels::cuda::fused_add_rms_norm(input, residual, weight,
+                                    result.hidden_states.view(),
+                                    result.residual.view(), epsilon_, stream);
   return result;
 }
 

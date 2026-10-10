@@ -2,9 +2,11 @@
 
 #include <cuda_runtime_api.h>
 
+#include <cstddef>
+
 #include "core/tensor_view.hh"
 
-namespace nanovllm::kernels {
+namespace nanovllm::kernels::cuda {
 
 // All operations enqueue work on stream without allocating or synchronizing.
 // All tensors are contiguous on CUDA device 0, which the caller selects.
@@ -49,4 +51,19 @@ void apply_rotary_embedding(ConstTensorView positions, TensorView query,
                             TensorView key, ConstTensorView cos_sin_cache,
                             cudaStream_t stream = nullptr);
 
-} // namespace nanovllm::kernels
+inline constexpr std::size_t kMaxMoEExperts = 1024;
+
+// Single-token routing. Finite Float32 logits: [1,E], 1 <= E <= 1024.
+// expert_ids: Int32 [1,K]; expert_weights: Float32 [1,K], 1 <= K <= E.
+// Computes softmax over all experts, picks top-k by score (lowest ID on ties),
+// and renormalizes selected probabilities to sum to 1. All views are disjoint.
+void moe_route(ConstTensorView logits, TensorView expert_ids,
+               TensorView expert_weights, cudaStream_t stream = nullptr);
+
+// expert_outputs: Float32 [K,H], rows in router rank order, still unweighted.
+// expert_weights: Float32 [1,K]; output: Float32 [1,H]. K,H > 0.
+// Applies router weights exactly once. All views are disjoint.
+void moe_combine(ConstTensorView expert_outputs, ConstTensorView expert_weights,
+                 TensorView output, cudaStream_t stream = nullptr);
+
+} // namespace nanovllm::kernels::cuda

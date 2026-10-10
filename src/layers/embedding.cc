@@ -2,7 +2,7 @@
 
 #include <cassert>
 
-#include "kernels/kernels.hh"
+#include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 
@@ -23,7 +23,7 @@ Tensor Embedding::forward(ConstTensorView input_ids,
   assert(input_ids.device() == weight.device());
   auto output = Tensor::empty({input_ids.shape()[0], hidden_size_},
                               weight.dtype(), weight.device());
-  kernels::embedding(input_ids, weight, output.view(), stream);
+  kernels::cuda::embedding(input_ids, weight, output.view(), stream);
   return output;
 }
 

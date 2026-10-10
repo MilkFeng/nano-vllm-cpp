@@ -2,10 +2,10 @@
 #include <cstdint>
 
 #include "common/cuda_utils.hh"
-#include "kernels/common.cuh"
-#include "kernels/kernels.hh"
+#include "kernels/cuda/common.cuh"
+#include "kernels/cuda/kernels.hh"
 
-namespace nanovllm::kernels {
+namespace nanovllm::kernels::cuda {
 namespace {
 
 constexpr unsigned kThreads = 256;
@@ -127,4 +127,4 @@ void apply_rotary_embedding(ConstTensorView positions, TensorView query,
   check_cuda(cudaGetLastError(), "apply_rotary_embedding launch");
 }
 
-} // namespace nanovllm::kernels
+} // namespace nanovllm::kernels::cuda

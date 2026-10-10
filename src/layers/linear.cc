@@ -4,7 +4,7 @@
 #include <optional>
 #include <utility>
 
-#include "kernels/inference.hh"
+#include "kernels/cuda/inference.hh"
 
 namespace nanovllm {
 
@@ -33,7 +33,7 @@ Tensor Linear::forward(ConstTensorView input, cudaStream_t stream) const {
   if (bias_) {
     bias = std::as_const(*bias_).view();
   }
-  kernels::linear(input, weight, output.view(), bias, stream);
+  kernels::cuda::linear(input, weight, output.view(), bias, stream);
   return output;
 }
 

@@ -61,7 +61,7 @@ auto outputs = engine.generate(prompts, {.temperature = 0.0f});
 
 ## 代码组织
 
-`src/layers/` 放通用的 `Linear`、`Embedding`、`RMSNorm`、`SwiGLUMLP`、`LMHead` 和 `RotaryEmbedding`。这些层接收具体维度，不依赖 `ModelConfig`；CUDA 算子保留在 `src/kernels/`。
+`src/layers/` 放通用的 `Linear`、`Embedding`、`RMSNorm`、`SwiGLUMLP`、`LMHead` 和 `RotaryEmbedding`。这些层接收具体维度，不依赖 `ModelConfig`；CUDA 算子和头文件放在 `src/kernels/cuda/`；CPU 参考计算放在 `src/kernels/cpu/`。
 
 `src/models/qwen3.hh/.cc` 负责 Qwen3 Attention、DecoderLayer 和模型组装。`compute_logits()` 在 prefill 时选出每条序列最后一个 token 的 hidden state，再交给只做词表投影的 `LMHead`。`src/core/forward_context.hh` 保存由 ModelRunner 准备的执行元数据，包括 KV block table 和 CUDA stream。
 
@@ -83,10 +83,33 @@ Token IDs → Embedding
 
 FP16/BF16 的舍入会受 GEMM 的 batch 大小影响；候选分数接近时，生成 token 可能随批量配置变化，也不保证与 Transformers 逐 token 相同。当前融合 residual 和 RMSNorm 的计算顺序沿用 nano-vllm；详细对比结果见测试文档。
 
+## 学习用 MoE
+
+`src/layers/moe.hh/.cc` 实现一个独立的 routed MoE 层，先支持单 token、FP32，
+维度由 `MoEConfig` 指定。例如 `H=128, I=64, E=16, K=2`：
+
+```text
+x[1,H] → Router Linear → softmax → top-k → 选中概率重新归一化
+       → K 个 SwiGLUMLP → 按路由权重求和 → y[1,H]
+```
+
+`MoE::forward()` 返回最终输出，以及 Router logits、专家编号、路由权重和
+未加权的专家输出。专家输出的行顺序与 Router 的排名一致；路由权重只在
+combine 时应用一次。权重可通过 `Module::named_parameters()` 初始化；测试
+展示了完整的权重初始化和运行方式。
+
+这一版专家权重全部放在 GPU，forward 会同步传入的 stream，逐个调用选中的
+专家。支持 1..1024 个专家，`1 <= top_k <= E`。CPU 上可以构造权重，实际 CPU
+计算调用 `kernels::cpu::moe_reference()`。共享专家、量化、专家缓存和 CPU/GPU
+分担作为后续步骤；当前文本生成使用原有 Qwen3 模型。
+
+建议阅读顺序：`src/kernels/cpu/moe.cc` 的参考公式 →
+`src/kernels/cuda/moe.cu` 的路由与合并 → `src/layers/moe.cc` 的执行组织。
+
 ## 验证
 
 ```bash
 ctest --test-dir build --output-on-failure
 ```
 
-算子覆盖、CUDA 内存检查和真实模型对比方法见 [tests/README.md](tests/README.md)。
+小尺寸 MoE 的 CPU/GPU 对照和 CUDA 内存检查方法见 [tests/README.md](tests/README.md)。

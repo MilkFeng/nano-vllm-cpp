@@ -10,7 +10,7 @@
 
 #include "core/tensor_view.hh"
 
-namespace nanovllm::kernels::detail {
+namespace nanovllm::kernels::cuda::detail {
 
 template <bool IsConst>
 void assert_tensor(const BasicTensorView<IsConst>& tensor) {
@@ -46,4 +46,4 @@ __device__ inline T from_float(float value) {
   return static_cast<T>(value);
 }
 
-} // namespace nanovllm::kernels::detail
+} // namespace nanovllm::kernels::cuda::detail

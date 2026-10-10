@@ -4,7 +4,7 @@
 
 #include "core/tensor_view.hh"
 
-namespace nanovllm::kernels {
+namespace nanovllm::kernels::cuda {
 
 // These baseline kernels enqueue work without allocation or synchronization.
 // All tensors are contiguous on CUDA device 0, which the caller selects.
@@ -46,4 +46,4 @@ void paged_attention_decode(ConstTensorView query, ConstTensorView key_cache,
                             ConstTensorView block_tables, TensorView output,
                             float scale, cudaStream_t stream = nullptr);
 
-} // namespace nanovllm::kernels
+} // namespace nanovllm::kernels::cuda

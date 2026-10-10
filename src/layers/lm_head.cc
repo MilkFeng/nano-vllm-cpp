@@ -3,7 +3,7 @@
 #include <cassert>
 #include <optional>
 
-#include "kernels/inference.hh"
+#include "kernels/cuda/inference.hh"
 
 namespace nanovllm {
 
@@ -46,7 +46,8 @@ Tensor LMHead::forward(ConstTensorView hidden_states,
          && same_dtype(hidden_states, weight));
   auto logits = Tensor::empty({hidden_states.shape()[0], vocab_size_},
                               hidden_states.dtype(), hidden_states.device());
-  kernels::linear(hidden_states, weight, logits.view(), std::nullopt, stream);
+  kernels::cuda::linear(hidden_states, weight, logits.view(), std::nullopt,
+                        stream);
   return logits;
 }
 

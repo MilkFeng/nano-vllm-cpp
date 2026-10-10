@@ -6,10 +6,10 @@
 #include <cstdint>
 
 #include "common/cuda_utils.hh"
-#include "kernels/attention.hh"
-#include "kernels/common.cuh"
+#include "kernels/cuda/attention.hh"
+#include "kernels/cuda/common.cuh"
 
-namespace nanovllm::kernels {
+namespace nanovllm::kernels::cuda {
 namespace {
 
 constexpr unsigned kThreads = 256;
@@ -348,4 +348,4 @@ void paged_attention_decode(ConstTensorView query, ConstTensorView key_cache,
   check_cuda(cudaGetLastError(), "paged_attention_decode launch");
 }
 
-} // namespace nanovllm::kernels
+} // namespace nanovllm::kernels::cuda

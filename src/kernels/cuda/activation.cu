@@ -1,10 +1,10 @@
 #include <algorithm>
 
 #include "common/cuda_utils.hh"
-#include "kernels/common.cuh"
-#include "kernels/kernels.hh"
+#include "kernels/cuda/common.cuh"
+#include "kernels/cuda/kernels.hh"
 
-namespace nanovllm::kernels {
+namespace nanovllm::kernels::cuda {
 namespace {
 
 constexpr unsigned kThreads = 256;
@@ -48,4 +48,4 @@ void silu_and_mul(ConstTensorView gate, ConstTensorView up, TensorView output,
   check_cuda(cudaGetLastError(), "silu_and_mul kernel launch");
 }
 
-} // namespace nanovllm::kernels
+} // namespace nanovllm::kernels::cuda
