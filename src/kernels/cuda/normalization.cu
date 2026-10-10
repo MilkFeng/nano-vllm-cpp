@@ -3,6 +3,7 @@
 #include "common/cuda_utils.hh"
 #include "kernels/cuda/common.cuh"
 #include "kernels/cuda/kernels.hh"
+#include "kernels/cuda/reduce.cuh"
 
 namespace nanovllm::kernels::cuda {
 namespace {
@@ -26,7 +27,6 @@ __global__ void normalization_kernel(const T* input, const T* residual,
                                      const T* weight, T* output,
                                      T* residual_output, std::size_t rows,
                                      std::size_t width, float epsilon) {
-  __shared__ float sums[kThreads];
   for (std::size_t row = blockIdx.x; row < rows; row += gridDim.x) {
     const auto offset = row * width;
     float sum = 0.0f;
@@ -37,13 +37,8 @@ __global__ void normalization_kernel(const T* input, const T* residual,
       }
       sum += value * value;
     }
-    sums[threadIdx.x] = sum;
-    __syncthreads();
-    for (unsigned stride = kThreads / 2; stride > 0; stride /= 2) {
-      if (threadIdx.x < stride) sums[threadIdx.x] += sums[threadIdx.x + stride];
-      __syncthreads();
-    }
-    const float inv_rms = rsqrtf(sums[0] / static_cast<float>(width) + epsilon);
+    sum = detail::block_sum_reduce<float, kThreads>(sum);
+    const float inv_rms = rsqrtf(sum / static_cast<float>(width) + epsilon);
     for (std::size_t col = threadIdx.x; col < width; col += blockDim.x) {
       float value = detail::to_float(input[offset + col]);
       if constexpr (Fused) {
@@ -55,8 +50,6 @@ __global__ void normalization_kernel(const T* input, const T* residual,
       output[offset + col] = detail::from_float<T>(
           detail::to_float(normalized) * detail::to_float(weight[col]));
     }
-    // Keep a fast warp from overwriting sums for the next grid-stride row.
-    __syncthreads();
   }
 }
 

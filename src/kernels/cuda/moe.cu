@@ -7,53 +7,33 @@
 #include "common/cuda_utils.hh"
 #include "kernels/cuda/common.cuh"
 #include "kernels/cuda/kernels.hh"
+#include "kernels/cuda/reduce.cuh"
 
 namespace nanovllm::kernels::cuda {
 namespace {
 
 constexpr unsigned kThreads = 256;
 
-// One block handles one token. Softmax uses a parallel reduction; thread 0
-// then selects top-k by scanning scores. This favors readability over speed.
 __global__ void route_kernel(const float* logits, std::int32_t* ids,
                              float* weights, std::size_t experts,
                              std::size_t top_k) {
   extern __shared__ float storage[];
   float* scores = storage;
   float* probabilities = storage + experts;
-  __shared__ float reduction[kThreads];
 
   float maximum = -CUDART_INF_F;
   for (std::size_t e = threadIdx.x; e < experts; e += blockDim.x) {
     scores[e] = logits[e];
     maximum = fmaxf(maximum, logits[e]);
   }
-  reduction[threadIdx.x] = maximum;
-  __syncthreads();
-  for (unsigned stride = kThreads / 2; stride > 0; stride /= 2) {
-    if (threadIdx.x < stride) {
-      reduction[threadIdx.x] =
-          fmaxf(reduction[threadIdx.x], reduction[threadIdx.x + stride]);
-    }
-    __syncthreads();
-  }
-  maximum = reduction[0];
-  __syncthreads(); // All threads read the max before reusing reduction.
+  maximum = detail::block_max_reduce<float, kThreads>(maximum);
 
   float sum = 0.0f;
   for (std::size_t e = threadIdx.x; e < experts; e += blockDim.x) {
     probabilities[e] = expf(scores[e] - maximum);
     sum += probabilities[e];
   }
-  reduction[threadIdx.x] = sum;
-  __syncthreads();
-  for (unsigned stride = kThreads / 2; stride > 0; stride /= 2) {
-    if (threadIdx.x < stride) {
-      reduction[threadIdx.x] += reduction[threadIdx.x + stride];
-    }
-    __syncthreads();
-  }
-  sum = reduction[0];
+  sum = detail::block_sum_reduce<float, kThreads>(sum);
   for (std::size_t e = threadIdx.x; e < experts; e += blockDim.x) {
     probabilities[e] /= sum;
   }
@@ -64,11 +44,8 @@ __global__ void route_kernel(const float* logits, std::int32_t* ids,
     for (std::size_t rank = 0; rank < top_k; ++rank) {
       std::size_t best = 0;
       float best_score = -CUDART_INF_F;
-      // Keep the scan scalar for small expert counts, including E=1.
 #pragma unroll 1
       for (std::size_t e = 0; e < experts; ++e) {
-        // Strict comparison makes the lowest expert ID win a score tie.
-        // Select by logits: rounded softmax probabilities can introduce ties.
         if (scores[e] > best_score) {
           best = e;
           best_score = scores[e];

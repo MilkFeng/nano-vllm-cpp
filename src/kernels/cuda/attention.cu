@@ -8,6 +8,7 @@
 #include "common/cuda_utils.hh"
 #include "kernels/cuda/attention.hh"
 #include "kernels/cuda/common.cuh"
+#include "kernels/cuda/reduce.cuh"
 
 namespace nanovllm::kernels::cuda {
 namespace {
@@ -179,9 +180,7 @@ __global__ void attention_kernel(const T* query, const T* key, const T* value,
         if (d < shape.width)
           dot += q[part] * detail::to_float(key[kv_offset + d]);
       }
-      for (unsigned offset = kWarpSize / 2; offset > 0; offset /= 2) {
-        dot += __shfl_down_sync(kFullWarp, dot, offset);
-      }
+      dot = detail::warp_sum_reduce<float, false>(dot);
       float alpha = 0.0f, beta = 0.0f;
       if (lane == 0) {
         const float score = dot * scale;
