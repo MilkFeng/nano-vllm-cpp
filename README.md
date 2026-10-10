@@ -61,7 +61,7 @@ auto outputs = engine.generate(prompts, {.temperature = 0.0f});
 
 ## 代码组织
 
-`src/layers/` 放通用的 `Linear`、`Embedding`、`RMSNorm`、`SwiGLUMLP`、`LMHead` 和 `RotaryEmbedding`。这些层接收具体维度，不依赖 `ModelConfig`；CUDA 算子和头文件放在 `src/kernels/cuda/`；CPU 参考计算放在 `src/kernels/cpu/`。
+`src/layers/` 放通用的 `Linear`、`Embedding`、`RMSNorm`、`SwiGLUMLP`、`LMHead` 和 `RotaryEmbedding`。这些层接收具体维度，不依赖 `ModelConfig`；CUDA 算子和头文件放在 `src/kernels/cuda/`；CPU 算子和参考计算放在 `src/kernels/cpu/`。
 
 `src/models/qwen3.hh/.cc` 负责 Qwen3 Attention、DecoderLayer 和模型组装。`compute_logits()` 在 prefill 时选出每条序列最后一个 token 的 hidden state，再交给只做词表投影的 `LMHead`。`src/core/forward_context.hh` 保存由 ModelRunner 准备的执行元数据，包括 KV block table 和 CUDA stream。
 
@@ -98,13 +98,46 @@ x[1,H] → Router Linear → softmax → top-k → 选中概率重新归一化
 combine 时应用一次。权重可通过 `Module::named_parameters()` 初始化；测试
 展示了完整的权重初始化和运行方式。
 
-这一版专家权重全部放在 GPU，forward 会同步传入的 stream，逐个调用选中的
-专家。支持 1..1024 个专家，`1 <= top_k <= E`。CPU 上可以构造权重，实际 CPU
-计算调用 `kernels::cpu::moe_reference()`。共享专家、量化、专家缓存和 CPU/GPU
-分担作为后续步骤；当前文本生成使用原有 Qwen3 模型。
+全部专家权重保存在 RAM 中的 `ExpertStore`，模型参数名仍为
+`experts.N.gate_proj.weight` 等。GPU 的 `ExpertCache` 只分配固定名单对应的
+专家槽位，缓存副本不注册为额外模型参数。Router 在 GPU 上计算，命中的专家
+在 GPU 槽位上执行，未命中的专家在 CPU 上执行；CPU 输出复制回 GPU 后统一
+combine。有未命中时，每次 forward 只下载一次输入向量。
 
-建议阅读顺序：`src/kernels/cpu/moe.cc` 的参考公式 →
-`src/kernels/cuda/moe.cu` 的路由与合并 → `src/layers/moe.cc` 的执行组织。
+```text
+Router → expert_ids
+       → ExpertExecutor
+           ├── ExpertCache 命中 → GPU SwiGLUMLP
+           └── 未命中 → ExpertStore → CPU expert_forward → 上传输出
+       → CUDA combine → y
+```
+
+固定驻留名单通过第三个构造参数传入。例如缓存 4 个专家：
+
+```cpp
+MoE moe({128, 64, 16, 2}, Device::cuda(0),
+        std::vector<std::int32_t>{0, 2, 4, 6});
+```
+
+初始化 `named_parameters()` 返回的权重后，调用
+`moe.populate_expert_cache(stream)`，再调用 `moe.forward(x, stream)`。
+专家参数在 CPU，Router 参数在所选设备上；复制参数时按目标设备选择
+`memcpy` 或 CUDA 复制。RAM 权重修改后需要再次填充缓存。
+
+省略驻留名单（`std::nullopt`）缓存全部专家；传入显式空向量
+`std::vector<std::int32_t>{}` 分配零个 GPU 专家槽位，全部专家在 CPU 执行。
+CPU 构造只创建参考权重。`MoEOutput` 的 `gpu_experts`、`cpu_experts` 记录
+本次选中专家的执行数量；`expert_cache().num_slots()` 和 `size_bytes()`
+可以检查缓存容量和实际 GPU 专家权重字节数。
+
+当前支持单 token、FP32、1..1024 个专家、`1 <= top_k <= E`。缓存名单固定，
+populate/forward 同步传入的 stream，调用需串行。量化、共享专家、动态换入
+换出和 CPU/GPU 并行作为后续步骤；当前文本生成使用原有 Qwen3 模型。
+
+三个辅助类与 `MoE` 一起放在 `src/layers/moe.hh/.cc`。建议在 `.cc` 中按
+`ExpertStore` 的 RAM 权重 → `ExpertCache` 的固定 GPU 槽位 →
+`ExpertExecutor` 的分派 → `MoE::forward` 的路由与合并阅读。CPU 参考实现
+继续独立使用 double 点积累加，运行时 CPU 专家使用 FP32 累加。
 
 ## 验证
 

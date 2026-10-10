@@ -6,14 +6,9 @@
 #include <vector>
 
 #include "core/tensor_view.hh"
+#include "kernels/cpu/expert.hh"
 
 namespace nanovllm::kernels::cpu {
-
-struct ExpertWeights {
-  ConstTensorView gate; // Float32 [I,H].
-  ConstTensorView up;   // Float32 [I,H].
-  ConstTensorView down; // Float32 [H,I].
-};
 
 struct MoEReferenceOutput {
   std::vector<float> hidden_states;

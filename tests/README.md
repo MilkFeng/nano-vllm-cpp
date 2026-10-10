@@ -34,3 +34,23 @@ compute-sanitizer --tool racecheck --error-exitcode 1 \
 
 这些测试使用固定的随机权重或手工构造的权重，验证一个独立 MoE 层的数学
 流程；完整模型的文本生成仍走现有 Qwen3 链路。
+
+## 固定专家缓存与 CPU/GPU 分担
+
+`expert_cpu` 不需要 GPU，检查实际 FP32 CPU 专家计算与独立 double 累加参考
+实现的误差，以及 RAM 权重存放、空缓存和无效专家名单。
+`moe_offload_cuda` 使用非默认 nonblocking stream 验证全 GPU、全 CPU、
+4 槽位混合执行、4 槽位全未命中、4 槽位全命中。两组输入分别选择
+`[7,2]` 和 `[9,4]`；改变路由后再次执行原输入，检查输出行和临时缓冲区。
+
+测试检查缓存只分配指定数量的 GPU 专家，全部真实专家参数仍在 RAM，缓存
+副本没有额外注册为模型参数。还检查填充完成前禁止使用缓存、GPU 副本独立
+于 RAM 参数，以及显式重新填充后的结果。输出记录每次的专家编号、CPU/GPU
+执行计数、槽位数量、GPU 权重字节数和最终输出误差。
+
+```bash
+./build/nano-vllm-cpp-moe-offload-test --cpu
+./build/nano-vllm-cpp-moe-offload-test --gpu
+compute-sanitizer --tool memcheck --error-exitcode 1 \
+  ./build/nano-vllm-cpp-moe-offload-test --gpu
+```

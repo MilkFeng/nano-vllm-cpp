@@ -137,4 +137,16 @@ if(BUILD_TESTING)
   add_test(NAME moe_cuda COMMAND nano-vllm-cpp-moe-test --gpu)
   set_tests_properties(moe_cpu PROPERTIES LABELS "cpu;moe")
   set_tests_properties(moe_cuda PROPERTIES LABELS "cuda;moe" SKIP_RETURN_CODE 77)
+
+  add_executable(nano-vllm-cpp-moe-offload-test tests/test_moe_offload.cc)
+  target_include_directories(nano-vllm-cpp-moe-offload-test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_compile_options(nano-vllm-cpp-moe-offload-test PRIVATE -Wall -Wextra -Wpedantic)
+  target_link_libraries(nano-vllm-cpp-moe-offload-test PRIVATE
+    nano-vllm-cpp::nano-vllm-cpp CUDA::cudart CUDA::cublas)
+
+  add_test(NAME expert_cpu COMMAND nano-vllm-cpp-moe-offload-test --cpu)
+  add_test(NAME moe_offload_cuda COMMAND nano-vllm-cpp-moe-offload-test --gpu)
+  set_tests_properties(expert_cpu PROPERTIES LABELS "cpu;moe;offload")
+  set_tests_properties(moe_offload_cuda PROPERTIES LABELS "cuda;moe;offload" SKIP_RETURN_CODE 77)
 endif()

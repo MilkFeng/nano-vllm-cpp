@@ -270,13 +270,20 @@ void check_gpu_moe(const MoE& cpu, const Tensor& input, cudaStream_t stream,
   for (const auto& [name, parameter] : cpu.named_parameters()) {
     const auto source = parameter->view();
     auto destination = gpu.parameter(name).view();
-    check_cuda(
-        cudaMemcpyAsync(destination.data(), source.data(), source.size_bytes(),
-                        cudaMemcpyHostToDevice, stream),
-        "upload MoE parameter");
+    if (destination.device() == Device::cpu()) {
+      std::memcpy(destination.data(), source.data(), source.size_bytes());
+    } else {
+      check_cuda(
+          cudaMemcpyAsync(destination.data(), source.data(),
+                          source.size_bytes(), cudaMemcpyHostToDevice, stream),
+          "upload MoE parameter");
+    }
   }
+  gpu.populate_expert_cache(stream);
   const auto gpu_input = upload(input, stream);
   const auto actual = gpu.forward(gpu_input.view(), stream);
+  require(actual.gpu_experts == cpu.config().top_k && actual.cpu_experts == 0,
+          label + ": default cache should execute all selected experts on GPU");
   require(
       download<std::int32_t>(actual.expert_ids, stream) == expected.expert_ids,
       label + ": expert ID mismatch");
