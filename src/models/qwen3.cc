@@ -104,8 +104,7 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
     assert(is_index_vector(context.cu_seqlens_q, device));
     assert(is_index_vector(context.cu_seqlens_k, device));
     assert(context.cu_seqlens_q.shape()[0] > 0
-           && context.cu_seqlens_q.shape()[0]
-                  == context.cu_seqlens_k.shape()[0]);
+           && same_shape(context.cu_seqlens_q, context.cu_seqlens_k));
     assert(!paged_prefill || have_cache);
   } else {
     assert(have_cache && is_index_vector(context.context_lens, device));
@@ -157,17 +156,15 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
 
 void Qwen3Attention::set_kv_cache(TensorView key_cache,
                                   TensorView value_cache) {
-  [[maybe_unused]] const auto key_shape = key_cache.shape();
-  [[maybe_unused]] const auto parameter_view = q_proj_.weight().view();
   assert(key_cache.rank() == 4 && value_cache.rank() == 4);
-  assert(std::ranges::equal(key_shape, value_cache.shape()));
-  assert(key_shape[0] > 0 && key_shape[1] > 0 && key_shape[2] == num_kv_heads_
-         && key_shape[3] == head_dim_);
+  assert(same_shape(key_cache, value_cache));
+  assert(key_cache.shape()[0] > 0 && key_cache.shape()[1] > 0
+         && key_cache.shape()[2] == num_kv_heads_
+         && key_cache.shape()[3] == head_dim_);
   assert(key_cache.data() != value_cache.data());
-  assert(key_cache.dtype() == value_cache.dtype()
-         && key_cache.dtype() == parameter_view.dtype());
+  assert(same_dtype(key_cache, value_cache, q_proj_.weight().view()));
   assert(key_cache.device() == value_cache.device()
-         && key_cache.device() == parameter_view.device());
+         && key_cache.device() == q_proj_.weight().view().device());
   assert(key_cache.is_contiguous() && value_cache.is_contiguous());
 
   key_cache_ = std::move(key_cache);

@@ -16,8 +16,8 @@ void assert_norm(const ConstTensorView& input, const ConstTensorView& weight,
   detail::assert_tensor(output);
   assert(input.rank() >= 1 && input.rank() <= 3 && input.shape().back() > 0);
   assert(weight.rank() == 1 && weight.shape()[0] == input.shape().back());
-  assert(detail::same_shape(input, output));
-  assert(detail::same_dtype(input, weight, output));
+  assert(same_shape(input, output));
+  assert(same_dtype(input, weight, output));
   assert(std::isfinite(epsilon) && epsilon > 0.0f);
 }
 
@@ -89,8 +89,8 @@ void fused_add_rms_norm(ConstTensorView input, ConstTensorView residual,
   assert_norm(input, weight, output, epsilon);
   detail::assert_tensor(residual);
   detail::assert_tensor(residual_output);
-  assert(detail::same_shape(input, residual, residual_output));
-  assert(detail::same_dtype(input, residual, residual_output));
+  assert(same_shape(input, residual, residual_output));
+  assert(same_dtype(input, residual, residual_output));
   const auto width = input.shape().back();
   const auto rows = input.numel() / width;
   if (rows == 0) {

@@ -104,7 +104,7 @@ void apply_rotary_embedding(ConstTensorView positions, TensorView query,
   detail::assert_tensor(query);
   detail::assert_tensor(key);
   assert(positions.dtype() == DataType::Int32 && positions.rank() == 1);
-  assert(query.rank() == 3 && key.rank() == 3 && query.dtype() == key.dtype());
+  assert(query.rank() == 3 && key.rank() == 3 && same_dtype(query, key));
   assert(query.shape()[1] > 0 && key.shape()[1] > 0);
   assert(positions.shape()[0] == query.shape()[0]
          && query.shape()[0] == key.shape()[0]);

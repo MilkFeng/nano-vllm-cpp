@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <span>
 #include <type_traits>
@@ -55,5 +56,17 @@ extern template class BasicTensorView<true>;
 
 using TensorView = BasicTensorView<false>;
 using ConstTensorView = BasicTensorView<true>;
+
+template <bool FirstConst, bool... RestConst>
+[[nodiscard]] bool same_shape(const BasicTensorView<FirstConst>& first,
+                              const BasicTensorView<RestConst>&... rest) {
+  return (std::ranges::equal(first.shape(), rest.shape()) && ...);
+}
+
+template <bool FirstConst, bool... RestConst>
+[[nodiscard]] bool same_dtype(const BasicTensorView<FirstConst>& first,
+                              const BasicTensorView<RestConst>&... rest) {
+  return ((first.dtype() == rest.dtype()) && ...);
+}
 
 } // namespace nanovllm

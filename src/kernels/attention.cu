@@ -38,13 +38,13 @@ void assert_indices(const ConstTensorView& tensor, std::size_t rank) {
 void assert_output(const ConstTensorView& query, const TensorView& output,
                    float scale) {
   detail::assert_tensor(output);
-  assert(query.dtype() == output.dtype() && detail::same_shape(query, output));
+  assert(same_dtype(query, output) && same_shape(query, output));
   assert(std::isfinite(scale) && scale > 0);
 }
 
 void assert_gqa(const ConstTensorView& query, const ConstTensorView& key,
                 bool paged) {
-  assert(query.dtype() == key.dtype());
+  assert(same_dtype(query, key));
   const auto kv_heads = key.shape()[paged ? 2 : 1];
   const auto width = key.shape()[paged ? 3 : 2];
   assert(query.shape()[2] == width && query.shape()[1] % kv_heads == 0);
@@ -244,9 +244,9 @@ void store_kvcache(ConstTensorView key, ConstTensorView value,
   assert_heads(value);
   assert_cache(key_cache);
   assert_cache(value_cache);
-  assert(detail::same_dtype(key, value, key_cache, value_cache));
-  assert(detail::same_shape(key, value));
-  assert(detail::same_shape(key_cache, value_cache));
+  assert(same_dtype(key, value, key_cache, value_cache));
+  assert(same_shape(key, value));
+  assert(same_shape(key_cache, value_cache));
   assert(key.shape()[1] == key_cache.shape()[2]
          && key.shape()[2] == key_cache.shape()[3]);
   assert_indices(slot_mapping, 1);
@@ -283,12 +283,12 @@ void prefill_attention(ConstTensorView query, ConstTensorView key,
     assert_heads(key);
     assert_heads(value);
   }
-  assert(key.dtype() == value.dtype() && detail::same_shape(key, value));
+  assert(same_dtype(key, value) && same_shape(key, value));
   assert_gqa(query, key, paged);
   assert_indices(cu_seqlens_q, 1);
   assert_indices(cu_seqlens_k, 1);
   assert(cu_seqlens_q.shape()[0] >= 1);
-  assert(detail::same_shape(cu_seqlens_q, cu_seqlens_k));
+  assert(same_shape(cu_seqlens_q, cu_seqlens_k));
   const auto batch = cu_seqlens_q.shape()[0] - 1;
   assert(query.shape()[0] <= INT_MAX && (paged || key.shape()[0] <= INT_MAX));
   assert(query.shape()[0] == 0 || batch > 0);
@@ -332,8 +332,8 @@ void paged_attention_decode(ConstTensorView query, ConstTensorView key_cache,
   assert_output(query, output, scale);
   assert_cache(key_cache);
   assert_cache(value_cache);
-  assert(detail::same_shape(key_cache, value_cache));
-  assert(detail::same_dtype(gate, up, output));
+  assert(same_shape(key_cache, value_cache));
+  assert(same_dtype(query, key_cache, value_cache, output));
   assert_gqa(query, key_cache, true);
   assert_indices(context_lens, 1);
   assert_indices(block_tables, 2);

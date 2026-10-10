@@ -39,7 +39,7 @@ void gather_last_hidden(ConstTensorView hidden, ConstTensorView cu_seqlens_q,
   detail::assert_tensor(hidden);
   detail::assert_tensor(cu_seqlens_q);
   detail::assert_tensor(output);
-  assert(detail::same_dtype(hidden, output));
+  assert(same_dtype(hidden, output));
   assert(cu_seqlens_q.dtype() == DataType::Int32);
   assert(hidden.rank() == 2 && output.rank() == 2 && cu_seqlens_q.rank() == 1);
   const auto tokens = hidden.shape()[0], width = hidden.shape()[1];

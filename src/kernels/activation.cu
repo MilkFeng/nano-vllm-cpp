@@ -30,8 +30,8 @@ void silu_and_mul(ConstTensorView gate, ConstTensorView up, TensorView output,
   detail::assert_tensor(up);
   detail::assert_tensor(output);
   assert(gate.rank() == 2 && gate.shape()[1] > 0);
-  assert(detail::same_shape(gate, up, output));
-  assert(detail::same_dtype(gate, up, output));
+  assert(same_shape(gate, up, output));
+  assert(same_dtype(gate, up, output));
   const std::size_t count = output.numel();
   if (count == 0) {
     return;

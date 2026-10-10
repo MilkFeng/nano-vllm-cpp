@@ -43,7 +43,7 @@ Tensor LMHead::forward(ConstTensorView hidden_states,
   assert(hidden_states.rank() == 2 && hidden_states.shape()[1] == hidden_size_);
   assert(hidden_states.device().type == DeviceType::Cuda);
   assert(hidden_states.device() == weight.device()
-         && hidden_states.dtype() == weight.dtype());
+         && same_dtype(hidden_states, weight));
   auto logits = Tensor::empty({hidden_states.shape()[0], vocab_size_},
                               hidden_states.dtype(), hidden_states.device());
   kernels::linear(hidden_states, weight, logits.view(), std::nullopt, stream);
