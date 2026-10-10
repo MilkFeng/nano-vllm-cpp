@@ -11,7 +11,7 @@
 #include <string>
 #include <utility>
 
-#include "model/tensor_view.hh"
+#include "core/tensor_view.hh"
 
 namespace nanovllm::kernels::detail {
 

@@ -1,4 +1,4 @@
-#include "model/tensor.hh"
+#include "core/tensor.hh"
 
 namespace nanovllm {
 

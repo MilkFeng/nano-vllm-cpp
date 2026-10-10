@@ -5,8 +5,8 @@
 #include <span>
 #include <vector>
 
-#include "model/storage.hh"
-#include "model/tensor_view.hh"
+#include "core/storage.hh"
+#include "core/tensor_view.hh"
 
 namespace nanovllm {
 

@@ -1,4 +1,4 @@
-#include "model/storage.hh"
+#include "core/storage.hh"
 
 #include <cuda_runtime_api.h>
 

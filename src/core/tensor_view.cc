@@ -1,4 +1,4 @@
-#include "model/tensor_view.hh"
+#include "core/tensor_view.hh"
 
 #include <stdexcept>
 #include <utility>

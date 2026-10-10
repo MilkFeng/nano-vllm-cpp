@@ -1,4 +1,4 @@
-#include "model/model.hh"
+#include "core/model.hh"
 
 #include <cuda_runtime_api.h>
 
@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "model/safetensors.hh"
+#include "core/safetensors.hh"
 
 namespace nanovllm {
 

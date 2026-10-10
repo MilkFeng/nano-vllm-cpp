@@ -1,4 +1,4 @@
-#include "model/tensor_layout.hh"
+#include "core/tensor_layout.hh"
 
 #include <limits>
 #include <stdexcept>

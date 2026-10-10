@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <optional>
 
-#include "model/tensor_view.hh"
+#include "core/tensor_view.hh"
 
 namespace nanovllm::kernels {
 

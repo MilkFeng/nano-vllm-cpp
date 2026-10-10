@@ -2,7 +2,7 @@
 
 #include <cstddef>
 
-#include "model/device.hh"
+#include "core/device.hh"
 
 namespace nanovllm {
 

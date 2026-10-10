@@ -2,7 +2,7 @@
 
 #include <cuda_runtime_api.h>
 
-#include "model/tensor_view.hh"
+#include "core/tensor_view.hh"
 
 namespace nanovllm::kernels {
 

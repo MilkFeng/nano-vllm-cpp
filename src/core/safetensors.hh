@@ -7,7 +7,7 @@
 #include <string_view>
 
 #include "common/macros.hh"
-#include "model/device.hh"
+#include "core/device.hh"
 
 namespace nanovllm {
 

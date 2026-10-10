@@ -4,7 +4,7 @@
 #include <map>
 #include <string>
 
-#include "model/module.hh"
+#include "core/module.hh"
 
 namespace nanovllm {
 

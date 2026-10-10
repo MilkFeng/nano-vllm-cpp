@@ -5,9 +5,9 @@
 #include <filesystem>
 #include <memory>
 
+#include "core/model_config.hh"
+#include "core/tensor.hh"
 #include "engine/sequence.hh"
-#include "model/model_config.hh"
-#include "model/tensor.hh"
 #include "nanovllm/nanovllm.hh"
 
 namespace nanovllm {

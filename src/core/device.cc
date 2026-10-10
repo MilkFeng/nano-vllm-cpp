@@ -1,4 +1,4 @@
-#include "model/device.hh"
+#include "core/device.hh"
 
 #include <cuda_runtime_api.h>
 

@@ -6,8 +6,8 @@
 #include <memory>
 #include <optional>
 
-#include "model/model.hh"
-#include "model/model_config.hh"
+#include "core/model.hh"
+#include "core/model_config.hh"
 
 namespace nanovllm {
 

@@ -1,4 +1,4 @@
-#include "model/module.hh"
+#include "core/module.hh"
 
 #include <stdexcept>
 

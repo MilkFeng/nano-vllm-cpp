@@ -4,7 +4,7 @@
 #include <span>
 #include <vector>
 
-#include "model/device.hh"
+#include "core/device.hh"
 
 namespace nanovllm {
 

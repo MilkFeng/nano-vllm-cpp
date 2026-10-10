@@ -4,7 +4,7 @@
 #include <span>
 #include <type_traits>
 
-#include "model/tensor_layout.hh"
+#include "core/tensor_layout.hh"
 
 namespace nanovllm {
 
