@@ -31,7 +31,7 @@ void require_heads(ConstTensorView tensor) {
       tensor.strides()[2] == 1 && tensor.strides()[1] == width
           && tensor.strides()[0] >= token_width,
       "attention requires contiguous heads and nonoverlapping token rows");
-  (void)detail::storage_span(tensor);
+  detail::storage_span(tensor);
 }
 
 void require_cache(ConstTensorView tensor) {
@@ -44,7 +44,7 @@ void require_cache(ConstTensorView tensor) {
                       && tensor.shape()[3] > 0 && tensor.shape()[3] <= 256,
                   "attention cache requires positive block size/heads and "
                   "head_dim in [1,256]");
-  (void)detail::storage_span(tensor);
+  detail::storage_span(tensor);
 }
 
 void require_indices(ConstTensorView tensor, ConstTensorView query,
@@ -56,7 +56,7 @@ void require_indices(ConstTensorView tensor, ConstTensorView query,
                   "expected rank");
   detail::require(tensor.device() == query.device(),
                   "attention tensors must share one CUDA device");
-  (void)detail::storage_span(tensor);
+  detail::storage_span(tensor);
 }
 
 void require_output(ConstTensorView query, ConstTensorView output,
@@ -101,10 +101,14 @@ __global__ void store_kernel(const T* key, const T* value, T* key_cache,
                              std::size_t num_slots) {
   for (std::size_t token = blockIdx.x; token < tokens; token += gridDim.x) {
     const auto slot = slots[token];
-    if (slot == -1) continue;
+    if (slot == -1) {
+      continue;
+    }
     const bool valid = slot >= 0 && static_cast<std::size_t>(slot) < num_slots;
     assert(valid && "KV cache slot is outside the cache");
-    if (!valid) continue;
+    if (!valid) {
+      continue;
+    }
     const auto cache_offset = static_cast<std::size_t>(slot) * token_width;
     for (std::size_t d = threadIdx.x; d < token_width; d += blockDim.x) {
       key_cache[cache_offset + d] = key[token * key_stride + d];
