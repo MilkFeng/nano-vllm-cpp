@@ -30,16 +30,17 @@ void silu_and_mul(ConstTensorView gate, ConstTensorView up, TensorView output,
   detail::assert_tensor(up);
   detail::assert_tensor(output);
   assert(gate.rank() == 2 && gate.shape()[1] > 0);
-  assert(detail::same_shape(gate, up) && detail::same_shape(gate, output));
-  assert(gate.dtype() == up.dtype() && gate.dtype() == output.dtype());
+  assert(detail::same_shape(gate, up, output));
+  assert(detail::same_dtype(gate, up, output));
   const std::size_t count = output.numel();
   if (count == 0) {
     return;
   }
 
+  const auto dtype = gate.dtype();
   const auto blocks = static_cast<unsigned>(
       std::min<std::size_t>((count + kThreads - 1) / kThreads, 65535));
-  detail::dispatch_float(gate.dtype(), [&]<typename T>() {
+  detail::dispatch_float(dtype, [&]<typename T>() {
     silu_and_mul_kernel<<<blocks, kThreads, 0, stream>>>(
         static_cast<const T*>(gate.data()), static_cast<const T*>(up.data()),
         static_cast<T*>(output.data()), count);

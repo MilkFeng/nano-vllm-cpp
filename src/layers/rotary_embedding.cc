@@ -14,7 +14,9 @@ RotaryEmbedding::RotaryEmbedding(std::size_t max_positions,
   assert(max_positions > 0 && head_dim > 0 && head_dim % 2 == 0);
   assert(std::isfinite(theta) && theta > 0);
   // CPU construction remains useful for checkpoint inspection and loading.
-  if (device.type != DeviceType::Cuda) return;
+  if (device.type != DeviceType::Cuda) {
+    return;
+  }
   rope_cache_ =
       Tensor::empty({max_positions, head_dim}, DataType::Float32, device);
   int previous_device = 0;

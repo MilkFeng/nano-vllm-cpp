@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cassert>
 #include <climits>
 #include <stdexcept>
 
@@ -70,7 +71,7 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
   detail::assert_tensor(input);
   detail::assert_tensor(weight);
   detail::assert_tensor(output);
-  assert(input.dtype() == weight.dtype() && input.dtype() == output.dtype());
+  assert(detail::same_dtype(input, weight, output));
   assert(input.rank() == 2 && weight.rank() == 2 && output.rank() == 2);
   const auto m = input.shape()[0], k = input.shape()[1], n = weight.shape()[0];
   assert(k > 0 && n > 0 && weight.shape()[1] == k);
@@ -78,7 +79,7 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
   assert(m <= INT_MAX && n <= INT_MAX && k <= INT_MAX);
   if (bias) {
     detail::assert_tensor(*bias);
-    assert(bias->dtype() == input.dtype());
+    assert(detail::same_dtype(bias, input));
     assert(bias->rank() == 1 && bias->shape()[0] == n);
   }
   if (m == 0) {

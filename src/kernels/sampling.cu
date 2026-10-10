@@ -109,8 +109,8 @@ void sample(ConstTensorView logits, ConstTensorView temperatures,
   detail::assert_tensor(logits);
   detail::assert_tensor(temperatures);
   detail::assert_tensor(output);
-  assert(temperatures.dtype() == DataType::Float32
-         && output.dtype() == DataType::Int32);
+  assert(temperatures.dtype() == DataType::Float32);
+  assert(output.dtype() == DataType::Int32);
   assert(logits.rank() == 2 && temperatures.rank() == 1 && output.rank() == 1);
   const auto batch = logits.shape()[0], vocab = logits.shape()[1];
   assert(vocab > 0 && vocab <= INT_MAX);
@@ -119,9 +119,10 @@ void sample(ConstTensorView logits, ConstTensorView temperatures,
     return;
   }
 
+  const auto dtype = logits.dtype();
   const auto blocks =
       static_cast<unsigned>(std::min<std::size_t>(batch, 65535));
-  detail::dispatch_float(logits.dtype(), [&]<typename T> {
+  detail::dispatch_float(dtype, [&]<typename T> {
     sample_kernel<<<blocks, kThreads, 0, stream>>>(
         static_cast<const T*>(logits.data()),
         static_cast<const float*>(temperatures.data()),

@@ -113,10 +113,12 @@ void apply_rotary_embedding(ConstTensorView positions, TensorView query,
   if (query.shape()[0] == 0) {
     return;
   }
+
+  const auto dtype = query.dtype();
   const auto pairs = query.numel() / 2 + key.numel() / 2;
   const auto blocks = static_cast<unsigned>(
       std::min<std::size_t>((pairs + kThreads - 1) / kThreads, 65535));
-  detail::dispatch_float(query.dtype(), [&]<typename T> {
+  detail::dispatch_float(dtype, [&]<typename T> {
     rotary_embedding_kernel<<<blocks, kThreads, 0, stream>>>(
         static_cast<const std::int32_t*>(positions.data()),
         static_cast<T*>(query.data()), static_cast<T*>(key.data()),

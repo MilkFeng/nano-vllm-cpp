@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 
 #include "common/cuda_utils.hh"
@@ -38,8 +39,8 @@ void gather_last_hidden(ConstTensorView hidden, ConstTensorView cu_seqlens_q,
   detail::assert_tensor(hidden);
   detail::assert_tensor(cu_seqlens_q);
   detail::assert_tensor(output);
-  assert(hidden.dtype() == output.dtype()
-         && cu_seqlens_q.dtype() == DataType::Int32);
+  assert(detail::same_dtype(hidden, output));
+  assert(cu_seqlens_q.dtype() == DataType::Int32);
   assert(hidden.rank() == 2 && output.rank() == 2 && cu_seqlens_q.rank() == 1);
   const auto tokens = hidden.shape()[0], width = hidden.shape()[1];
   const auto batch = output.shape()[0];
@@ -50,10 +51,11 @@ void gather_last_hidden(ConstTensorView hidden, ConstTensorView cu_seqlens_q,
     return;
   }
 
+  const auto dtype = hidden.dtype();
   const auto count = batch * width;
   const auto blocks = static_cast<unsigned>(
       std::min<std::size_t>((count + kThreads - 1) / kThreads, 65535));
-  detail::dispatch_float(hidden.dtype(), [&]<typename T> {
+  detail::dispatch_float(dtype, [&]<typename T> {
     gather_kernel<<<blocks, kThreads, 0, stream>>>(
         static_cast<const T*>(hidden.data()),
         static_cast<const std::int32_t*>(cu_seqlens_q.data()),

@@ -244,10 +244,9 @@ void store_kvcache(ConstTensorView key, ConstTensorView value,
   assert_heads(value);
   assert_cache(key_cache);
   assert_cache(value_cache);
-  assert(key.dtype() == value.dtype() && key.dtype() == key_cache.dtype()
-         && key.dtype() == value_cache.dtype());
-  assert(detail::same_shape(key, value)
-         && detail::same_shape(key_cache, value_cache));
+  assert(detail::same_dtype(key, value, key_cache, value_cache));
+  assert(detail::same_shape(key, value));
+  assert(detail::same_shape(key_cache, value_cache));
   assert(key.shape()[1] == key_cache.shape()[2]
          && key.shape()[2] == key_cache.shape()[3]);
   assert_indices(slot_mapping, 1);
@@ -256,9 +255,10 @@ void store_kvcache(ConstTensorView key, ConstTensorView value,
   if (tokens == 0) return;
   const auto token_width = key.shape()[1] * key.shape()[2];
   const auto slots = key_cache.shape()[0] * key_cache.shape()[1];
+  const auto dtype = key.dtype();
   const auto blocks =
       static_cast<unsigned>(std::min<std::size_t>(tokens, 65535));
-  detail::dispatch_float(key.dtype(), [&]<typename T>() {
+  detail::dispatch_float(dtype, [&]<typename T>() {
     store_kernel<<<blocks, kThreads, 0, stream>>>(
         static_cast<const T*>(key.data()), static_cast<const T*>(value.data()),
         static_cast<T*>(key_cache.data()), static_cast<T*>(value_cache.data()),
@@ -287,8 +287,8 @@ void prefill_attention(ConstTensorView query, ConstTensorView key,
   assert_gqa(query, key, paged);
   assert_indices(cu_seqlens_q, 1);
   assert_indices(cu_seqlens_k, 1);
-  assert(cu_seqlens_q.shape()[0] >= 1
-         && detail::same_shape(cu_seqlens_q, cu_seqlens_k));
+  assert(cu_seqlens_q.shape()[0] >= 1);
+  assert(detail::same_shape(cu_seqlens_q, cu_seqlens_k));
   const auto batch = cu_seqlens_q.shape()[0] - 1;
   assert(query.shape()[0] <= INT_MAX && (paged || key.shape()[0] <= INT_MAX));
   assert(query.shape()[0] == 0 || batch > 0);
@@ -332,8 +332,8 @@ void paged_attention_decode(ConstTensorView query, ConstTensorView key_cache,
   assert_output(query, output, scale);
   assert_cache(key_cache);
   assert_cache(value_cache);
-  assert(key_cache.dtype() == value_cache.dtype()
-         && detail::same_shape(key_cache, value_cache));
+  assert(detail::same_shape(key_cache, value_cache));
+  assert(detail::same_dtype(gate, up, output));
   assert_gqa(query, key_cache, true);
   assert_indices(context_lens, 1);
   assert_indices(block_tables, 2);
@@ -342,8 +342,10 @@ void paged_attention_decode(ConstTensorView query, ConstTensorView key_cache,
   const auto rows = batch * query.shape()[1];
   if (rows == 0) return;
   const auto shape = make_shape(query, key_cache, batch, block_tables, true);
+
+  const auto dtype = query.dtype();
   const auto blocks = static_cast<unsigned>(std::min<std::size_t>(rows, 65535));
-  detail::dispatch_float(query.dtype(), [&]<typename T>() {
+  detail::dispatch_float(dtype, [&]<typename T>() {
     attention_kernel<T, true, true><<<blocks, kWarpSize, 0, stream>>>(
         static_cast<const T*>(query.data()),
         static_cast<const T*>(key_cache.data()),

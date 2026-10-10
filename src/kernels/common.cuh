@@ -20,10 +20,16 @@ void assert_tensor(const BasicTensorView<IsConst>& tensor) {
   assert(tensor.is_contiguous());
 }
 
-template <bool LeftConst, bool RightConst>
-bool same_shape(const BasicTensorView<LeftConst>& lhs,
-                const BasicTensorView<RightConst>& rhs) {
-  return std::ranges::equal(lhs.shape(), rhs.shape());
+template <bool FirstConst, bool... RestConst>
+bool same_shape(const BasicTensorView<FirstConst>& first,
+                const BasicTensorView<RestConst>&... rest) {
+  return (std::ranges::equal(first.shape(), rest.shape()) && ...);
+}
+
+template <bool FirstConst, bool... RestConst>
+bool same_dtype(const BasicTensorView<FirstConst>& first,
+                const BasicTensorView<RestConst>&... rest) {
+  return ((first.dtype() == rest.dtype()) && ...);
 }
 
 template <typename Function>
