@@ -5,8 +5,33 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 #include <optional>
+#include <stdexcept>
+#include <string_view>
 
 namespace nanovllm {
+namespace {
+
+DataType parse_model_dtype(std::string_view name) {
+  if (name == "float16") return DataType::Float16;
+  if (name == "bfloat16") return DataType::BFloat16;
+  if (name == "float32") return DataType::Float32;
+  throw std::invalid_argument("unsupported model dtype: " + std::string(name));
+}
+
+const char* model_dtype_name(DataType dtype) {
+  switch (dtype) {
+    case DataType::Float16:
+      return "float16";
+    case DataType::BFloat16:
+      return "bfloat16";
+    case DataType::Float32:
+      return "float32";
+    default:
+      throw std::invalid_argument("unsupported model dtype");
+  }
+}
+
+} // namespace
 
 VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(RoPEScalingType,
                                  {{RoPEScalingType::Linear, "linear"},
@@ -39,11 +64,6 @@ VLLM_IMPL_NLOHMANN_JSON(RoPEScaling)
 VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(HiddenAct, {{HiddenAct::GeLU, "gelu"},
                                              {HiddenAct::SiLU, "silu"}})
 
-VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(TorchDataType,
-                                 {{TorchDataType::Float16, "float16"},
-                                  {TorchDataType::BFloat16, "bfloat16"},
-                                  {TorchDataType::Float32, "float32"}})
-
 nlohmann::json ModelConfig::to_json() const {
   return {
       {"model_type", model_type},
@@ -68,7 +88,7 @@ nlohmann::json ModelConfig::to_json() const {
 
       {"tie_word_embeddings", tie_word_embeddings},
 
-      {"dtype", dtype},
+      {"dtype", model_dtype_name(dtype)},
   };
 }
 
@@ -97,7 +117,7 @@ ModelConfig ModelConfig::from_json(const nlohmann::json& j) {
 
       .tie_word_embeddings = j.at("tie_word_embeddings").get<bool>(),
 
-      .dtype = j.at("torch_dtype").get<TorchDataType>(),
+      .dtype = parse_model_dtype(j.at("torch_dtype").get<std::string>()),
   };
 
   config.assert_valid();

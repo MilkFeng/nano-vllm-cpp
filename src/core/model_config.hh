@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "common/macros.hh"
+#include "core/device.hh"
 
 namespace nanovllm {
 enum class RoPEScalingType { Linear, Dynamic, Yarn };
@@ -30,10 +31,6 @@ VLLM_DEFINE_NLOHMANN_JSON(RoPEScaling)
 enum class HiddenAct { GeLU, SiLU };
 
 VLLM_DEFINE_NLOHMANN_JSON(HiddenAct)
-
-enum class TorchDataType { Float16, BFloat16, Float32 };
-
-VLLM_DEFINE_NLOHMANN_JSON(TorchDataType)
 
 struct ModelConfig {
   std::string model_type;
@@ -58,7 +55,7 @@ struct ModelConfig {
 
   bool tie_word_embeddings;
 
-  TorchDataType dtype;
+  DataType dtype;
 
   [[nodiscard]] nlohmann::json to_json() const;
   [[nodiscard]] static ModelConfig from_json(const nlohmann::json& j);

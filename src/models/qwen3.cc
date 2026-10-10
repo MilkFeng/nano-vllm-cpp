@@ -17,18 +17,6 @@ namespace {
          && tensor.device() == device && tensor.is_contiguous();
 }
 
-DataType model_data_type(TorchDataType dtype) {
-  switch (dtype) {
-    case TorchDataType::Float16:
-      return DataType::Float16;
-    case TorchDataType::BFloat16:
-      return DataType::BFloat16;
-    case TorchDataType::Float32:
-      return DataType::Float32;
-  }
-  throw std::invalid_argument("unsupported Qwen3 model dtype");
-}
-
 ModelConfig validate_qwen3_config(ModelConfig config) {
   config.assert_valid();
   if (config.model_type != "qwen3") {
@@ -308,7 +296,7 @@ const Qwen3DecoderLayer& Qwen3Model::layer(std::size_t index) const {
 
 Qwen3ForCausalLM::Qwen3ForCausalLM(const ModelConfig& config, Device device)
     : config_(validate_qwen3_config(config)),
-      dtype_(model_data_type(config_.dtype)),
+      dtype_(config_.dtype),
       device_(device),
       model_(config_, dtype_, device_),
       lm_head_(config_.vocab_size, config_.hidden_size, dtype_, device_,
