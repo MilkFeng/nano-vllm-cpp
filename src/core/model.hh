@@ -27,6 +27,8 @@ class Model : public Module {
  public:
   ~Model() override = default;
 
+  // Accepts a safetensors file, a shard index, or a model directory.
+  // Copies registered tensors without dtype conversion or dequantization.
   ModelLoadResult load_ckpt(const std::filesystem::path& ckpt_path,
                             ModelLoadOptions options = {});
 

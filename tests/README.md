@@ -1,4 +1,26 @@
-# 小尺寸 MoE 验证
+# 验证
+
+## FP8 checkpoint CPU 验证
+
+`fp8_checkpoint_cpu` 自己创建临时 safetensors 分片和索引，结束后清理，不需要
+GPU、Python 包或模型下载。运行：
+
+```bash
+./build/nano-vllm-cpp-fp8-checkpoint-test
+ctest --test-dir build -R fp8_checkpoint_cpu --output-on-failure
+```
+
+测试覆盖 E4M3FN 的正负零、次正规数、正常数、最大有限值和 NaN，dtype 的
+safetensors 名称与单字节存储，以及 `129x257` 矩阵的 `128x128` 分块缩放。
+矩阵有六个不同 scale，包含行列尾块；另测 `2x3` 自定义分块和输出工作区复用。
+
+权重和 scale 分别存于两个分片，与 BF16/I32 张量混合。检查目录、索引和单文件
+三种入口，mmap span/元数据的稳定性，未下载分片的按需访问与失败后重试，
+`Model::load_ckpt()` 的 FP8/scale 参数复制，以及严格检查在复制前拒绝额外张量。
+还检查 dtype、shape、scale 网格、连续性、空矩阵、零块尺寸、非法偏移和重叠范围。
+这些是合成权重测试；完整 Qwen3.5-FP8 的专家和生成结果需在权重下载后验证。
+
+## 小尺寸 MoE 验证
 
 配置构建时开启 `-DBUILD_TESTING=ON`，然后运行：
 

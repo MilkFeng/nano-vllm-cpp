@@ -5,7 +5,14 @@
 
 namespace nanovllm {
 
-enum class DataType : std::uint8_t { Float32, Float16, BFloat16, Int32 };
+// Float8E4M3FN is a storage format; existing CUDA math uses F32/F16/BF16.
+enum class DataType : std::uint8_t {
+  Float32,
+  Float16,
+  BFloat16,
+  Int32,
+  Float8E4M3FN
+};
 
 [[nodiscard]] std::size_t data_type_size(DataType dtype);
 

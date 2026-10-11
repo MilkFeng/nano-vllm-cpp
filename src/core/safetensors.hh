@@ -1,10 +1,14 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
+#include <map>
 #include <nlohmann/json_fwd.hpp>
 #include <span>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include "common/macros.hh"
 #include "core/device.hh"

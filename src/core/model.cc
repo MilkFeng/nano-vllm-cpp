@@ -9,7 +9,7 @@
 #include <string_view>
 
 #include "common/cuda_utils.hh"
-#include "core/safetensors.hh"
+#include "core/checkpoint.hh"
 
 namespace nanovllm {
 
@@ -41,8 +41,8 @@ void validate_parameter(std::string_view name, const TensorView& destination,
 }
 
 void copy_parameter(std::string_view name, const TensorView& destination,
-                    const Safetensors& checkpoint, const TensorInfo& source) {
-  const auto bytes = checkpoint.raw_data(source);
+                    const Checkpoint& checkpoint) {
+  const auto bytes = checkpoint.raw_data(name);
   if (bytes.empty()) return;
 
   const auto device = destination.device();
@@ -89,11 +89,10 @@ Model::CheckpointBindings Model::checkpoint_destinations() {
 
 ModelLoadResult Model::load_ckpt(const std::filesystem::path& ckpt_path,
                                  ModelLoadOptions options) {
-  Safetensors ckpt;
-  ckpt.open(ckpt_path);
+  Checkpoint ckpt(ckpt_path);
 
   const auto destinations = checkpoint_destinations();
-  const auto& checkpoint_tensors = ckpt.tensor_map().tensors;
+  const auto& checkpoint_tensors = ckpt.weight_map();
 
   // Validate the complete mapping before copying anything, so a missing or
   // incompatible tensor cannot leave the model partially initialized.
@@ -104,7 +103,7 @@ ModelLoadResult Model::load_ckpt(const std::filesystem::path& ckpt_path,
           std::format("checkpoint '{}' does not contain model parameter '{}'",
                       ckpt_path.string(), name));
     }
-    validate_parameter(name, destination, source->second);
+    validate_parameter(name, destination, ckpt.tensor(name));
   }
 
   if (!options.allow_unexpected_tensors) {
@@ -120,7 +119,7 @@ ModelLoadResult Model::load_ckpt(const std::filesystem::path& ckpt_path,
   ModelLoadResult result;
   result.num_tensors = destinations.size();
   for (const auto& [name, destination] : destinations) {
-    const auto source_size = checkpoint_tensors.at(name).byte_size();
+    const auto source_size = ckpt.tensor(name).byte_size();
     if (source_size
         > std::numeric_limits<std::uint64_t>::max() - result.num_bytes) {
       throw std::overflow_error("loaded model byte count is too large");
@@ -129,7 +128,7 @@ ModelLoadResult Model::load_ckpt(const std::filesystem::path& ckpt_path,
   }
 
   for (const auto& [name, destination] : destinations) {
-    copy_parameter(name, destination, ckpt, checkpoint_tensors.at(name));
+    copy_parameter(name, destination, ckpt);
   }
 
   return result;

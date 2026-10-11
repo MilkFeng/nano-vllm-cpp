@@ -18,10 +18,12 @@
 
 namespace nanovllm {
 
-VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(DataType, {{DataType::Float32, "F32"},
-                                            {DataType::Float16, "F16"},
-                                            {DataType::BFloat16, "BF16"},
-                                            {DataType::Int32, "I32"}})
+VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(DataType,
+                                 {{DataType::Float32, "F32"},
+                                  {DataType::Float16, "F16"},
+                                  {DataType::BFloat16, "BF16"},
+                                  {DataType::Int32, "I32"},
+                                  {DataType::Float8E4M3FN, "F8_E4M3"}})
 
 std::size_t TensorInfo::element_count() const {
   std::size_t count = 1;

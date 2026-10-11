@@ -85,9 +85,58 @@ Token IDs → Embedding
 
 内部 CUDA 算子只接受连续 Tensor，并使用调用线程已经选好的 device 0。通用模型配置约束，以及模型和算子内部的 shape、dtype 和索引约束使用 Debug 断言；Qwen3 支持范围、用户参数和 CUDA/cuBLAS 运行错误在 Release 中也会检查。缓冲区重叠关系由调用者保证。RoPE 直接原地修改 Q/K。
 
-当前支持 CUDA device 0 上的 dense Qwen3、单文件 safetensors 权重、未缩放的 RoPE，以及偶数且不超过 256 的 head dimension。Attention 是用于打通计算链路的基础实现；FlashAttention 级优化、CUDA Graph、张量并行和分片权重加载仍待实现。KV 块数由命令行或 `EngineParams` 手动指定。
+当前支持 CUDA device 0 上的 dense Qwen3、单文件 safetensors 权重、未缩放的 RoPE，以及偶数且不超过 256 的 head dimension。Attention 是用于打通计算链路的基础实现；FlashAttention 级优化、CUDA Graph 和张量并行仍待实现。KV 块数由命令行或 `EngineParams` 手动指定。
 
 FP16/BF16 的舍入会受 GEMM 的 batch 大小影响；候选分数接近时，生成 token 可能随批量配置变化，也不保证与 Transformers 逐 token 相同。当前融合 residual 和 RMSNorm 的计算顺序沿用 nano-vllm；详细对比结果见测试文档。
+
+## FP8 权重读取与 CPU 反量化
+
+`Checkpoint` 接受单个 safetensors 文件、`model.safetensors.index.json`，或模型
+目录。目录中优先读取索引，否则读取 `model.safetensors`。索引只保存张量到分片
+文件的映射；访问张量时才 mmap 对应分片，并保留映射直到 reader 析构。
+未访问的分片可以尚未下载；访问缺失文件时报错，文件到位后可以重试。
+
+`tensor(name)` 返回 dtype、shape 和偏移，`raw_data(name)` 返回只读字节 span。
+这些引用和 span 借用 reader 的生命周期，打开其他分片不会使它们失效；调用需
+串行。读取器不复制权重，也不自动反量化。`Model::load_ckpt()` 复用该读取器，
+支持上述三种路径，继续严格检查名称、shape 和 dtype 后才复制参数。
+CLI 文本生成仍加载原有的单文件 dense Qwen3；尚未接入完整 Qwen3.5 模型。
+
+新增 `DataType::Float8E4M3FN`，每元素 1 字节，对应 safetensors 的 `F8_E4M3`。
+CPU `kernels::cpu::dequantize_fp8()` 将二维权重还原到调用方提供的 FP32 工作区：
+
+```text
+output[r,c] = decode_e4m3fn(weight[r,c]) * weight_scale_inv[r/Br,c/Bc]
+```
+
+默认 `Br=Bc=128`，也可传入其他正数。scale 必须是 FP32，形状为
+`[ceil(R/Br), ceil(C/Bc)]`；尾块允许不足一个完整 block。三个矩阵需在 CPU 上、
+连续、非空，输入与输出存储不能重叠。解码保留正负零、次正规数和 NaN，最大
+有限绝对值为 448；它不解释 E4M3FNUZ 或 E5M2。
+
+权重下载完成后，读取一个专家的 gate 矩阵可用：
+
+```cpp
+Checkpoint checkpoint("/path/to/Qwen3.5-35B-A3B-FP8");
+const std::string prefix =
+    "model.language_model.layers.0.mlp.experts.0.gate_proj";
+const auto& info = checkpoint.tensor(prefix + ".weight");
+const auto bytes = checkpoint.raw_data(prefix + ".weight");
+ConstTensorView weight(bytes.data(), info.dtype, TensorLayout(info.shape),
+                       Device::cpu());
+
+const auto& scale_info = checkpoint.tensor(prefix + ".weight_scale_inv");
+auto scales = Tensor::empty(scale_info.shape, scale_info.dtype);
+const auto scale_bytes = checkpoint.raw_data(prefix + ".weight_scale_inv");
+std::memcpy(scales.data(), scale_bytes.data(), scale_bytes.size());
+auto output = Tensor::empty(info.shape, DataType::Float32);
+kernels::cpu::dequantize_fp8(weight, scales.view().as_const(), output.view());
+```
+
+FP8 权重直接借用 mmap 字节；scale 复制到 Tensor，保证浮点访问使用对齐的
+存储。反量化不分配输出，后续可为 CPU 未命中专家复用同一个工作区。
+当前 `ExpertStore` 仍保存 FP32 专家，尚未把这条 FP8 加载路径接入 MoE。
+本步骤也未实现原生 FP8 GEMM、激活量化或整模型反量化。
 
 ## 学习用 MoE
 

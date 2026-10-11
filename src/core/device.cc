@@ -13,6 +13,8 @@ std::size_t data_type_size(DataType dtype) {
     case DataType::Float16:
     case DataType::BFloat16:
       return 2;
+    case DataType::Float8E4M3FN:
+      return 1;
   }
   throw std::invalid_argument("unknown tensor data type");
 }
