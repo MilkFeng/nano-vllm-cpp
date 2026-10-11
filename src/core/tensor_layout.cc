@@ -23,7 +23,9 @@ bool has_zero_dimension(std::span<const std::size_t> shape) noexcept {
 }
 
 std::size_t compute_numel(std::span<const std::size_t> shape) {
-  if (has_zero_dimension(shape)) return 0;
+  if (has_zero_dimension(shape)) {
+    return 0;
+  }
 
   std::size_t count = 1;
   for (const auto dimension : shape) {
@@ -51,7 +53,9 @@ TensorLayout::TensorLayout(std::vector<std::size_t> shape,
         "tensor shape and strides must have equal rank");
   }
 
-  if (has_zero_dimension(shape_)) return;
+  if (has_zero_dimension(shape_)) {
+    return;
+  }
 
   for (std::size_t i = 0; i < shape_.size(); ++i) {
     if (shape_[i] > 1 && strides_[i] == 0) {
@@ -94,12 +98,16 @@ std::size_t TensorLayout::size_bytes(DataType dtype) const {
 }
 
 bool TensorLayout::is_contiguous() const noexcept {
-  if (has_zero_dimension(shape_)) return true;
+  if (has_zero_dimension(shape_)) {
+    return true;
+  }
 
   std::size_t expected_stride = 1;
   for (std::size_t i = shape_.size(); i > 0; --i) {
     const auto dimension = shape_[i - 1];
-    if (dimension != 1 && strides_[i - 1] != expected_stride) return false;
+    if (dimension != 1 && strides_[i - 1] != expected_stride) {
+      return false;
+    }
 
     if (dimension != 0
         && expected_stride

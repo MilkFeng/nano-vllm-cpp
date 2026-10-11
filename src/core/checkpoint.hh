@@ -10,19 +10,16 @@
 
 namespace nanovllm {
 
-// A single safetensors file, an index file, or a model directory. For a
-// directory, prefer model.safetensors.index.json over model.safetensors.
-// Indexed shards are mmap'ed on first access and retained until destruction.
-// Returned metadata references and byte spans borrow this object's lifetime.
-// Calls must be serialized. This reader does not copy or dequantize weights.
 class Checkpoint final {
  public:
+  // layer -> safetensor file name
   using WeightMap = std::map<std::string, std::string, std::less<>>;
 
   explicit Checkpoint(const std::filesystem::path& path);
 
   Checkpoint(const Checkpoint&) = delete;
   Checkpoint& operator=(const Checkpoint&) = delete;
+
   Checkpoint(Checkpoint&&) noexcept = default;
   Checkpoint& operator=(Checkpoint&&) noexcept = default;
 

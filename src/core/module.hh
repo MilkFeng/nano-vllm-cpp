@@ -44,7 +44,6 @@ class Module {
   void register_parameter(std::string name, Parameter& parameter);
   void register_module(std::string name, Module& module);
 
-  // Returned pointers remain valid while the registered module tree lives.
   [[nodiscard]] NamedParameters named_parameters();
   [[nodiscard]] ConstNamedParameters named_parameters() const;
 
@@ -57,6 +56,7 @@ class Module {
                                NamedParameters& result);
   void append_named_parameters(std::string_view prefix,
                                ConstNamedParameters& result) const;
+
   [[nodiscard]] bool contains_module(const Module* target) const noexcept;
 
   std::map<std::string, Parameter*, std::less<>> parameters_;

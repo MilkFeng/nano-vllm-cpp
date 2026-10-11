@@ -61,11 +61,12 @@ ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
   check_cuda(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking),
              "create inference stream");
   try {
-    if (config_.architecture == ModelArchitecture::Qwen35Moe)
+    if (config_.architecture == ModelArchitecture::Qwen35Moe) {
       model_ = std::make_unique<Qwen35ForCausalLM>(config_, Device::cuda(0),
                                                    params_.gpu_expert_ids);
-    else
+    } else {
       model_ = std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda(0));
+    }
     model_->load_ckpt(checkpoint);
     // Weight uploads use the default stream; publish them before inference on
     // our nonblocking stream, which does not implicitly wait for that stream.

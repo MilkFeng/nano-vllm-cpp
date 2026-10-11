@@ -47,7 +47,7 @@ VLLM_DEFINE_NLOHMANN_JSON(TensorMap)
 
 class Safetensors {
  public:
-  Safetensors();
+  explicit Safetensors(const std::filesystem::path& path);
   ~Safetensors();
 
   Safetensors(const Safetensors&) = delete;
@@ -55,13 +55,6 @@ class Safetensors {
 
   Safetensors(Safetensors&& other) noexcept;
   Safetensors& operator=(Safetensors&& other) noexcept;
-
-  // Opens a safetensors file from the given path
-  // Uses mmap to memory-map the file for efficient access
-  void open(const std::filesystem::path& path);
-
-  // Closes the file and releases the memory-mapped data
-  void close() noexcept;
 
   [[nodiscard]] bool is_open() const noexcept;
 
@@ -77,6 +70,8 @@ class Safetensors {
   }
 
  private:
+  void close() noexcept;
+
   std::filesystem::path path_;
 
   int fd_ = -1;

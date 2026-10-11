@@ -87,8 +87,7 @@ Model::CheckpointBindings Model::checkpoint_destinations() {
   return result;
 }
 
-ModelLoadResult Model::load_ckpt(const std::filesystem::path& ckpt_path,
-                                 ModelLoadOptions options) {
+ModelLoadResult Model::load_ckpt(const std::filesystem::path& ckpt_path) {
   Checkpoint ckpt(ckpt_path);
 
   const auto destinations = checkpoint_destinations();
@@ -104,16 +103,6 @@ ModelLoadResult Model::load_ckpt(const std::filesystem::path& ckpt_path,
                       ckpt_path.string(), name));
     }
     validate_parameter(name, destination, ckpt.tensor(name));
-  }
-
-  if (!options.allow_unexpected_tensors) {
-    for (const auto& [name, source] : checkpoint_tensors) {
-      if (!destinations.contains(name)) {
-        throw std::runtime_error(
-            std::format("checkpoint '{}' contains unexpected tensor '{}'",
-                        ckpt_path.string(), name));
-      }
-    }
   }
 
   ModelLoadResult result;

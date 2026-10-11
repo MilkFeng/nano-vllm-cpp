@@ -137,7 +137,65 @@ std::uint64_t decode_u64_le(const std::byte* bytes) noexcept {
 }
 } // namespace
 
-Safetensors::Safetensors() = default;
+Safetensors::Safetensors(const std::filesystem::path& path)
+    : path_(path) {
+  try {
+    fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd_ == -1) {
+      throw std::system_error(
+          errno, std::generic_category(),
+          std::format("failed to open Safetensors file '{}'", path.string()));
+    }
+
+    struct stat file_stat{};
+    if (::fstat(fd_, &file_stat) == -1) {
+      throw std::system_error(
+          errno, std::generic_category(),
+          std::format("failed to stat Safetensors file '{}'", path.string()));
+    }
+    if (file_stat.st_size < static_cast<off_t>(kHeaderLengthSize)) {
+      throw std::runtime_error("file is too small to contain a header length");
+    }
+    file_size_ = static_cast<std::size_t>(file_stat.st_size);
+
+    void* const mapping =
+        ::mmap(nullptr, file_size_, PROT_READ, MAP_PRIVATE, fd_, 0);
+    if (mapping == MAP_FAILED) {
+      throw std::system_error(
+          errno, std::generic_category(),
+          std::format("failed to map Safetensors file '{}'", path.string()));
+    }
+    mapping_ = static_cast<std::byte*>(mapping);
+
+    const auto header_size = decode_u64_le(mapping_);
+    if (header_size > kMaxHeaderSize) {
+      throw std::runtime_error("header exceeds the 100 MB size limit");
+    }
+    if (header_size > file_size_ - kHeaderLengthSize) {
+      throw std::runtime_error("header extends past the end of the file");
+    }
+
+    data_offset_ = kHeaderLengthSize + static_cast<std::size_t>(header_size);
+    data_size_ = file_size_ - data_offset_;
+
+    const char* const header_begin =
+        reinterpret_cast<const char*>(mapping_ + kHeaderLengthSize);
+    const auto header =
+        nlohmann::json::parse(header_begin, header_begin + header_size);
+    tensor_map_ = header.get<TensorMap>();
+
+    for (const auto& [name, tensor] : tensor_map_.tensors) {
+      if (tensor.data_end > data_size_) {
+        throw std::runtime_error(
+            std::format("tensor '{}' is out of bounds", name));
+      }
+    }
+  } catch (...) {
+    // A failed constructor does not run the destructor.
+    close();
+    throw;
+  }
+}
 
 Safetensors::~Safetensors() {
   close();
@@ -166,65 +224,6 @@ Safetensors& Safetensors::operator=(Safetensors&& other) noexcept {
   data_size_ = std::exchange(other.data_size_, 0);
   tensor_map_ = std::move(other.tensor_map_);
   return *this;
-}
-
-void Safetensors::open(const std::filesystem::path& path) {
-  Safetensors result;
-  result.path_ = path;
-
-  result.fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
-  if (result.fd_ == -1) {
-    throw std::system_error(
-        errno, std::generic_category(),
-        std::format("failed to open Safetensors file '{}'", path.string()));
-  }
-
-  struct stat file_stat{};
-  if (::fstat(result.fd_, &file_stat) == -1) {
-    throw std::system_error(
-        errno, std::generic_category(),
-        std::format("failed to stat Safetensors file '{}'", path.string()));
-  }
-  if (file_stat.st_size < static_cast<off_t>(kHeaderLengthSize)) {
-    throw std::runtime_error("file is too small to contain a header length");
-  }
-  result.file_size_ = static_cast<std::size_t>(file_stat.st_size);
-
-  void* const mapping =
-      ::mmap(nullptr, result.file_size_, PROT_READ, MAP_PRIVATE, result.fd_, 0);
-  if (mapping == MAP_FAILED) {
-    throw std::system_error(
-        errno, std::generic_category(),
-        std::format("failed to map Safetensors file '{}'", path.string()));
-  }
-  result.mapping_ = static_cast<std::byte*>(mapping);
-
-  const auto header_size = decode_u64_le(result.mapping_);
-  if (header_size > kMaxHeaderSize) {
-    throw std::runtime_error("header exceeds the 100 MB size limit");
-  }
-  if (header_size > result.file_size_ - kHeaderLengthSize) {
-    throw std::runtime_error("header extends past the end of the file");
-  }
-
-  result.data_offset_ =
-      kHeaderLengthSize + static_cast<std::size_t>(header_size);
-  result.data_size_ = result.file_size_ - result.data_offset_;
-
-  const char* const header_begin =
-      reinterpret_cast<const char*>(result.mapping_ + kHeaderLengthSize);
-  const auto header =
-      nlohmann::json::parse(header_begin, header_begin + header_size);
-  result.tensor_map_ = header.get<TensorMap>();
-
-  for (const auto& [name, tensor] : result.tensor_map_.tensors) {
-    if (tensor.data_end > result.data_size_) {
-      throw std::runtime_error(
-          std::format("tensor '{}' is out of bounds", name));
-    }
-  }
-
-  *this = std::move(result);
 }
 
 void Safetensors::close() noexcept {

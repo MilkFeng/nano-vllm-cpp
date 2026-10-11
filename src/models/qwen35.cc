@@ -520,8 +520,8 @@ Qwen35ForCausalLM::Qwen35ForCausalLM(const ModelConfig& config, Device device,
   register_module("lm_head", lm_head_);
 }
 
-ModelLoadResult Qwen35ForCausalLM::load_ckpt(const std::filesystem::path& path,
-                                             ModelLoadOptions options) {
+ModelLoadResult Qwen35ForCausalLM::load_ckpt(
+    const std::filesystem::path& path) {
   Checkpoint checkpoint(path);
   const auto prefix =
       config_.architectures[0] == "Qwen3_5MoeForConditionalGeneration"
@@ -534,13 +534,7 @@ ModelLoadResult Qwen35ForCausalLM::load_ckpt(const std::filesystem::path& path,
     for (const auto& name : head.sources) plan.count(checkpoint, name);
     for (auto& entry : head.entries) plan.entries.push_back(std::move(entry));
   }
-  if (!options.allow_unexpected_tensors) {
-    for (const auto& [name, shard] : checkpoint.weight_map()) {
-      if (!plan.sources.contains(name) && !name.starts_with("model.visual.")
-          && !name.starts_with("mtp."))
-        throw std::runtime_error("unexpected Qwen3.5 text tensor: " + name);
-    }
-  }
+
   // Preserve an executable old model on metadata failures. Once copying starts,
   // forbid execution until all weights and all resident expert caches are
   // ready.

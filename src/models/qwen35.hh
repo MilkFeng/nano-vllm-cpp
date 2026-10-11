@@ -125,14 +125,16 @@ class Qwen35ForCausalLM final : public Model {
   // GPU expert caches. Vision/MTP sources are intentionally excluded. Other
   // extra text tensors are rejected unless allow_unexpected_tensors=true.
   // Loading detaches runtime caches; rebind a fresh/reset cache afterwards.
-  ModelLoadResult load_ckpt(const std::filesystem::path& path,
-                            ModelLoadOptions options = {}) override;
+  ModelLoadResult load_ckpt(const std::filesystem::path& path) override;
+
   [[nodiscard]] Tensor forward(ConstTensorView input_ids,
                                ConstTensorView positions,
                                const ForwardContext& context) const override;
+
   [[nodiscard]] Tensor compute_logits(
       ConstTensorView hidden_states,
       const ForwardContext& context) const override;
+
   [[nodiscard]] const ModelConfig& config() const noexcept;
   [[nodiscard]] DataType dtype() const noexcept override;
   [[nodiscard]] Device device() const noexcept override;
