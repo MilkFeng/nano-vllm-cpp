@@ -116,36 +116,40 @@ void initialize(MoE& moe, std::uint32_t seed, bool tied_router = false) {
   }
 }
 
-Tensor random_input(std::size_t hidden_size, std::uint32_t seed) {
-  std::vector<float> values(hidden_size);
+Tensor random_input(std::size_t hidden_size, std::uint32_t seed,
+                    std::size_t tokens = 1) {
+  std::vector<float> values(tokens * hidden_size);
   for (auto& value : values) value = next_value(seed);
-  return cpu_tensor({1, hidden_size}, values);
+  return cpu_tensor({tokens, hidden_size}, values);
 }
 
-void check_reference(const MoEReferenceOutput& result,
-                     const MoEConfig& config) {
-  require(
-      result.hidden_states.size() == config.hidden_size
-          && result.router_logits.size() == config.num_experts
-          && result.expert_ids.size() == config.top_k
-          && result.expert_outputs.size() == config.top_k * config.hidden_size,
-      "reference output shape mismatch");
-  const auto shared_width =
-      config.shared_expert_intermediate_size != 0 ? config.hidden_size : 0;
-  require(result.shared_expert_output.size() == shared_width
-              && result.shared_gate_logits.size() == (shared_width ? 1u : 0u),
+void check_reference(const MoEReferenceOutput& result, const MoEConfig& config,
+                     std::size_t tokens = 1) {
+  require(result.hidden_states.size() == tokens * config.hidden_size
+              && result.router_logits.size() == tokens * config.num_experts
+              && result.expert_ids.size() == tokens * config.top_k
+              && result.expert_outputs.size()
+                     == tokens * config.top_k * config.hidden_size,
+          "reference output shape mismatch");
+  const bool shared = config.shared_expert_intermediate_size != 0;
+  require(result.shared_expert_output.size()
+                  == (shared ? tokens * config.hidden_size : 0)
+              && result.shared_gate_logits.size() == (shared ? tokens : 0),
           "reference shared output shape mismatch");
-  auto sorted_ids = result.expert_ids;
-  std::ranges::sort(sorted_ids);
-  require(std::adjacent_find(sorted_ids.begin(), sorted_ids.end())
-              == sorted_ids.end(),
-          "router selected an expert twice");
-  const float sum = std::accumulate(result.expert_weights.begin(),
-                                    result.expert_weights.end(), 0.0f);
-  require(std::abs(sum - 1.0f) < 2e-6f, "router weights do not sum to one");
-  for (const auto value : result.hidden_states) {
-    require(std::isfinite(value), "reference output is not finite");
+  for (std::size_t t = 0; t < tokens; ++t) {
+    const auto first = result.expert_ids.begin() + t * config.top_k;
+    std::vector<std::int32_t> sorted_ids(first, first + config.top_k);
+    std::ranges::sort(sorted_ids);
+    require(std::adjacent_find(sorted_ids.begin(), sorted_ids.end())
+                == sorted_ids.end(),
+            "router selected an expert twice for one token");
+    const auto weights = result.expert_weights.begin() + t * config.top_k;
+    const float sum = std::accumulate(weights, weights + config.top_k, 0.0f);
+    require(std::abs(sum - 1.0f) < 2e-6f,
+            "per-token router weights do not sum to one");
   }
+  for (const auto value : result.hidden_states)
+    require(std::isfinite(value), "reference output is not finite");
 }
 
 void initialize_analytic(MoE& moe) {
@@ -240,6 +244,42 @@ void test_shared_cpu() {
                "shapes passed\n";
 }
 
+void test_cpu_batch() {
+  const std::vector<float> values{1, 2, -1, 4, 2, 3, 1, 2};
+  const auto input = cpu_tensor({4, 2}, values);
+  for (const bool shared : {false, true}) {
+    MoE cpu({2, 1, 3, 2, shared ? 2u : 0u}, Device::cpu());
+    if (shared) {
+      initialize_shared_analytic(cpu);
+      set_parameter(cpu, "shared_expert_gate.weight", std::vector<float>{1, 0});
+    } else {
+      initialize_analytic(cpu);
+    }
+    const auto result = reference(cpu, input);
+    check_reference(result, cpu.config(), 4);
+    std::vector<float> expected;
+    for (std::size_t t = 0; t < 4; ++t) {
+      const double a = values[t * 2], b = values[t * 2 + 1];
+      const double activation = a / (1.0 + std::exp(-a)) * b;
+      const double gate = shared ? 1.0 / (1.0 + std::exp(-a)) : 0.0;
+      expected.push_back(float(activation * (1.0 + 2.0 * gate)));
+      expected.push_back(float(activation * (3.5 - 4.0 * gate)));
+      if (shared)
+        require(result.shared_gate_logits[t] == float(a),
+                "batch reference used another token's shared gate");
+    }
+    compare(result.hidden_states, expected, "hand-computed batch MoE", 1e-6f,
+            1e-6f);
+    require(
+        result.expert_ids == std::vector<std::int32_t>{0, 1, 0, 1, 0, 1, 0, 1},
+        "repeated expert IDs across tokens should be allowed");
+    const auto empty = Tensor::empty({0, 2}, DataType::Float32);
+    expect_invalid([&] { (void)reference(cpu, empty); });
+  }
+  std::cout << "CPU batch MoE: hand-computed rows, repeated experts and "
+               "per-token gates passed\n";
+}
+
 void test_cpu() {
   MoE analytic({2, 1, 3, 2}, Device::cpu());
   initialize_analytic(analytic);
@@ -273,6 +313,7 @@ void test_cpu() {
         experts, 4);
   });
   test_shared_cpu();
+  test_cpu_batch();
   std::cout
       << "CPU reference: analytical result, top-k limits, shapes passed\n";
 }
@@ -379,9 +420,82 @@ void test_add_shared(cudaStream_t stream) {
   }
 }
 
+void test_batch_kernels(cudaStream_t stream) {
+  constexpr std::size_t T = 5, E = 17, K = 3, H = 513;
+  std::vector<float> scores(T * E), expected_weights;
+  std::vector<std::int32_t> expected_ids;
+  for (std::size_t t = 0; t < T; ++t) {
+    std::vector<std::int32_t> order(E);
+    std::iota(order.begin(), order.end(), 0);
+    for (std::size_t e = 0; e < E; ++e)
+      scores[t * E + e] = t == 2 ? 0.0f : float((e + 5 * t) % E) - 8.0f;
+    std::ranges::sort(order, [&](auto a, auto b) {
+      const auto left = scores[t * E + a], right = scores[t * E + b];
+      return left == right ? a < b : left > right;
+    });
+    order.resize(K);
+    double sum = 0.0;
+    for (const auto id : order)
+      sum += std::exp(double(scores[t * E + id]) - scores[t * E + order[0]]);
+    for (const auto id : order) {
+      expected_ids.push_back(id);
+      expected_weights.push_back(
+          float(std::exp(double(scores[t * E + id]) - scores[t * E + order[0]])
+                / sum));
+    }
+  }
+  const auto logits = upload(cpu_tensor({T, E}, scores), stream);
+  auto ids = Tensor::empty({T, K}, DataType::Int32, Device::cuda(0));
+  auto weights = Tensor::empty({T, K}, DataType::Float32, Device::cuda(0));
+  kernels::cuda::moe_route(logits.view(), ids.view(), weights.view(), stream);
+  require(download<std::int32_t>(ids, stream) == expected_ids,
+          "batch route mixed token rows or tie ordering");
+  compare(download<float>(weights, stream), expected_weights,
+          "batch route weights", 2e-7f, 2e-6f);
+
+  std::vector<float> parts(T * K * H), expected(T * H), shared(T * H);
+  const std::vector<float> gates{0, -2, 2, -1000, 1000};
+  for (std::size_t i = 0; i < parts.size(); ++i)
+    parts[i] = (static_cast<int>(i % 29) - 14) * 0.05f;
+  for (std::size_t t = 0; t < T; ++t) {
+    for (std::size_t d = 0; d < H; ++d) {
+      double sum = 0.0;
+      for (std::size_t rank = 0; rank < K; ++rank)
+        sum += double(expected_weights[t * K + rank])
+               * parts[(t * K + rank) * H + d];
+      expected[t * H + d] = float(sum);
+      shared[t * H + d] = (static_cast<int>((t * H + d) % 11) - 5) * 0.3f;
+    }
+  }
+  const auto gpu_parts = upload(cpu_tensor({T * K, H}, parts), stream);
+  const auto gpu_weights = upload(cpu_tensor({T, K}, expected_weights), stream);
+  auto output = Tensor::empty({T, H}, DataType::Float32, Device::cuda(0));
+  kernels::cuda::moe_combine(gpu_parts.view(), gpu_weights.view(),
+                             output.view(), stream);
+  compare(download<float>(output, stream), expected, "batch combine", 2e-6f,
+          2e-6f);
+  const auto gpu_shared = upload(cpu_tensor({T, H}, shared), stream);
+  const auto gpu_gates = upload(cpu_tensor({T, 1}, gates), stream);
+  kernels::cuda::moe_add_shared(gpu_shared.view(), gpu_gates.view(),
+                                output.view(), stream);
+  for (std::size_t t = 0; t < T; ++t) {
+    const double gate = 1.0 / (1.0 + std::exp(-double(gates[t])));
+    for (std::size_t d = 0; d < H; ++d)
+      expected[t * H + d] =
+          float(expected[t * H + d] + gate * shared[t * H + d]);
+  }
+  compare(download<float>(output, stream), expected, "batch shared gates",
+          2e-6f, 2e-6f);
+  require(download<float>(gpu_shared, stream) == shared
+              && download<float>(gpu_gates, stream) == gates,
+          "batch shared addition modified an input");
+}
+
 void check_gpu_moe(const MoE& cpu, const Tensor& input, cudaStream_t stream,
                    const std::string& label) {
   const auto expected = reference(cpu, input);
+  const auto tokens = input.shape()[0];
+  check_reference(expected, cpu.config(), tokens);
   for (const auto mode :
        {ExpertExecutionMode::Synchronous, ExpertExecutionMode::Overlap}) {
     MoE gpu(cpu.config(), Device::cuda(0), std::nullopt, mode);
@@ -401,8 +515,20 @@ void check_gpu_moe(const MoE& cpu, const Tensor& input, cudaStream_t stream,
     const auto gpu_input = upload(input, stream);
     const auto actual = gpu.forward(gpu_input.view(), stream);
     require(
-        actual.gpu_experts == cpu.config().top_k && actual.cpu_experts == 0,
+        actual.gpu_experts == tokens * cpu.config().top_k
+            && actual.cpu_experts == 0,
         label + ": default cache should execute all selected experts on GPU");
+    const auto expect_shape = [&](const Tensor& tensor,
+                                  const std::vector<std::size_t>& shape) {
+      require(std::ranges::equal(tensor.shape(), shape),
+              label + ": wrong tensor shape");
+    };
+    expect_shape(actual.hidden_states, {tokens, cpu.config().hidden_size});
+    expect_shape(actual.router_logits, {tokens, cpu.config().num_experts});
+    expect_shape(actual.expert_ids, {tokens, cpu.config().top_k});
+    expect_shape(actual.expert_weights, {tokens, cpu.config().top_k});
+    expect_shape(actual.expert_outputs,
+                 {tokens * cpu.config().top_k, cpu.config().hidden_size});
     require(download<std::int32_t>(actual.expert_ids, stream)
                 == expected.expert_ids,
             label + ": expert ID mismatch");
@@ -413,6 +539,9 @@ void check_gpu_moe(const MoE& cpu, const Tensor& input, cudaStream_t stream,
     compare(download<float>(actual.expert_outputs, stream),
             expected.expert_outputs, label + " expert outputs");
     if (cpu.config().shared_expert_intermediate_size != 0) {
+      expect_shape(actual.shared_expert_output,
+                   {tokens, cpu.config().hidden_size});
+      expect_shape(actual.shared_gate_logits, {tokens, 1});
       compare(download<float>(actual.shared_expert_output, stream),
               expected.shared_expert_output, label + " raw shared output");
       compare(download<float>(actual.shared_gate_logits, stream),
@@ -427,6 +556,25 @@ void check_gpu_moe(const MoE& cpu, const Tensor& input, cudaStream_t stream,
     std::cout << (mode == ExpertExecutionMode::Overlap ? "overlap " : "sync ")
               << label << ": max output error = " << maximum << '\n';
 
+    // Compare batching to row-by-row execution with FP32 rounding tolerance.
+    if (tokens > 1) {
+      const auto batch_values = download<float>(actual.hidden_states, stream);
+      const auto batch_ids = download<std::int32_t>(actual.expert_ids, stream);
+      for (std::size_t t = 0; t < tokens; ++t) {
+        const auto one = gpu.forward(gpu_input.view().slice(0, t, 1), stream);
+        compare(download<float>(one.hidden_states, stream),
+                std::span<const float>(batch_values)
+                    .subspan(t * cpu.config().hidden_size,
+                             cpu.config().hidden_size),
+                label + " batch vs single row");
+        const auto one_ids = download<std::int32_t>(one.expert_ids, stream);
+        require(std::equal(one_ids.begin(), one_ids.end(),
+                           batch_ids.begin() + t * cpu.config().top_k),
+                label + ": batch and single-token routes differ");
+      }
+      require(download<float>(actual.hidden_states, stream) == batch_values,
+              label + ": single-token calls overwrote retained batch output");
+    }
     // Repeating forward also exercises temporary-buffer lifetimes and reuse.
     const auto repeated = gpu.forward(gpu_input.view(), stream);
     compare(download<float>(repeated.hidden_states, stream),
@@ -462,6 +610,7 @@ int test_gpu() {
   }
   test_combine(stream.handle);
   test_add_shared(stream.handle);
+  test_batch_kernels(stream.handle);
   std::cout << "CUDA route/combine: ties, extreme scores, multi-block widths "
                "passed\n";
 
@@ -497,6 +646,21 @@ int test_gpu() {
     check_gpu_moe(cpu, random_input(config.hidden_size, 7), stream.handle,
                   "shared E=" + std::to_string(config.num_experts)
                       + " K=" + std::to_string(config.top_k));
+  }
+  for (const auto config :
+       {MoEConfig{128, 64, 16, 2}, MoEConfig{128, 64, 16, 2, 37},
+        MoEConfig{7, 5, 5, 1, 3}, MoEConfig{9, 7, 5, 5, 11},
+        MoEConfig{3, 2, 1, 1, 4}}) {
+    MoE cpu(config, Device::cpu());
+    initialize(cpu, 42);
+    for (const std::size_t tokens : {2u, 5u, 17u}) {
+      check_gpu_moe(
+          cpu, random_input(config.hidden_size, 7, tokens), stream.handle,
+          "batch T=" + std::to_string(tokens)
+              + " E=" + std::to_string(config.num_experts)
+              + " K=" + std::to_string(config.top_k) + " Is="
+              + std::to_string(config.shared_expert_intermediate_size));
+    }
   }
   MoE tied({128, 64, 16, 2}, Device::cpu());
   initialize(tied, 11, true);

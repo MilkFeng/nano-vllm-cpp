@@ -184,8 +184,8 @@ struct Stream {
 };
 
 Tensor upload(const Tensor& cpu, cudaStream_t stream) {
-  auto gpu =
-      Tensor::empty({1, cpu.shape()[1]}, DataType::Float32, Device::cuda(0));
+  auto gpu = Tensor::empty({cpu.shape().begin(), cpu.shape().end()},
+                           cpu.dtype(), Device::cuda(0));
   check_cuda(cudaMemcpyAsync(gpu.data(), cpu.data(), cpu.size_bytes(),
                              cudaMemcpyHostToDevice, stream),
              "upload input");
@@ -273,7 +273,8 @@ void check_forward(const MoE& cpu, const MoE& gpu, const Tensor& input,
       ++expected_hits;
   }
   require(actual.gpu_experts == expected_hits
-              && actual.cpu_experts == cpu.config().top_k - expected_hits,
+              && actual.cpu_experts
+                     == input.shape()[0] * cpu.config().top_k - expected_hits,
           label + ": wrong CPU/GPU execution counts");
   if (synchronous) {
     const auto baseline = synchronous->forward(gpu_input.view(), stream);
@@ -303,12 +304,26 @@ void check_forward(const MoE& cpu, const MoE& gpu, const Tensor& input,
   require(download<float>(repeated.hidden_states, stream)
               == download<float>(actual.hidden_states, stream),
           label + ": repeat changed output");
-  std::cout << label << ": selected=[" << expected.expert_ids[0] << ','
-            << expected.expert_ids[1] << "] GPU=" << actual.gpu_experts
-            << " CPU=" << actual.cpu_experts
+  std::cout << label << ": selected=[";
+  for (std::size_t i = 0; i < expected.expert_ids.size(); ++i) {
+    if (i != 0) std::cout << ',';
+    std::cout << expected.expert_ids[i];
+  }
+  std::cout << "] GPU=" << actual.gpu_experts << " CPU=" << actual.cpu_experts
             << " slots=" << gpu.expert_cache().num_slots()
             << " GPU weight bytes=" << gpu.expert_cache().size_bytes()
             << " max output error=" << maximum << '\n';
+}
+
+Tensor batch_input(const Fixture& fixture, std::size_t tokens) {
+  auto input = Tensor::empty({tokens, 128}, DataType::Float32);
+  for (std::size_t t = 0; t < tokens; ++t) {
+    const auto& source = t % 2 ? fixture.other_input : fixture.input;
+    auto row = input.view().slice(0, t, 1);
+    std::memcpy(row.data(), source.data(), source.size_bytes());
+    row.data<float>()[2] += float(t) * 0.01f;
+  }
+  return input;
 }
 
 void check_layout(const Fixture& fixture,
@@ -360,6 +375,24 @@ void check_layout(const Fixture& fixture,
                 label + " different route");
   check_forward(fixture.cpu, gpu, fixture.input, stream,
                 label + " first again");
+  for (const std::size_t tokens : {2u, 5u}) {
+    const auto input = batch_input(fixture, tokens);
+    check_forward(fixture.cpu, overlapping, input, stream,
+                  label + " batch T=" + std::to_string(tokens), &gpu);
+  }
+  // Change batch size and stream after a completed call; retained outputs stay
+  // valid.
+  const auto input = batch_input(fixture, 5);
+  const auto gpu_input = upload(input, stream);
+  const auto retained = overlapping.forward(gpu_input.view(), stream);
+  const auto values = download<float>(retained.hidden_states, stream);
+  const auto parts = download<float>(retained.expert_outputs, stream);
+  Stream another;
+  check_forward(fixture.cpu, overlapping, batch_input(fixture, 3),
+                another.handle, label + " batch T=3 another stream", &gpu);
+  require(download<float>(retained.hidden_states, stream) == values
+              && download<float>(retained.expert_outputs, stream) == parts,
+          label + ": later batch calls overwrote retained outputs");
   for (const auto id : {2u, 7u}) {
     const bool resident =
         std::ranges::find(resident_ids, id) != resident_ids.end();
@@ -465,6 +498,8 @@ int test_gpu() {
   check_layout(shared, all, stream.handle, "shared all GPU");
   check_layout(shared, {}, stream.handle, "shared all CPU routed");
   check_layout(shared, {4, 2, 9, 0}, stream.handle, "shared mixed four slots");
+  check_layout(shared, {2, 5, 7, 11}, stream.handle,
+               "shared hit/miss token rows");
   test_workspace_reuse(fixture, stream.handle);
   test_refresh(fixture, stream.handle, ExpertExecutionMode::Synchronous);
   test_refresh(fixture, stream.handle, ExpertExecutionMode::Overlap);

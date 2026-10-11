@@ -85,32 +85,54 @@ FP16/BF16 的舍入会受 GEMM 的 batch 大小影响；候选分数接近时，
 
 ## 学习用 MoE
 
-`src/layers/moe.hh/.cc` 实现一个独立的 routed MoE 层，先支持单 token、FP32，
-维度由 `MoEConfig` 指定。例如 `H=128, I=64, E=16, K=2`：
+`src/layers/moe.hh/.cc` 实现一个独立的 routed MoE 层，支持 FP32 的 `[T,H]`
+输入，`T > 0`。维度由 `MoEConfig` 指定，例如 `H=128, I=64, E=16, K=2`。
+`T` 是本次输入的 token 总数；每个 token 的 FFN 独立计算，可以来自不同请求，
+不需要 attention 的序列边界或 KV 元数据。
 
 ```text
-x[1,H] → Router Linear → softmax → top-k → 选中概率重新归一化
-       → K 个 SwiGLUMLP → 按路由权重求和 → y[1,H]
+x[T,H] → Router Linear → logits[T,E]
+       → 每个 token 独立 softmax、top-k、选中概率重新归一化
+       → 逐 token 执行 K 个 SwiGLUMLP
+       → 每个 token 按自己的路由权重求和 → y[T,H]
 ```
 
-`MoE::forward()` 返回最终输出，以及 Router logits、专家编号、路由权重和
-未加权的专家输出。专家输出的行顺序与 Router 的排名一致；路由权重只在
-combine 时应用一次。权重可通过 `Module::named_parameters()` 初始化；测试
-展示了完整的权重初始化和运行方式。
+`MoE::forward()` 返回最终输出和以下中间结果：
+
+| 字段 | 形状 | 含义 |
+| --- | --- | --- |
+| `hidden_states` | `[T,H]` | routed 与可选共享分支的最终输出 |
+| `router_logits` | `[T,E]` | softmax 之前的 Router 输出 |
+| `expert_ids` | `[T,K]` | 每个 token 按 Router 排名选出的专家编号 |
+| `expert_weights` | `[T,K]` | 每行独立归一化，和为 1 |
+| `expert_outputs` | `[T*K,H]` | 第 `t*K+rank` 行是 token `t` 的第 `rank` 个专家原始输出 |
+| `shared_expert_output` | `[T,H]` | 未乘门控的共享专家输出；关闭分支时为空 |
+| `shared_gate_logits` | `[T,1]` | sigmoid 之前的共享门控；关闭分支时为空 |
+
+专家输出按 token、Router 排名排列；路由权重只在 combine 时应用一次。
+不同 token 可以选中同一专家。`T=1` 时保留原有形状，包括 `[K,H]` 的专家输出。
+权重可通过 `Module::named_parameters()` 初始化；测试展示了完整的运行方式。
 
 全部 routed 专家权重保存在 RAM 中的 `ExpertStore`，模型参数名仍为
 `experts.N.gate_proj.weight` 等。GPU 的 `ExpertCache` 只分配固定名单对应的
 专家槽位，缓存副本不注册为额外模型参数。Router 在 GPU 上计算，命中的专家
 在 GPU 槽位上执行，未命中的专家在 CPU 上执行；CPU 输出复制回 GPU 后统一
-combine。有未命中时，每次 forward 只下载一次输入向量。
+combine。Router 的整批专家编号一次下载到 CPU；对每个有未命中的 token，
+只下载一次输入向量，由它的全部 CPU 专家复用。
 
 ```text
-Router → expert_ids
-       → ExpertExecutor
-           ├── ExpertCache 命中 → GPU SwiGLUMLP
-           └── 未命中 → ExpertStore → CPU expert_forward → 上传输出
-       → CUDA combine → y
+批量 Router → expert_ids[T,K]
+            → for each token: ExpertExecutor(input[1,H], ids[1,K])
+                ├── ExpertCache 命中 → GPU SwiGLUMLP
+                └── 未命中 → ExpertStore → CPU expert_forward → 上传输出
+            → 按 token 和排名收集 expert_outputs[T*K,H]
+            → CUDA combine → y[T,H]
 ```
+
+这一版复用单 token `ExpertExecutor`，逐 token 分派，每个 token 执行完才处理
+下一个。每次执行返回的专家输出复制到整批输出中；源 Tensor 保留到最终 stream
+同步完成，保证异步复制的源仍然有效。这会额外暂存 `T*K*H*sizeof(float)` 字节
+的专家输出，尚未实现按专家聚合多个 token 的执行方式。
 
 固定驻留名单通过第三个构造参数传入。例如缓存 4 个专家：
 
@@ -127,10 +149,11 @@ routed 专家参数在 CPU，Router 参数在所选设备上；复制参数时�
 省略驻留名单（`std::nullopt`）缓存全部 routed 专家；传入显式空向量
 `std::vector<std::int32_t>{}` 分配零个 GPU 专家槽位，全部选中 routed 专家在 CPU 执行。
 CPU 构造只创建参考权重。`MoEOutput` 的 `gpu_experts`、`cpu_experts` 记录
-本次选中 routed 专家的执行数量，不包含共享分支；`expert_cache().num_slots()`
+整批 `T*K` 次 routed 专家选择的执行数量，不包含共享分支，同一专家被不同
+token 选中会分别计数；`expert_cache().num_slots()`
 和 `size_bytes()` 只统计 routed 缓存槽位和权重，不包含 Router、共享专家及工作区。
 
-当前支持单 token、FP32、1..1024 个专家、`1 <= top_k <= E`。缓存名单固定，
+当前支持多 token、FP32、1..1024 个专家、`1 <= top_k <= E`。缓存名单固定，
 populate/forward 同步传入的 stream，调用需串行。量化、动态换入换出作为后续
 步骤；当前文本生成使用原有 Qwen3 模型。
 
@@ -143,8 +166,9 @@ populate/forward 同步传入的 stream，调用需串行。量化、动态换�
 y = routed_sum + sigmoid(shared_expert_gate(x)) * shared_expert(x)
 ```
 
-共享专家每次 forward 都执行，不参与 Router 的 top-k，也不参与选中专家概率的
-归一化。它的中间维度可以与 routed 专家不同。门控 logit 为 `0` 时，sigmoid
+共享专家对整批 token 执行，每个 token 使用自己的门控，不参与 Router 的
+top-k，也不参与选中专家概率的归一化。它的中间维度可以与 routed 专家不同。
+门控 logit 为 `0` 时，sigmoid
 系数是 `0.5`；关闭分支应将配置维度设为 `0`。
 
 ```cpp
@@ -177,8 +201,8 @@ GPU 构造时这四个参数常驻 GPU，不占 routed expert cache 的槽位；
 通过 `kernels::cuda::moe_add_shared()` 原地加入输出。同步和 Overlap 模式使用
 相同共享分支；共享分支尚未加入 CPU/GPU 计算重叠，工作区使用现有层的临时分配。
 
-`MoEOutput::shared_expert_output` 返回未经门控的 `[1,H]` 输出，
-`shared_gate_logits` 返回 sigmoid 之前的 `[1,1]` logit；关闭分支时两者为空。
+`MoEOutput::shared_expert_output` 返回未经门控的 `[T,H]` 输出，
+`shared_gate_logits` 返回 sigmoid 之前的 `[T,1]` logits；关闭分支时两者为空。
 最终 `hidden_states` 包含 routed 和共享两部分。CPU 参考接口的可选
 `SharedExpertWeights` 传入这四个权重，默认省略时保持原有 routed 计算。
 
@@ -193,9 +217,10 @@ MoE moe({128, 64, 16, 2}, Device::cuda(0),
         ExpertExecutionMode::Overlap);
 ```
 
-Overlap 先划分 GPU hits / CPU misses，有 misses 时下载一次输入并等待完成，
-随后提交全部 GPU hits，再由调用线程计算 CPU misses。CPU 输出上传到原始排名
-对应的行；一个 stream 保证 GPU 专家、上传和 combine 的顺序。`forward()`
+对每个 token，Overlap 先划分 GPU hits / CPU misses，有 misses 时下载一次
+该 token 的输入并等待完成，随后提交它的全部 GPU hits，再由调用线程计算 CPU
+misses。CPU 输出上传到原始排名对应的行；一个 stream 保证 GPU 专家、上传和
+combine 的顺序。重叠发生在同一个 token 内，token 之间仍逐个执行。`forward()`
 完成后才返回，同一个对象的调用仍需串行，完成后可以改用另一个 stream。
 
 `SwiGLUMLP::forward_into()` 使用预先分配的 gate/up/activated 工作区，直接

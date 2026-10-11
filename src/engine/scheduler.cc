@@ -149,9 +149,14 @@ Scheduled Scheduler::schedule() {
 
   // A sequence preempted itself after exhausting the final block. Its released
   // blocks can now be reused for prefill; do not leave the engine spinning.
-  if (scheduled_seqs.empty() && !waitings_.empty()) return schedule();
+  if (scheduled_seqs.empty() && !waitings_.empty()) {
+    return schedule();
+  }
 
-  if (scheduled_seqs.empty()) return {.seq_ids = {}, .prefill = false};
+  if (scheduled_seqs.empty()) {
+    return {.seq_ids = {}, .prefill = false};
+  }
+
   pending_ = Scheduled{.seq_ids = std::move(scheduled_seqs), .prefill = false};
   return *pending_;
 }

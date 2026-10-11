@@ -401,35 +401,56 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
   assert(same_dtype(hidden_states, gate_.weight().view()));
   assert(hidden_states.is_contiguous());
   assert(hidden_states.rank() == 2);
-  assert(hidden_states.shape()[0] == 1);
+  assert(hidden_states.shape()[0] > 0);
   assert(hidden_states.shape()[1] == config_.hidden_size);
   if (!cache_->ready()) {
     throw std::logic_error(
         "call populate_expert_cache after initializing MoE weights");
   }
 
+  const auto tokens = hidden_states.shape()[0];
   const auto device = hidden_states.device();
   auto logits = gate_.forward(hidden_states, stream);
-  auto ids = Tensor::empty({1, config_.top_k}, DataType::Int32, device);
-  auto weights = Tensor::empty({1, config_.top_k}, DataType::Float32, device);
+  auto ids = Tensor::empty({tokens, config_.top_k}, DataType::Int32, device);
+  auto weights =
+      Tensor::empty({tokens, config_.top_k}, DataType::Float32, device);
   kernels::cuda::moe_route(logits.view().as_const(), ids.view(), weights.view(),
                            stream);
 
-  std::vector<std::int32_t> host_ids(config_.top_k);
+  std::vector<std::int32_t> host_ids(tokens * config_.top_k);
   check_cuda(cudaMemcpyAsync(host_ids.data(), ids.data(), ids.size_bytes(),
                              cudaMemcpyDeviceToHost, stream),
              "copy MoE expert IDs to CPU");
   check_cuda(cudaStreamSynchronize(stream), "complete MoE routing");
 
-  auto executed = executor_->forward(hidden_states, host_ids, stream);
+  auto expert_outputs = Tensor::empty(
+      {tokens * config_.top_k, config_.hidden_size}, DataType::Float32, device);
+  std::size_t gpu_experts = 0, cpu_experts = 0;
+  // Retain each source until queued D2D copies finish on this stream.
+  std::vector<Tensor> token_outputs;
+  token_outputs.reserve(tokens);
+  for (std::size_t t = 0; t < tokens; ++t) {
+    const auto selected = std::span<const std::int32_t>(host_ids).subspan(
+        t * config_.top_k, config_.top_k);
+    auto executed =
+        executor_->forward(hidden_states.slice(0, t, 1), selected, stream);
+    auto destination =
+        expert_outputs.view().slice(0, t * config_.top_k, config_.top_k);
+    check_cuda(cudaMemcpyAsync(
+                   destination.data(), executed.expert_outputs.data(),
+                   destination.size_bytes(), cudaMemcpyDeviceToDevice, stream),
+               "copy token expert rows into batch");
+    gpu_experts += executed.gpu_experts;
+    cpu_experts += executed.cpu_experts;
+    token_outputs.push_back(std::move(executed.expert_outputs));
+  }
   auto output =
-      Tensor::empty({1, config_.hidden_size}, DataType::Float32, device);
-  kernels::cuda::moe_combine(executed.expert_outputs.view().as_const(),
+      Tensor::empty({tokens, config_.hidden_size}, DataType::Float32, device);
+  kernels::cuda::moe_combine(expert_outputs.view().as_const(),
                              weights.view().as_const(), output.view(), stream);
   Tensor shared_output, shared_gate_logits;
   if (shared_expert_) {
-    // Keep the two branches explicit: routed sum + sigmoid(gate) * shared MLP.
-    // This first version computes the shared branch after routed dispatch.
+    // Both shared layers already accept [T,H]; each token has its own gate.
     shared_output = shared_expert_->forward(hidden_states, stream);
     shared_gate_logits = shared_expert_gate_->forward(hidden_states, stream);
     kernels::cuda::moe_add_shared(shared_output.view().as_const(),
@@ -441,9 +462,9 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
           std::move(logits),
           std::move(ids),
           std::move(weights),
-          std::move(executed.expert_outputs),
-          executed.gpu_experts,
-          executed.cpu_experts,
+          std::move(expert_outputs),
+          gpu_experts,
+          cpu_experts,
           std::move(shared_output),
           std::move(shared_gate_logits)};
 }

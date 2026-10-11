@@ -53,22 +53,23 @@ void apply_rotary_embedding(ConstTensorView positions, TensorView query,
 
 inline constexpr std::size_t kMaxMoEExperts = 1024;
 
-// Single-token routing. Finite Float32 logits: [1,E], 1 <= E <= 1024.
-// expert_ids: Int32 [1,K]; expert_weights: Float32 [1,K], 1 <= K <= E.
+// Per-token routing. Finite Float32 logits: [T,E], T>0, 1 <= E <= 1024.
+// expert_ids: Int32 [T,K]; expert_weights: Float32 [T,K], 1 <= K <= E.
+// One CUDA block per token; T must fit CUDA's grid.x limit (INT32_MAX).
 // Computes softmax over all experts, picks top-k by score (lowest ID on ties),
 // and renormalizes selected probabilities to sum to 1. All views are disjoint.
 void moe_route(ConstTensorView logits, TensorView expert_ids,
                TensorView expert_weights, cudaStream_t stream = nullptr);
 
-// expert_outputs: Float32 [K,H], rows in router rank order, still unweighted.
-// expert_weights: Float32 [1,K]; output: Float32 [1,H]. K,H > 0.
-// Applies router weights exactly once. All views are disjoint.
+// expert_outputs: Float32 [T*K,H], row t*K+rank, still unweighted.
+// expert_weights: Float32 [T,K]; output: Float32 [T,H]. T,K,H > 0.
+// Applies each token's router weights exactly once. All views are disjoint.
 void moe_combine(ConstTensorView expert_outputs, ConstTensorView expert_weights,
                  TensorView output, cudaStream_t stream = nullptr);
 
 // In-place addition: output += sigmoid(gate_logits) * shared_output.
-// shared_output/output: Float32 [1,H]; gate_logits: Float32 [1,1], finite.
-// H > 0; views must be disjoint. Routing and routed weights are unchanged.
+// shared_output/output: Float32 [T,H]; gate_logits: Float32 [T,1], finite.
+// T,H > 0; each token uses its own gate. All views are disjoint.
 void moe_add_shared(ConstTensorView shared_output, ConstTensorView gate_logits,
                     TensorView output, cudaStream_t stream = nullptr);
 

@@ -122,31 +122,33 @@ struct MoEConfig {
   void validate() const;
 };
 
-// Nonempty tensor outputs live on CUDA. Expert rows follow router rank, not ID
-// or cache slot. Weights are applied once when combining the unweighted rows.
+// Nonempty outputs live on CUDA, in token order. Expert row t*K+rank belongs
+// to token t and its router rank, not expert ID/cache slot. Weights are applied
+// once in combine. T=1 keeps the original [K,H] expert output layout.
 struct MoEOutput {
-  Tensor hidden_states;  // Float32 [1,H].
-  Tensor router_logits;  // Float32 [1,E].
-  Tensor expert_ids;     // Int32 [1,K].
-  Tensor expert_weights; // Float32 [1,K], sum to 1.
-  Tensor expert_outputs; // Float32 [K,H].
-  // Execution counts cover routed experts, excluding the shared branch.
+  Tensor hidden_states;  // Float32 [T,H].
+  Tensor router_logits;  // Float32 [T,E].
+  Tensor expert_ids;     // Int32 [T,K].
+  Tensor expert_weights; // Float32 [T,K], each row sums to 1.
+  Tensor expert_outputs; // Float32 [T*K,H], unweighted.
+  // Counts cover all T*K routed selections, excluding the shared branch.
   std::size_t gpu_experts = 0;
   std::size_t cpu_experts = 0;
   // Shared intermediates are empty when the branch is disabled.
-  Tensor shared_expert_output; // Raw Float32 [1,H].
-  Tensor shared_gate_logits;   // Float32 [1,1], before sigmoid.
+  Tensor shared_expert_output; // Raw Float32 [T,H].
+  Tensor shared_gate_logits;   // Float32 [T,1], before sigmoid.
 };
 
-// Single-token FP32 MoE with an optional Qwen3.5-style shared branch. Routed
+// FP32 MoE for [T,H], T>0, with an optional Qwen3.5-style shared branch. Routed
 // expert parameters are in RAM; only the fixed resident list is copied to GPU.
 // The shared expert and its H->1 sigmoid gate stay on the selected device,
 // outside the routed cache. nullopt caches all routed experts; an empty
 // vector caches none. CPU construction creates reference weights without CUDA
 // allocations. Initialize parameters, then populate_expert_cache(), then
 // forward(). Input shape/device/dtype use Debug assertions.
-// Calls are serialized; populate/forward synchronize the supplied
-// CUDA stream.
+// Router and shared branch process T tokens together. Routed experts are
+// dispatched one token at a time with the single-token ExpertExecutor.
+// Calls are serialized; populate/forward synchronize the supplied CUDA stream.
 class MoE final : public Module {
  public:
   explicit MoE(

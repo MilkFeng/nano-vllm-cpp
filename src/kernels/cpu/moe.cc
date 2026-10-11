@@ -55,27 +55,11 @@ std::vector<float> expert_forward(const ExpertWeights& weights,
   return matvec(weights.down, gate);
 }
 
-} // namespace
-
-MoEReferenceOutput moe_reference(
-    ConstTensorView input, ConstTensorView router_weight,
+MoEReferenceOutput reference_token(
+    std::span<const float> x, ConstTensorView router_weight,
     std::span<const ExpertWeights> experts, std::size_t top_k,
     std::optional<SharedExpertWeights> shared_expert) {
-  if (input.rank() != 2 || input.shape()[0] != 1 || input.shape()[1] == 0
-      || experts.empty() || top_k == 0 || top_k > experts.size()) {
-    throw std::invalid_argument(
-        "invalid single-token MoE reference dimensions");
-  }
-  const auto hidden_size = input.shape()[1];
-  validate_matrix(input, 1, hidden_size);
-  validate_matrix(router_weight, experts.size(), hidden_size);
-  for (const auto& expert : experts) validate_expert(expert, hidden_size);
-  if (shared_expert) {
-    validate_expert(shared_expert->expert, hidden_size);
-    validate_matrix(shared_expert->gate_weight, 1, hidden_size);
-  }
-
-  const std::span<const float> x(input.data<float>(), hidden_size);
+  const auto hidden_size = x.size();
   MoEReferenceOutput result;
   result.router_logits = matvec(router_weight, x);
   for (const auto score : result.router_logits) {
@@ -140,6 +124,45 @@ MoEReferenceOutput moe_reference(
       result.hidden_states[d] = static_cast<float>(
           result.hidden_states[d] + weight * result.shared_expert_output[d]);
     }
+  }
+  return result;
+}
+
+} // namespace
+
+MoEReferenceOutput moe_reference(
+    ConstTensorView input, ConstTensorView router_weight,
+    std::span<const ExpertWeights> experts, std::size_t top_k,
+    std::optional<SharedExpertWeights> shared_expert) {
+  if (input.rank() != 2 || input.shape()[0] == 0 || input.shape()[1] == 0
+      || experts.empty() || top_k == 0 || top_k > experts.size()) {
+    throw std::invalid_argument("invalid MoE reference dimensions");
+  }
+  const auto tokens = input.shape()[0], hidden_size = input.shape()[1];
+  validate_matrix(input, tokens, hidden_size);
+  validate_matrix(router_weight, experts.size(), hidden_size);
+  for (const auto& expert : experts) validate_expert(expert, hidden_size);
+  if (shared_expert) {
+    validate_expert(shared_expert->expert, hidden_size);
+    validate_matrix(shared_expert->gate_weight, 1, hidden_size);
+  }
+
+  MoEReferenceOutput result;
+  const auto append = [](auto& destination, const auto& source) {
+    destination.insert(destination.end(), source.begin(), source.end());
+  };
+  for (std::size_t t = 0; t < tokens; ++t) {
+    const std::span<const float> x(input.data<float>() + t * hidden_size,
+                                   hidden_size);
+    const auto row =
+        reference_token(x, router_weight, experts, top_k, shared_expert);
+    append(result.hidden_states, row.hidden_states);
+    append(result.router_logits, row.router_logits);
+    append(result.expert_ids, row.expert_ids);
+    append(result.expert_weights, row.expert_weights);
+    append(result.expert_outputs, row.expert_outputs);
+    append(result.shared_expert_output, row.shared_expert_output);
+    append(result.shared_gate_logits, row.shared_gate_logits);
   }
   return result;
 }
