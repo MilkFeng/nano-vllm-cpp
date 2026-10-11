@@ -62,6 +62,13 @@ void apply_rotary_embedding(ConstTensorView positions, TensorView query,
                             TensorView key, ConstTensorView cos_sin_cache,
                             cudaStream_t stream = nullptr);
 
+// FP32 packed [T,2*H*D] -> query/gate [T,H,D]. Each head is [Q_D, gate_D].
+void split_attention_gate(ConstTensorView packed, TensorView query,
+                          TensorView gate, cudaStream_t stream = nullptr);
+// In place: output *= sigmoid(gate). Same shape/dtype (FP32), disjoint buffers.
+void apply_sigmoid_gate(TensorView output, ConstTensorView gate,
+                        cudaStream_t stream = nullptr);
+
 inline constexpr std::size_t kMaxMoEExperts = 1024;
 
 // Per-token routing. Finite Float32 logits: [T,E], T>0, 1 <= E <= 1024.

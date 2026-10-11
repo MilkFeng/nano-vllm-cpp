@@ -1,36 +1,149 @@
 #pragma once
 
 #include <cstddef>
-#include <string_view>
+#include <cstdint>
+#include <memory>
+#include <optional>
+#include <vector>
 
-#include "core/checkpoint.hh"
 #include "core/model.hh"
 #include "core/model_config.hh"
+#include "layers/embedding.hh"
+#include "layers/gated_delta_net.hh"
+#include "layers/lm_head.hh"
 #include "layers/moe.hh"
+#include "layers/rms_norm.hh"
+#include "layers/rotary_embedding.hh"
 
 namespace nanovllm {
 
-// Model-specific construction stays here; core config has no layer dependency.
-[[nodiscard]] MoEConfig qwen35_moe_config(const ModelConfig& config);
+// Full attention: doubled Q projection contains per-head [query, gate].
+// Gates use sigmoid after attention, before o_proj. Computation is FP32.
+class Qwen35Attention final : public Module {
+ public:
+  Qwen35Attention(const ModelConfig& config, Device device);
+  [[nodiscard]] Tensor forward(ConstTensorView positions,
+                               ConstTensorView hidden_states,
+                               const ForwardContext& context) const;
+  void set_kv_cache(TensorView key, TensorView value);
+  void clear_kv_cache() noexcept;
+  [[nodiscard]] ConstTensorView key_cache() const;
+  [[nodiscard]] ConstTensorView value_cache() const;
 
-// Loads registered, non-expert FP32 parameters by prefix + parameter name.
-// BF16/F32 sources may have any shape. F8_E4M3 matrices are expanded with the
-// sibling weight_scale_inv (BF16/F32, 128x128 blocks). Unregistered checkpoint
-// tensors are ignored. All metadata is checked before writing parameters.
-// Copies are synchronous; loading must be serialized with forward. Result
-// counts unique source tensors/bytes, including scales used for expansion.
-[[nodiscard]] ModelLoadResult load_qwen35_module(
-    Module& module, const ModelConfig& config, const Checkpoint& checkpoint,
-    std::string_view checkpoint_prefix = {});
+ private:
+  std::size_t hidden_size_, num_heads_, num_kv_heads_, head_dim_, q_size_;
+  float scaling_;
+  Linear q_proj_, k_proj_, v_proj_, o_proj_;
+  RMSNorm q_norm_, k_norm_;
+  RotaryEmbedding rotary_emb_;
+  TensorView key_cache_, value_cache_;
+};
 
-// Loads model.language_model.layers.L.mlp.*. Routed FP8 bytes stay on CPU;
-// router, shared expert and all scales are converted to FP32. Validates before
-// invalidating the old cache; populate_expert_cache() after a successful load,
-// including zero-slot GPU caches. Copy failures may leave partial parameters,
-// but cannot leave an executable stale GPU cache. Serialize with forward/cache
-// population. The generic non-expert loader must not be used on a MoE.
-[[nodiscard]] ModelLoadResult load_qwen35_moe_layer(
-    MoE& layer, const ModelConfig& config, const Checkpoint& checkpoint,
-    std::size_t layer_index);
+// Caller-owned execution state. Only full layers allocate paged KV; only
+// linear layers allocate conv/recurrent state. Runtime state is not registered
+// as checkpoint parameters. Keep it alive while bound; use the same stream
+// for reset/forward, or synchronize before switching streams.
+class Qwen35Cache final {
+ public:
+  Qwen35Cache(const ModelConfig& config, std::size_t num_blocks,
+              std::size_t block_size, std::size_t state_slots,
+              Device device = Device::cuda(0));
+  Qwen35Cache(const Qwen35Cache&) = delete;
+  Qwen35Cache& operator=(const Qwen35Cache&) = delete;
+  // Resets linear state for a new sequence. KV visibility is controlled by
+  // block tables/context lengths, so old unused KV slots need not be cleared.
+  void reset_state(std::size_t slot, cudaStream_t stream = nullptr);
+  [[nodiscard]] TensorView key_cache(std::size_t full_layer);
+  [[nodiscard]] TensorView value_cache(std::size_t full_layer);
+  [[nodiscard]] TensorView conv_state(std::size_t linear_layer);
+  [[nodiscard]] TensorView recurrent_state(std::size_t linear_layer);
+  [[nodiscard]] std::size_t kv_bytes() const;
+  [[nodiscard]] std::size_t state_bytes() const;
+
+ private:
+  Tensor key_, value_, conv_, recurrent_;
+};
+
+struct Qwen35DecoderLayerOutput {
+  Tensor hidden_states;
+  Tensor residual;
+};
+
+class Qwen35DecoderLayer final : public Module {
+ public:
+  Qwen35DecoderLayer(const ModelConfig& config, std::size_t index,
+                     Device device,
+                     const std::vector<std::int32_t>& gpu_expert_ids,
+                     ExpertExecutionMode mode);
+  [[nodiscard]] Qwen35DecoderLayerOutput forward(
+      ConstTensorView positions, ConstTensorView hidden_states,
+      std::optional<ConstTensorView> residual,
+      const ForwardContext& context) const;
+  [[nodiscard]] Qwen35Attention* self_attention() noexcept;
+  [[nodiscard]] GatedDeltaNet* linear_attention() noexcept;
+  [[nodiscard]] MoE& mlp() noexcept;
+
+ private:
+  std::unique_ptr<Qwen35Attention> self_attn_;
+  std::unique_ptr<GatedDeltaNet> linear_attn_;
+  MoE mlp_;
+  RMSNorm input_layernorm_, post_attention_layernorm_;
+};
+
+class Qwen35Model final : public Module {
+ public:
+  Qwen35Model(const ModelConfig& config, Device device,
+              const std::vector<std::int32_t>& gpu_expert_ids,
+              ExpertExecutionMode mode);
+  [[nodiscard]] Tensor forward(ConstTensorView input_ids,
+                               ConstTensorView positions,
+                               const ForwardContext& context) const;
+  void set_cache(Qwen35Cache& cache);
+  void clear_cache() noexcept;
+  [[nodiscard]] Embedding& embed_tokens() noexcept;
+  [[nodiscard]] std::size_t num_layers() const noexcept;
+  [[nodiscard]] Qwen35DecoderLayer& layer(std::size_t index);
+  [[nodiscard]] const Qwen35DecoderLayer& layer(std::size_t index) const;
+
+ private:
+  Embedding embed_tokens_;
+  ModuleList layers_;
+  RMSNorm norm_;
+};
+
+// Text-only Qwen3.5 MoE, matching Qwen3ForCausalLM's forward/compute_logits
+// split. Routed weights stay FP8 in RAM; non-expert/GPU weights compute FP32.
+// gpu_expert_ids applies to every layer; empty by default to bound VRAM use.
+// CPU construction supports inspection/loading; execution requires CUDA 0.
+class Qwen35ForCausalLM final : public Model {
+ public:
+  explicit Qwen35ForCausalLM(
+      const ModelConfig& config, Device device = Device::cpu(),
+      std::vector<std::int32_t> gpu_expert_ids = {},
+      ExpertExecutionMode mode = ExpertExecutionMode::Overlap);
+  // Validates all text metadata before modifying parameters, then populates
+  // GPU expert caches. Vision/MTP sources are intentionally excluded. Other
+  // extra text tensors are rejected unless allow_unexpected_tensors=true.
+  // Loading detaches runtime caches; rebind a fresh/reset cache afterwards.
+  ModelLoadResult load_ckpt(const std::filesystem::path& path,
+                            ModelLoadOptions options = {}) override;
+  [[nodiscard]] Tensor forward(ConstTensorView input_ids,
+                               ConstTensorView positions,
+                               const ForwardContext& context) const;
+  [[nodiscard]] Tensor compute_logits(ConstTensorView hidden_states,
+                                      const ForwardContext& context) const;
+  [[nodiscard]] const ModelConfig& config() const noexcept;
+  [[nodiscard]] DataType dtype() const noexcept;
+  [[nodiscard]] Device device() const noexcept;
+  [[nodiscard]] Qwen35Model& transformer() noexcept;
+  [[nodiscard]] LMHead& lm_head() noexcept;
+
+ private:
+  ModelConfig config_;
+  Device device_;
+  Qwen35Model model_;
+  LMHead lm_head_;
+  bool loaded_ = false;
+};
 
 } // namespace nanovllm
