@@ -177,7 +177,6 @@ void test_cpu() {
   expect_invalid([] { MoE moe({128, 64, 1025, 2}, Device::cpu()); });
   expect_invalid([] { MoE moe({128, 64, 16, 0}, Device::cpu()); });
   expect_invalid([] { MoE moe({128, 64, 16, 17}, Device::cpu()); });
-  expect_invalid([&] { (void)analytic.forward(input.view()); });
   const auto experts = expert_views(analytic);
   expect_invalid([&] {
     (void)kernels::cpu::moe_reference(
@@ -266,50 +265,47 @@ void test_combine(cudaStream_t stream) {
 void check_gpu_moe(const MoE& cpu, const Tensor& input, cudaStream_t stream,
                    const std::string& label) {
   const auto expected = reference(cpu, input);
-  MoE gpu(cpu.config());
-  for (const auto& [name, parameter] : cpu.named_parameters()) {
-    const auto source = parameter->view();
-    auto destination = gpu.parameter(name).view();
-    if (destination.device() == Device::cpu()) {
-      std::memcpy(destination.data(), source.data(), source.size_bytes());
-    } else {
-      check_cuda(
-          cudaMemcpyAsync(destination.data(), source.data(),
-                          source.size_bytes(), cudaMemcpyHostToDevice, stream),
-          "upload MoE parameter");
+  for (const auto mode :
+       {ExpertExecutionMode::Synchronous, ExpertExecutionMode::Overlap}) {
+    MoE gpu(cpu.config(), Device::cuda(0), std::nullopt, mode);
+    for (const auto& [name, parameter] : cpu.named_parameters()) {
+      const auto source = parameter->view();
+      auto destination = gpu.parameter(name).view();
+      if (destination.device() == Device::cpu()) {
+        std::memcpy(destination.data(), source.data(), source.size_bytes());
+      } else {
+        check_cuda(cudaMemcpyAsync(destination.data(), source.data(),
+                                   source.size_bytes(), cudaMemcpyHostToDevice,
+                                   stream),
+                   "upload MoE parameter");
+      }
     }
-  }
-  gpu.populate_expert_cache(stream);
-  const auto gpu_input = upload(input, stream);
-  const auto actual = gpu.forward(gpu_input.view(), stream);
-  require(actual.gpu_experts == cpu.config().top_k && actual.cpu_experts == 0,
-          label + ": default cache should execute all selected experts on GPU");
-  require(
-      download<std::int32_t>(actual.expert_ids, stream) == expected.expert_ids,
-      label + ": expert ID mismatch");
-  compare(download<float>(actual.router_logits, stream), expected.router_logits,
-          label + " logits");
-  compare(download<float>(actual.expert_weights, stream),
-          expected.expert_weights, label + " weights", 2e-7f, 2e-6f);
-  compare(download<float>(actual.expert_outputs, stream),
-          expected.expert_outputs, label + " expert outputs");
-  const auto maximum = compare(download<float>(actual.hidden_states, stream),
-                               expected.hidden_states, label + " output");
-  std::cout << label << ": max output error = " << maximum << '\n';
+    gpu.populate_expert_cache(stream);
+    const auto gpu_input = upload(input, stream);
+    const auto actual = gpu.forward(gpu_input.view(), stream);
+    require(
+        actual.gpu_experts == cpu.config().top_k && actual.cpu_experts == 0,
+        label + ": default cache should execute all selected experts on GPU");
+    require(download<std::int32_t>(actual.expert_ids, stream)
+                == expected.expert_ids,
+            label + ": expert ID mismatch");
+    compare(download<float>(actual.router_logits, stream),
+            expected.router_logits, label + " logits");
+    compare(download<float>(actual.expert_weights, stream),
+            expected.expert_weights, label + " weights", 2e-7f, 2e-6f);
+    compare(download<float>(actual.expert_outputs, stream),
+            expected.expert_outputs, label + " expert outputs");
+    const auto maximum = compare(download<float>(actual.hidden_states, stream),
+                                 expected.hidden_states, label + " output");
+    std::cout << (mode == ExpertExecutionMode::Overlap ? "overlap " : "sync ")
+              << label << ": max output error = " << maximum << '\n';
 
-  // Repeating forward also exercises temporary-buffer lifetimes and reuse.
-  const auto repeated = gpu.forward(gpu_input.view(), stream);
-  compare(download<float>(repeated.hidden_states, stream),
-          download<float>(actual.hidden_states, stream), label + " repeated",
-          0.0f, 0.0f);
-  auto bad_input = Tensor::empty({2, cpu.config().hidden_size},
-                                 DataType::Float32, Device::cuda(0));
-  expect_invalid(
-      [&] { (void)gpu.forward(bad_input.view().as_const(), stream); });
-  auto bad_dtype = Tensor::empty({1, cpu.config().hidden_size},
-                                 DataType::Float16, Device::cuda(0));
-  expect_invalid(
-      [&] { (void)gpu.forward(bad_dtype.view().as_const(), stream); });
+    // Repeating forward also exercises temporary-buffer lifetimes and reuse.
+    const auto repeated = gpu.forward(gpu_input.view(), stream);
+    compare(download<float>(repeated.hidden_states, stream),
+            download<float>(actual.hidden_states, stream), label + " repeated",
+            0.0f, 0.0f);
+  }
 }
 
 int test_gpu() {

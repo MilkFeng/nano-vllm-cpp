@@ -1,6 +1,8 @@
+#include <cuda_profiler_api.h>
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -144,6 +146,9 @@ void test_cpu() {
   require(empty.ready() && empty.num_slots() == 0 && empty.size_bytes() == 0,
           "empty cache should allocate no GPU expert weights");
   require(empty.slot_of(7) == -1, "empty cache lookup");
+  expect_throw<std::invalid_argument>([&] {
+    ExpertExecutor invalid(store, empty, static_cast<ExpertExecutionMode>(42));
+  });
   ExpertStore other(128, 64, 16);
   expect_throw<std::invalid_argument>(
       [&] { ExpertExecutor invalid(other, empty); });
@@ -207,7 +212,8 @@ void copy_parameters(const MoE& cpu, MoE& gpu, cudaStream_t stream) {
 }
 
 void check_forward(const MoE& cpu, const MoE& gpu, const Tensor& input,
-                   cudaStream_t stream, const std::string& label) {
+                   cudaStream_t stream, const std::string& label,
+                   const MoE* synchronous = nullptr) {
   const auto expected = reference(cpu, input);
   const auto gpu_input = upload(input, stream);
   const auto actual = gpu.forward(gpu_input.view(), stream);
@@ -232,6 +238,22 @@ void check_forward(const MoE& cpu, const MoE& gpu, const Tensor& input,
   require(actual.gpu_experts == expected_hits
               && actual.cpu_experts == 2 - expected_hits,
           label + ": wrong CPU/GPU execution counts");
+  if (synchronous) {
+    const auto baseline = synchronous->forward(gpu_input.view(), stream);
+    require(download<float>(actual.router_logits, stream)
+                    == download<float>(baseline.router_logits, stream)
+                && download<std::int32_t>(actual.expert_ids, stream)
+                       == download<std::int32_t>(baseline.expert_ids, stream)
+                && download<float>(actual.expert_weights, stream)
+                       == download<float>(baseline.expert_weights, stream)
+                && download<float>(actual.expert_outputs, stream)
+                       == download<float>(baseline.expert_outputs, stream)
+                && download<float>(actual.hidden_states, stream)
+                       == download<float>(baseline.hidden_states, stream)
+                && actual.gpu_experts == baseline.gpu_experts
+                && actual.cpu_experts == baseline.cpu_experts,
+            label + ": overlap differs from synchronous execution");
+  }
   const auto repeated = gpu.forward(gpu_input.view(), stream);
   require(download<float>(repeated.hidden_states, stream)
               == download<float>(actual.hidden_states, stream),
@@ -274,6 +296,20 @@ void check_layout(const Fixture& fixture,
     require(gpu.expert_cache().slot_of(id) == expected_slot,
             "wrong expert-to-slot mapping");
   }
+  MoE overlapping(fixture.cpu.config(), Device::cuda(0), resident_ids,
+                  ExpertExecutionMode::Overlap);
+  copy_parameters(fixture.cpu, overlapping, stream);
+  if (!resident_ids.empty()) {
+    const auto x = upload(fixture.input, stream);
+    expect_throw<std::logic_error>(
+        [&] { (void)overlapping.forward(x.view(), stream); });
+  }
+  overlapping.populate_expert_cache(stream);
+  for (const auto* input :
+       {&fixture.input, &fixture.other_input, &fixture.input}) {
+    check_forward(fixture.cpu, overlapping, *input, stream, label + " overlap",
+                  &gpu);
+  }
   check_forward(fixture.cpu, gpu, fixture.input, stream, label + " first");
   check_forward(fixture.cpu, gpu, fixture.other_input, stream,
                 label + " different route");
@@ -287,9 +323,10 @@ void check_layout(const Fixture& fixture,
   }
 }
 
-void test_refresh(Fixture& fixture, cudaStream_t stream) {
+void test_refresh(Fixture& fixture, cudaStream_t stream,
+                  ExpertExecutionMode mode) {
   MoE gpu(fixture.cpu.config(), Device::cuda(0),
-          std::vector<std::int32_t>{2, 7});
+          std::vector<std::int32_t>{2, 7}, mode);
   copy_parameters(fixture.cpu, gpu, stream);
   gpu.populate_expert_cache(stream);
   const auto& cached = gpu.expert_cache()
@@ -309,7 +346,48 @@ void test_refresh(Fixture& fixture, cudaStream_t stream) {
   compare(download<float>(cached, stream),
           {ram_weight.data<float>(), ram_weight.numel()}, "refreshed weights");
   check_forward(fixture.cpu, gpu, fixture.input, stream,
-                "explicit cache refresh");
+                mode == ExpertExecutionMode::Overlap ? "overlap cache refresh"
+                                                     : "sync cache refresh");
+}
+
+// Reuse one executor across changing K, route order, inputs and CUDA streams.
+void test_workspace_reuse(const Fixture& fixture, cudaStream_t stream) {
+  ExpertCache cache(fixture.cpu.expert_store(), {4, 2, 9, 0});
+  cache.populate(stream);
+  ExpertExecutor synchronous(fixture.cpu.expert_store(), cache);
+  ExpertExecutor overlapping(fixture.cpu.expert_store(), cache,
+                             ExpertExecutionMode::Overlap);
+  const auto x = upload(fixture.input, stream);
+  const auto other = upload(fixture.other_input, stream);
+  const std::vector<std::int32_t> initial{7, 2};
+  const auto retained = overlapping.forward(x.view(), initial, stream);
+  const auto retained_values = download<float>(retained.expert_outputs, stream);
+  std::vector<std::int32_t> all(16);
+  std::iota(all.rbegin(), all.rend(), 0);
+  const std::vector<std::vector<std::int32_t>> routes{
+      {2}, {7}, {2, 7}, {7, 2}, {9, 7, 2, 4}, all, {7, 2}};
+  Stream another;
+  for (std::size_t run = 0; run < routes.size(); ++run) {
+    const auto active_stream = run % 2 ? another.handle : stream;
+    const auto& input = run % 2 ? other : x;
+    const auto expected =
+        synchronous.forward(input.view(), routes[run], active_stream);
+    const auto actual =
+        overlapping.forward(input.view(), routes[run], active_stream);
+    require(download<float>(actual.expert_outputs, active_stream)
+                    == download<float>(expected.expert_outputs, active_stream)
+                && actual.gpu_experts == expected.gpu_experts
+                && actual.cpu_experts == expected.cpu_experts,
+            "workspace reuse changed output order or values");
+  }
+  require(download<float>(retained.expert_outputs, stream) == retained_values,
+          "later calls overwrote a retained output");
+  const std::vector<std::int32_t> bad{-1};
+  expect_throw<std::invalid_argument>(
+      [&] { (void)overlapping.forward(x.view(), bad, stream); });
+
+  std::cout << "overlap workspace: changing K/order/input/stream, retained "
+               "outputs and validation passed\n";
 }
 
 int test_gpu() {
@@ -338,7 +416,86 @@ int test_gpu() {
   check_layout(fixture, {4, 2, 9, 0}, stream.handle, "mixed four slots");
   check_layout(fixture, {0, 1, 3, 5}, stream.handle, "all miss four slots");
   check_layout(fixture, {2, 5, 7, 11}, stream.handle, "all hit four slots");
-  test_refresh(fixture, stream.handle);
+  test_workspace_reuse(fixture, stream.handle);
+  test_refresh(fixture, stream.handle, ExpertExecutionMode::Synchronous);
+  test_refresh(fixture, stream.handle, ExpertExecutionMode::Overlap);
+  return 0;
+}
+
+// Manual synthetic workload; no model downloads. Not part of timing assertions.
+int benchmark(const std::string& mode) {
+  int count = 0;
+  const auto status = cudaGetDeviceCount(&count);
+  if (status == cudaErrorNoDevice || status == cudaErrorInsufficientDriver
+      || (status == cudaSuccess && count == 0))
+    return 77;
+  check_cuda(status, "enumerate benchmark GPUs");
+  check_cuda(cudaSetDevice(0), "select benchmark GPU");
+  cudaDeviceProp properties{};
+  check_cuda(cudaGetDeviceProperties(&properties, 0),
+             "benchmark GPU properties");
+  Stream stream;
+  constexpr std::size_t H = 4096, I = 2048, E = 8;
+  ExpertStore store(H, I, E);
+  // Bounded values keep FP32 results finite at this larger shape.
+  std::uint32_t state = 456;
+  for (const auto& [name, parameter] : store.named_parameters()) {
+    auto weight = parameter->view();
+    const float scale = 1.0f / std::sqrt(static_cast<float>(weight.shape()[1]));
+    for (std::size_t i = 0; i < weight.numel(); ++i) {
+      state = state * 1664525u + 1013904223u;
+      weight.data<float>()[i] =
+          (float(state >> 8) / 16777216.0f * 2 - 1) * scale;
+    }
+  }
+  auto input = Tensor::empty({1, H}, DataType::Float32);
+  for (std::size_t i = 0; i < H; ++i)
+    input.view().data<float>()[i] = (int(i % 11) - 5) * 0.1f;
+  const auto x = upload(input, stream.handle);
+  ExpertCache cache(store, {1, 3, 5, 7});
+  cache.populate(stream.handle);
+  ExpertExecutor synchronous(store, cache);
+  ExpertExecutor overlapping(store, cache, ExpertExecutionMode::Overlap);
+  const std::vector<std::int32_t> ids{0, 1, 2, 3, 4, 5, 6, 7};
+  for (int warmup = 0; warmup < 2; ++warmup) {
+    const auto expected = synchronous.forward(x.view(), ids, stream.handle);
+    const auto actual = overlapping.forward(x.view(), ids, stream.handle);
+    require(download<float>(actual.expert_outputs, stream.handle)
+                == download<float>(expected.expert_outputs, stream.handle),
+            "benchmark modes differ");
+  }
+  std::cout << "GPU=" << properties.name << " H=" << H << " I=" << I
+            << " E=8 K=8 GPU=4 CPU=4 GPU weight bytes=" << cache.size_bytes()
+            << '\n';
+  if (mode != "--benchmark") {
+    const auto& executor =
+        mode == "--profile-overlap" ? overlapping : synchronous;
+    check_cuda(cudaProfilerStart(), "start overlap profile");
+    const auto output = executor.forward(x.view(), ids, stream.handle);
+    check_cuda(cudaProfilerStop(), "stop overlap profile");
+    std::cout << mode << ": captured one warmed-up dispatch\n";
+    return 0;
+  }
+  std::vector<double> sync_ms, overlap_ms;
+  const auto measure = [&](const ExpertExecutor& executor) {
+    const auto start = std::chrono::steady_clock::now();
+    const auto result = executor.forward(x.view(), ids, stream.handle);
+    const auto finish = std::chrono::steady_clock::now();
+    return std::chrono::duration<double, std::milli>(finish - start).count();
+  };
+  for (int run = 0; run < 7; ++run) {
+    if (run % 2 == 0) {
+      sync_ms.push_back(measure(synchronous));
+      overlap_ms.push_back(measure(overlapping));
+    } else {
+      overlap_ms.push_back(measure(overlapping));
+      sync_ms.push_back(measure(synchronous));
+    }
+  }
+  std::ranges::sort(sync_ms);
+  std::ranges::sort(overlap_ms);
+  std::cout << "7 interleaved pairs; median dispatch ms: synchronous="
+            << sync_ms[3] << " overlap=" << overlap_ms[3] << '\n';
   return 0;
 }
 
@@ -351,7 +508,13 @@ int main(int argc, char** argv) {
       return 0;
     }
     if (argc == 2 && std::string(argv[1]) == "--gpu") return test_gpu();
-    std::cerr << "Usage: nano-vllm-cpp-moe-offload-test --cpu|--gpu\n";
+    if (argc == 2
+        && (std::string(argv[1]) == "--benchmark"
+            || std::string(argv[1]) == "--profile-overlap"
+            || std::string(argv[1]) == "--profile-sync"))
+      return benchmark(argv[1]);
+    std::cerr << "Usage: nano-vllm-cpp-moe-offload-test "
+                 "--cpu|--gpu|--benchmark|--profile-overlap|--profile-sync\n";
     return 1;
   } catch (const std::exception& error) {
     std::cerr << "MoE offload test failed: " << error.what() << '\n';

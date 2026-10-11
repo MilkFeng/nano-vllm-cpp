@@ -29,9 +29,12 @@ class BlasHandle {
       check_blas(status, "cublasSetMathMode");
     }
   }
-  ~BlasHandle() { cublasDestroy(handle_); }
+
   BlasHandle(const BlasHandle&) = delete;
   BlasHandle& operator=(const BlasHandle&) = delete;
+
+  ~BlasHandle() { cublasDestroy(handle_); }
+
   cublasHandle_t get() const { return handle_; }
 
  private:
@@ -63,6 +66,7 @@ __global__ void broadcast_bias(const T* __restrict__ bias,
   const std::size_t start_index =
       static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
+
   for (std::size_t index = start_index; index < count; index += step) {
     output[index] = bias[index % width];
   }

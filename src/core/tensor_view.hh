@@ -78,4 +78,10 @@ template <bool FirstConst, bool... RestConst>
   return ((first.dtype() == rest.dtype()) && ...);
 }
 
+template <bool FirstConst, bool... RestConst>
+[[nodiscard]] bool same_device(const BasicTensorView<FirstConst>& first,
+                               const BasicTensorView<RestConst>&... rest) {
+  return ((first.device() == rest.device()) && ...);
+}
+
 } // namespace nanovllm

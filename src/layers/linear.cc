@@ -26,7 +26,8 @@ Tensor Linear::forward(ConstTensorView input, cudaStream_t stream) const {
   const auto weight = weight_.view();
   assert(input.rank() == 2 && input.shape()[1] == in_features_);
   assert(input.device().type == DeviceType::Cuda);
-  assert(input.device() == weight.device() && same_dtype(input, weight));
+  assert(same_device(input, weight));
+  assert(same_dtype(input, weight));
   auto output = Tensor::empty({input.shape()[0], out_features_}, input.dtype(),
                               input.device());
   std::optional<ConstTensorView> bias;

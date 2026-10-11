@@ -12,9 +12,10 @@
 namespace nanovllm {
 namespace {
 
-[[maybe_unused]] bool is_index_vector(ConstTensorView tensor, Device device) {
+[[maybe_unused]] bool is_index_vector(ConstTensorView tensor,
+                                      ConstTensorView reference) {
   return tensor.rank() == 1 && tensor.dtype() == DataType::Int32
-         && tensor.device() == device && tensor.is_contiguous();
+         && same_device(tensor, reference) && tensor.is_contiguous();
 }
 
 ModelConfig validate_qwen3_config(ModelConfig config) {
@@ -77,25 +78,26 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
                                ConstTensorView hidden_states,
                                const ForwardContext& context) const {
   const auto device = q_proj_.weight().view().device();
-  assert(device.type == DeviceType::Cuda && hidden_states.device() == device);
+  assert(device.type == DeviceType::Cuda);
+  assert(same_device(hidden_states, q_proj_.weight().view()));
   assert(hidden_states.rank() == 2 && hidden_states.shape()[1] == hidden_size_);
-  assert(is_index_vector(positions, device));
+  assert(is_index_vector(positions, hidden_states));
   assert(positions.shape()[0] == hidden_states.shape()[0]);
   const auto tokens = hidden_states.shape()[0];
   const bool have_cache = key_cache_.numel() != 0 && value_cache_.numel() != 0;
   const bool paged_prefill = context.block_tables.numel() != 0;
   if (have_cache) {
-    assert(is_index_vector(context.slot_mapping, device));
+    assert(is_index_vector(context.slot_mapping, hidden_states));
     assert(context.slot_mapping.shape()[0] == tokens);
   }
   if (context.is_prefill) {
-    assert(is_index_vector(context.cu_seqlens_q, device));
-    assert(is_index_vector(context.cu_seqlens_k, device));
+    assert(is_index_vector(context.cu_seqlens_q, hidden_states));
+    assert(is_index_vector(context.cu_seqlens_k, hidden_states));
     assert(context.cu_seqlens_q.shape()[0] > 0
            && same_shape(context.cu_seqlens_q, context.cu_seqlens_k));
     assert(!paged_prefill || have_cache);
   } else {
-    assert(have_cache && is_index_vector(context.context_lens, device));
+    assert(have_cache && is_index_vector(context.context_lens, hidden_states));
     assert(context.context_lens.shape()[0] == tokens);
     assert(context.block_tables.rank() == 2
            && context.block_tables.shape()[0] == tokens);
@@ -151,8 +153,7 @@ void Qwen3Attention::set_kv_cache(TensorView key_cache,
          && key_cache.shape()[3] == head_dim_);
   assert(key_cache.data() != value_cache.data());
   assert(same_dtype(key_cache, value_cache, q_proj_.weight().view()));
-  assert(key_cache.device() == value_cache.device()
-         && key_cache.device() == q_proj_.weight().view().device());
+  assert(same_device(key_cache, value_cache, q_proj_.weight().view()));
   assert(key_cache.is_contiguous() && value_cache.is_contiguous());
 
   key_cache_ = std::move(key_cache);
@@ -319,7 +320,7 @@ Tensor Qwen3ForCausalLM::compute_logits(ConstTensorView hidden_states,
   if (context.is_prefill) {
     assert(hidden_states.rank() == 2
            && hidden_states.shape()[1] == config_.hidden_size);
-    assert(is_index_vector(context.cu_seqlens_q, hidden_states.device()));
+    assert(is_index_vector(context.cu_seqlens_q, hidden_states));
     assert(context.cu_seqlens_q.shape()[0] > 0);
     const auto batch = context.cu_seqlens_q.shape()[0] - 1;
     auto last_hidden =

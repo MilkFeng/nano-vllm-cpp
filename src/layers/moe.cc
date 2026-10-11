@@ -1,6 +1,7 @@
 #include "layers/moe.hh"
 
 #include <algorithm>
+#include <cassert>
 #include <cstdint>
 #include <numeric>
 #include <stdexcept>
@@ -158,24 +159,40 @@ const ExpertStore& ExpertCache::source() const noexcept {
 }
 
 ExpertExecutor::ExpertExecutor(const ExpertStore& store,
-                               const ExpertCache& cache)
+                               const ExpertCache& cache,
+                               ExpertExecutionMode mode)
     : store_(store),
-      cache_(cache) {
+      cache_(cache),
+      mode_(mode) {
   if (&cache.source() != &store) {
     throw std::invalid_argument(
         "executor and cache must use the same RAM store");
+  }
+  if (mode_ != ExpertExecutionMode::Synchronous
+      && mode_ != ExpertExecutionMode::Overlap) {
+    throw std::invalid_argument("invalid expert execution mode");
+  }
+  if (mode_ == ExpertExecutionMode::Overlap && cache_.num_slots() != 0) {
+    // One workspace serves every GPU hit: one stream orders all reads/writes.
+    const auto shape = std::vector<std::size_t>{1, store_.intermediate_size()};
+    gpu_workspace_ = {Tensor::empty(shape, DataType::Float32, Device::cuda(0)),
+                      Tensor::empty(shape, DataType::Float32, Device::cuda(0)),
+                      Tensor::empty(shape, DataType::Float32, Device::cuda(0))};
   }
 }
 
 ExpertExecutionOutput ExpertExecutor::forward(
     ConstTensorView input, std::span<const std::int32_t> expert_ids,
     cudaStream_t stream) const {
-  if (input.device() != Device::cuda(0) || input.dtype() != DataType::Float32
-      || !input.is_contiguous() || input.rank() != 2 || input.shape()[0] != 1
-      || input.shape()[1] != store_.hidden_size() || expert_ids.empty()
-      || expert_ids.size() > store_.num_experts()) {
-    throw std::invalid_argument("invalid single-token expert dispatch input");
-  }
+  assert(input.device().type == DeviceType::Cuda);
+  assert(input.device().index == 0);
+  assert(input.dtype() == DataType::Float32);
+  assert(input.is_contiguous());
+  assert(input.rank() == 2);
+  assert(input.shape()[0] == 1);
+  assert(input.shape()[1] == store_.hidden_size());
+  assert(!expert_ids.empty());
+  assert(expert_ids.size() <= store_.num_experts());
   if (!cache_.ready())
     throw std::logic_error("populate expert cache before execution");
   for (const auto id : expert_ids) {
@@ -184,6 +201,15 @@ ExpertExecutionOutput ExpertExecutor::forward(
     }
   }
 
+  if (mode_ == ExpertExecutionMode::Overlap) {
+    return forward_overlap(input, expert_ids, stream);
+  }
+  return forward_synchronous(input, expert_ids, stream);
+}
+
+ExpertExecutionOutput ExpertExecutor::forward_synchronous(
+    ConstTensorView input, std::span<const std::int32_t> expert_ids,
+    cudaStream_t stream) const {
   ExpertExecutionOutput result{
       Tensor::empty({expert_ids.size(), store_.hidden_size()},
                     DataType::Float32, Device::cuda(0))};
@@ -238,6 +264,86 @@ ExpertExecutionOutput ExpertExecutor::forward(
   return result;
 }
 
+ExpertExecutionOutput ExpertExecutor::forward_overlap(
+    ConstTensorView input, std::span<const std::int32_t> expert_ids,
+    cudaStream_t stream) const {
+  struct Task {
+    std::size_t rank;
+    std::size_t expert_id;
+    int slot;
+  };
+  std::vector<Task> hits, misses;
+  hits.reserve(expert_ids.size());
+  misses.reserve(expert_ids.size());
+  for (std::size_t rank = 0; rank < expert_ids.size(); ++rank) {
+    const auto id = static_cast<std::size_t>(expert_ids[rank]);
+    const auto slot = cache_.slot_of(id);
+    (slot >= 0 ? hits : misses).push_back({rank, id, slot});
+  }
+
+  // Allocate/grow buffers before submitting GPU work. Returned outputs own
+  // their storage; only internal scratch is reused, so earlier results stay
+  // valid.
+  ExpertExecutionOutput result{
+      Tensor::empty({expert_ids.size(), store_.hidden_size()},
+                    DataType::Float32, Device::cuda(0)),
+      hits.size(), misses.size()};
+  if (!misses.empty()) {
+    if (host_input_.numel() == 0) {
+      host_input_ = Tensor::empty({1, store_.hidden_size()}, DataType::Float32);
+    }
+    if (host_parts_.numel() / store_.hidden_size() < expert_ids.size()) {
+      host_parts_ = Tensor::empty({expert_ids.size(), store_.hidden_size()},
+                                  DataType::Float32);
+    }
+  }
+  try {
+    // Ordinary RAM staging is sufficient here: the one input download finishes
+    // BEFORE GPU hits start, and CPU outputs are uploaded AFTER CPU work ends.
+    if (!misses.empty()) {
+      check_cuda(
+          cudaMemcpyAsync(host_input_.data(), input.data(), input.size_bytes(),
+                          cudaMemcpyDeviceToHost, stream),
+          "download input for overlapping CPU experts");
+      check_cuda(cudaStreamSynchronize(stream),
+                 "complete overlapping input download");
+    }
+
+    // Submit every GPU hit first. No CUDA allocation/free or wait inside this
+    // loop.
+    for (const auto& task : hits) {
+      auto row = result.expert_outputs.slice(0, task.rank, 1);
+      cache_.expert_at_slot(task.slot).forward_into(input, row.view(),
+                                                    gpu_workspace_, stream);
+    }
+    // The calling thread computes misses while the GPU executes the queued
+    // hits.
+    for (const auto& task : misses) {
+      auto row = host_parts_.slice(0, task.rank, 1);
+      kernels::cpu::expert_forward(host_input_.view().as_const(),
+                                   store_.weights(task.expert_id), row.view());
+    }
+    // Same-stream ordering places uploads after GPU hits; original rank
+    // controls the destination row regardless of which device computed that
+    // expert.
+    for (const auto& task : misses) {
+      auto source = host_parts_.slice(0, task.rank, 1);
+      auto destination = result.expert_outputs.slice(0, task.rank, 1);
+      check_cuda(cudaMemcpyAsync(destination.data(), source.data(),
+                                 destination.size_bytes(),
+                                 cudaMemcpyHostToDevice, stream),
+                 "upload overlapping CPU expert output");
+    }
+    check_cuda(cudaStreamSynchronize(stream),
+               "complete overlapping expert dispatch");
+  } catch (...) {
+    // Protect persistent scratch and local output from already-enqueued work.
+    cudaStreamSynchronize(stream);
+    throw;
+  }
+  return result;
+}
+
 void MoEConfig::validate() const {
   if (hidden_size == 0 || intermediate_size == 0 || num_experts == 0
       || num_experts > kernels::cuda::kMaxMoEExperts || top_k == 0
@@ -248,7 +354,8 @@ void MoEConfig::validate() const {
 }
 
 MoE::MoE(MoEConfig config, Device device,
-         std::optional<std::vector<std::int32_t>> gpu_expert_ids)
+         std::optional<std::vector<std::int32_t>> gpu_expert_ids,
+         ExpertExecutionMode mode)
     : config_(validated(config, device)),
       gate_(config_.hidden_size, config_.num_experts, false, DataType::Float32,
             device),
@@ -268,7 +375,7 @@ MoE::MoE(MoEConfig config, Device device,
     std::iota(gpu_expert_ids->begin(), gpu_expert_ids->end(), 0);
   }
   cache_ = std::make_unique<ExpertCache>(experts_, std::move(*gpu_expert_ids));
-  executor_ = std::make_unique<ExpertExecutor>(experts_, *cache_);
+  executor_ = std::make_unique<ExpertExecutor>(experts_, *cache_, mode);
 }
 
 void MoE::populate_expert_cache(cudaStream_t stream) {
@@ -278,16 +385,15 @@ void MoE::populate_expert_cache(cudaStream_t stream) {
 
 MoEOutput MoE::forward(ConstTensorView hidden_states,
                        cudaStream_t stream) const {
-  if (hidden_states.device() != Device::cuda(0)
-      || gate_.weight().view().device() != hidden_states.device()
-      || hidden_states.dtype() != DataType::Float32
-      || !hidden_states.is_contiguous() || hidden_states.rank() != 2
-      || hidden_states.shape()[0] != 1
-      || hidden_states.shape()[1] != config_.hidden_size) {
-    throw std::invalid_argument(
-        "MoE forward needs a contiguous Float32 [1,H] input and CUDA router "
-        "weights");
-  }
+  assert(hidden_states.device().type == DeviceType::Cuda);
+  assert(hidden_states.device().index == 0);
+  assert(same_device(hidden_states, gate_.weight().view()));
+  assert(hidden_states.dtype() == DataType::Float32);
+  assert(same_dtype(hidden_states, gate_.weight().view()));
+  assert(hidden_states.is_contiguous());
+  assert(hidden_states.rank() == 2);
+  assert(hidden_states.shape()[0] == 1);
+  assert(hidden_states.shape()[1] == config_.hidden_size);
   if (!cache_->ready()) {
     throw std::logic_error(
         "call populate_expert_cache after initializing MoE weights");

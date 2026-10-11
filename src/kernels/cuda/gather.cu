@@ -24,8 +24,8 @@ __global__ void gather_kernel(const T* __restrict__ hidden,
   for (std::size_t index = start_index; index < count; index += step) {
     const auto row = index / width;
     const auto end = boundaries[row + 1];
-    assert(boundaries[row] >= 0 && end > boundaries[row]
-           && static_cast<std::size_t>(end) <= tokens);
+
+    assert(boundaries[row] >= 0 && end > boundaries[row] && end <= tokens);
     assert((row != 0 || boundaries[row] == 0)
            && (row + 1 != batch || end == tokens));
 

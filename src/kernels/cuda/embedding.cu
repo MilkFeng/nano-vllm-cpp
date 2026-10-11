@@ -21,7 +21,7 @@ __global__ void embedding_kernel(const std::int32_t* __restrict__ input_ids,
       static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   for (std::size_t index = start_index; index < count; index += step) {
     const std::int32_t token = input_ids[index / hidden_size];
-    assert(token >= 0 && static_cast<std::size_t>(token) < vocab_size);
+    assert(token >= 0 && token < vocab_size);
     output[index] = weight[static_cast<std::size_t>(token) * hidden_size
                            + index % hidden_size];
   }

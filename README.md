@@ -132,7 +132,30 @@ CPU 构造只创建参考权重。`MoEOutput` 的 `gpu_experts`、`cpu_experts` 
 
 当前支持单 token、FP32、1..1024 个专家、`1 <= top_k <= E`。缓存名单固定，
 populate/forward 同步传入的 stream，调用需串行。量化、共享专家、动态换入
-换出和 CPU/GPU 并行作为后续步骤；当前文本生成使用原有 Qwen3 模型。
+换出作为后续步骤；当前文本生成使用原有 Qwen3 模型。
+
+第四个构造参数选择执行方式，默认 `ExpertExecutionMode::Synchronous` 保留
+按 Router 排名逐个分派的路径。开启重叠执行：
+
+```cpp
+MoE moe({128, 64, 16, 2}, Device::cuda(0),
+        std::vector<std::int32_t>{0, 2, 4, 6},
+        ExpertExecutionMode::Overlap);
+```
+
+Overlap 先划分 GPU hits / CPU misses，有 misses 时下载一次输入并等待完成，
+随后提交全部 GPU hits，再由调用线程计算 CPU misses。CPU 输出上传到原始排名
+对应的行；一个 stream 保证 GPU 专家、上传和 combine 的顺序。`forward()`
+完成后才返回，同一个对象的调用仍需串行，完成后可以改用另一个 stream。
+
+`SwiGLUMLP::forward_into()` 使用预先分配的 gate/up/activated 工作区，直接
+写入输出行。所有 GPU 专家共用这三个缓冲区，依靠同一 stream 排序；提交 GPU
+专家时不会分配或释放 CUDA Tensor。CPU 输入与输出暂存区也会复用，输出区
+按需要增长。返回的输出拥有独立存储，后续调用不会覆盖先前结果。
+
+这一版只重叠 CPU/GPU 的计算：输入下载在 GPU hits 之前完成，CPU 输出在
+CPU 计算结束后上传，因此暂存区使用普通 RAM。CPU 专家在调用线程串行计算。
+数学结果和执行时间线的检查方法见测试文档。
 
 三个辅助类与 `MoE` 一起放在 `src/layers/moe.hh/.cc`。建议在 `.cc` 中按
 `ExpertStore` 的 RAM 权重 → `ExpertCache` 的固定 GPU 槽位 →

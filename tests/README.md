@@ -54,3 +54,46 @@ compute-sanitizer --tool racecheck --error-exitcode 1 \
 compute-sanitizer --tool memcheck --error-exitcode 1 \
   ./build/nano-vllm-cpp-moe-offload-test --gpu
 ```
+
+## CPU/GPU 重叠执行
+
+现有 `moe_cuda` 对同步版和重叠版都检查 top-1、top-E、单专家、非整齐维度、
+随机权重和重复执行。`moe_offload_cuda` 对两版直接比较 Router logits、专家
+编号、路由权重、未加权专家输出、合并结果和 CPU/GPU 数量，要求两版逐值相同；
+两版还分别与独立 CPU 参考实现比较，使用浮点误差容限。
+
+重叠测试覆盖缓存未填充、刷新 RAM 权重后重新填充，以及同一个 Executor 改变
+K、输入、专家顺序和 CUDA stream。保留第一次返回的输出，后续调用和工作区
+增长完成后再次检查它，验证返回值不与内部暂存区共享存储。
+
+手工测量使用 `H=4096, I=2048, E=8, K=8`，固定 4 个 GPU 专家、4 个 CPU
+专家，RAM 专家权重 768 MiB、GPU 专家权重 384 MiB。预热两轮后交替测量
+7 对同步/重叠 dispatch，报告各自中位数。这里只测一个合成 MoE dispatch，
+不包含 Router/combine，也不能代表完整模型速度。
+
+```bash
+./build/nano-vllm-cpp-moe-offload-test --benchmark
+```
+
+用 Nsight Systems 捕获一轮预热后的重叠执行，CPU 采样关闭以便在 WSL 上运行：
+
+```bash
+nsys profile --trace=cuda,cublas --sample=none --cpuctxsw=none \
+  --capture-range=cudaProfilerApi --capture-range-end=stop \
+  -o /tmp/moe-overlap ./build/nano-vllm-cpp-moe-offload-test --profile-overlap
+```
+
+时间线中最后一个 GPU 专家的 cuBLAS 提交返回后，到第一次 CPU 输出 H2D
+复制提交之前，调用线程正在计算 CPU 专家。检查 GPU kernel 是否与这个区间
+相交，并检查其中没有 `cudaMalloc`、`cudaFree` 或 stream/device 同步。
+替换为 `--profile-sync`、换一个输出文件名，可以捕获原来的分派作为对照。
+`.nsys-rep` 可以在 Nsight Systems 中打开；`nsys export --type=sqlite` 可以
+导出时间戳做交集计算。普通 `--gpu` 测试不要求计时更快，避免把噪声当成失败。
+
+2026-10-11 本机测量：AMD Ryzen 7 9700X、RTX 5060 Ti 16 GB、WSL Linux、
+CUDA 13.3、Release 构建，使用上述合成配置，CPU 专家在调用线程使用标量 FP32。
+7 对交替测量的 dispatch 中位数：同步 37.88 ms，重叠 36.49 ms。Nsight Systems
+2026.1 捕获的另一次单次 dispatch 中，最后一个 cuBLAS 提交返回到第一次 CPU
+输出上传提交的区间为 36.16 ms；16 个 GPU kernel 与该区间相交，交集累计
+0.894 ms。GPU 提交和 CPU 计算阶段没有 CUDA 分配、释放或同步调用。
+这些数字来自合成测试；完整 Qwen3 文本生成仍使用原路径。

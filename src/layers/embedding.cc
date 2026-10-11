@@ -20,7 +20,7 @@ Tensor Embedding::forward(ConstTensorView input_ids,
   const auto weight = weight_.view();
   assert(input_ids.rank() == 1 && input_ids.dtype() == DataType::Int32);
   assert(input_ids.device().type == DeviceType::Cuda);
-  assert(input_ids.device() == weight.device());
+  assert(same_device(input_ids, weight));
   auto output = Tensor::empty({input_ids.shape()[0], hidden_size_},
                               weight.dtype(), weight.device());
   kernels::cuda::embedding(input_ids, weight, output.view(), stream);

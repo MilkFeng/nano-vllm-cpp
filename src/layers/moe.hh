@@ -73,19 +73,42 @@ struct ExpertExecutionOutput {
   std::size_t cpu_experts = 0;
 };
 
-// Synchronous dispatcher for one token. Store/cache must outlive the executor.
-// Cache hits use GPU slots; misses execute from RAM and upload only outputs.
+enum class ExpertExecutionMode {
+  Synchronous, // Original router-order dispatcher, used as the comparison path.
+  Overlap, // Submit every GPU hit, then compute CPU misses on the host thread.
+};
+
+// One-token dispatcher. Store/cache must outlive it. Calls must be serialized.
+// Both modes synchronize stream before returning. Overlap reuses private
+// scratch. Input shape/device/dtype and selection size use Debug assertions.
 class ExpertExecutor final {
  public:
-  ExpertExecutor(const ExpertStore& store, const ExpertCache& cache);
+  ExpertExecutor(const ExpertStore& store, const ExpertCache& cache,
+                 ExpertExecutionMode mode = ExpertExecutionMode::Synchronous);
+
+  ExpertExecutor(const ExpertExecutor&) = delete;
+  ExpertExecutor& operator=(const ExpertExecutor&) = delete;
+  ExpertExecutor(ExpertExecutor&&) = delete;
+  ExpertExecutor& operator=(ExpertExecutor&&) = delete;
 
   [[nodiscard]] ExpertExecutionOutput forward(
       ConstTensorView input, std::span<const std::int32_t> expert_ids,
       cudaStream_t stream = nullptr) const;
 
  private:
+  [[nodiscard]] ExpertExecutionOutput forward_synchronous(
+      ConstTensorView input, std::span<const std::int32_t> expert_ids,
+      cudaStream_t stream) const;
+  [[nodiscard]] ExpertExecutionOutput forward_overlap(
+      ConstTensorView input, std::span<const std::int32_t> expert_ids,
+      cudaStream_t stream) const;
+
   const ExpertStore& store_;
   const ExpertCache& cache_;
+  ExpertExecutionMode mode_;
+  mutable SwiGLUWorkspace gpu_workspace_;
+  mutable Tensor host_input_;
+  mutable Tensor host_parts_;
 };
 
 struct MoEConfig {
@@ -113,13 +136,15 @@ struct MoEOutput {
 // fixed resident list is copied to GPU. nullopt caches all experts; an empty
 // vector caches none. CPU construction creates reference weights without CUDA
 // allocations. Initialize parameters, then populate_expert_cache(), then
-// forward(). Calls are serialized; populate/forward synchronize the supplied
+// forward(). Input shape/device/dtype use Debug assertions.
+// Calls are serialized; populate/forward synchronize the supplied
 // CUDA stream.
 class MoE final : public Module {
  public:
   explicit MoE(
       MoEConfig config, Device device = Device::cuda(0),
-      std::optional<std::vector<std::int32_t>> gpu_expert_ids = std::nullopt);
+      std::optional<std::vector<std::int32_t>> gpu_expert_ids = std::nullopt,
+      ExpertExecutionMode mode = ExpertExecutionMode::Synchronous);
 
   void populate_expert_cache(cudaStream_t stream = nullptr);
   [[nodiscard]] MoEOutput forward(ConstTensorView hidden_states,
