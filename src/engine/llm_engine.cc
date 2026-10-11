@@ -75,7 +75,9 @@ class LLMEngine::Impl {
                    tokenizer_.eos_token_id(), params.max_model_len) {
     logger_->info("Loaded Qwen3 with "
                   + std::to_string(model_runner_.num_blocks())
-                  + " KV cache blocks");
+                  + " KV cache blocks ("
+                  + std::to_string(model_runner_.kvcache_size_bytes())
+                  + " bytes for K and V)");
   }
 
   ~Impl() = default;

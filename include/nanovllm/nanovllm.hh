@@ -32,7 +32,8 @@ struct EngineParams {
   std::size_t max_num_batched_tokens = 16384;
   std::size_t max_num_seqs = 512;
   std::size_t max_model_len = 4096;
-  float gpu_memory_utilization = 0.9;
+  // Required shared KV pool size; zero is invalid.
+  std::size_t num_kvcache_blocks = 0;
   std::size_t kvcache_block_size = 256;
   std::uint64_t seed = 0;
 };

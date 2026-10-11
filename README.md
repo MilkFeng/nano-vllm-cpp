@@ -25,7 +25,8 @@ cmake --build build -j4
 ./build/nano-vllm-cpp --model "$HOME/models/Qwen3-0.6B" \
   --prompt 'Hello' \
   --temperature 0 --max-tokens 16 \
-  --max-model-len 128 --max-seqs 4 --max-batched-tokens 128
+  --max-model-len 128 --max-seqs 4 --max-batched-tokens 128 \
+  --num-blocks 16 --block-size 16
 ```
 
 - `--prompt` 默认是一条用户消息，程序读取模型的 `chat_template` 并自动应用。重复 `--prompt` 可批量提交独立对话，输出顺序与输入一致。
@@ -33,8 +34,13 @@ cmake --build build -j4
 - `--raw-prompt` 用于原始文本续写或已经格式化的输入，与 `--thinking` 互斥。
 - `--temperature 0` 使用 greedy 解码，正数使用温度采样；`--seed` 设置随机种子。
 - `--max-batched-tokens` 限制每轮 token 数，较长输入会分块 prefill。
+- `--num-blocks` 必填，指定全部请求共享的 KV 块池大小；`--block-size` 指定每块 token 数，默认 256。程序按指定数量分配，不再自动估算显存容量。
 - `--json` 输出生成文本和 token ID；`--repeat 2` 在同一引擎中重复请求，以使用前缀缓存。
 - 达到 EOS、`--max-tokens` 或总长度 `--max-model-len` 时结束；`--ignore-eos` 可忽略 EOS。
+
+KV 块数和 block size 必须大于零，块池至少容纳一条 `max_model_len` 长度的序列，总 token 容量不得超过 Int32 slot 索引范围。启动日志显示块数和全部 K/V 缓存的字节数。当前 dense Qwen3 的缓存字节数为 `2 * num_hidden_layers * num_blocks * block_size * num_key_value_heads * head_dim * sizeof(dtype)`；配置时还需给权重、激活和计算工作区留出显存，缓存分配成功不保证最大 batch 能运行。`--gpu-memory-utilization` 已移除。
+
+C++ 调用方也必须设置 `EngineParams::num_kvcache_blocks`；默认值 `0` 会报参数错误。例如 `EngineParams params; params.num_kvcache_blocks = 16;`，配合默认 block size 256，可容纳一条默认长度 4096 的序列。
 
 默认温度为 1，只做全词表温度采样；当前不会加载 `generation_config.json` 中的 temperature、top-k 或 top-p 配置。`--max-model-len` 限制总上下文长度；输出长度仍由 `--max-tokens` 控制，默认最多生成 64 个 token。
 
@@ -79,7 +85,7 @@ Token IDs → Embedding
 
 内部 CUDA 算子只接受连续 Tensor，并使用调用线程已经选好的 device 0。通用模型配置约束，以及模型和算子内部的 shape、dtype 和索引约束使用 Debug 断言；Qwen3 支持范围、用户参数和 CUDA/cuBLAS 运行错误在 Release 中也会检查。缓冲区重叠关系由调用者保证。RoPE 直接原地修改 Q/K。
 
-当前支持 CUDA device 0 上的 dense Qwen3、单文件 safetensors 权重、未缩放的 RoPE，以及偶数且不超过 256 的 head dimension。Attention 是用于打通计算链路的基础实现；FlashAttention 级优化、CUDA Graph、张量并行和分片权重加载仍待实现。KV 容量根据可用显存和工作区估算确定。
+当前支持 CUDA device 0 上的 dense Qwen3、单文件 safetensors 权重、未缩放的 RoPE，以及偶数且不超过 256 的 head dimension。Attention 是用于打通计算链路的基础实现；FlashAttention 级优化、CUDA Graph、张量并行和分片权重加载仍待实现。KV 块数由命令行或 `EngineParams` 手动指定。
 
 FP16/BF16 的舍入会受 GEMM 的 batch 大小影响；候选分数接近时，生成 token 可能随批量配置变化，也不保证与 Transformers 逐 token 相同。当前融合 residual 和 RMSNorm 的计算顺序沿用 nano-vllm；详细对比结果见测试文档。
 

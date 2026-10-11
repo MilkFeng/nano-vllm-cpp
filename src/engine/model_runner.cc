@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -39,15 +38,28 @@ class DeviceGuard {
 ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
                          const std::filesystem::path& checkpoint)
     : params_(params),
-      config_(std::move(config)) {
-  if (params.max_num_seqs == 0 || params.max_num_batched_tokens == 0
-      || params.max_model_len == 0 || params.kvcache_block_size == 0
-      || params.max_model_len > config.max_position_embeddings
-      || !std::isfinite(params.gpu_memory_utilization)
-      || params.gpu_memory_utilization <= 0
-      || params.gpu_memory_utilization > 1) {
+      config_(std::move(config)),
+      num_blocks_(params.num_kvcache_blocks) {
+  if (params_.max_num_seqs == 0 || params_.max_num_batched_tokens == 0
+      || params_.max_model_len == 0 || params_.kvcache_block_size == 0
+      || num_blocks_ == 0
+      || params_.max_model_len > config_.max_position_embeddings) {
     throw std::invalid_argument(
-        "invalid engine limits or GPU memory utilization");
+        "invalid engine limits or KV cache block count");
+  }
+  const auto index_limit =
+      static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())
+      / params_.kvcache_block_size;
+  if (num_blocks_ > index_limit) {
+    throw std::invalid_argument(
+        "KV cache token capacity exceeds the Int32 slot index range");
+  }
+  const auto per_sequence =
+      (params_.max_model_len - 1) / params_.kvcache_block_size + 1;
+  if (num_blocks_ < per_sequence) {
+    throw std::invalid_argument(
+        "KV cache cannot hold max_model_len; increase num_kvcache_blocks "
+        "or reduce max_model_len");
   }
 
   const DeviceGuard guard;
@@ -60,44 +72,6 @@ ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
     // our nonblocking stream, which does not implicitly wait for that stream.
     check_cuda(cudaStreamSynchronize(nullptr), "complete model weight uploads");
 
-    std::size_t free_bytes = 0, total_bytes = 0;
-    check_cuda(cudaMemGetInfo(&free_bytes, &total_bytes), "query CUDA memory");
-    const auto item_size = data_type_size(model_->dtype());
-    const auto block_bytes =
-        2 * config_.num_hidden_layers * params_.kvcache_block_size
-        * config_.num_key_value_heads * config_.head_dim * item_size;
-
-    // Reserve conservative space for live activations, logits and library
-    // workspaces. This baseline estimates memory instead of profiling a pass.
-    const auto tokens = std::min(params_.max_num_batched_tokens,
-                                 params_.max_num_seqs * params_.max_model_len);
-    const auto elements_per_token =
-        8.0L * config_.hidden_size + 4.0L * config_.intermediate_size
-        + 4.0L * config_.q_size() + 8.0L * config_.kv_size();
-    constexpr auto fixed_workspace_bytes = 256.0L * 1024 * 1024;
-    const auto activation_bytes = tokens * elements_per_token * item_size;
-    const auto logits_bytes =
-        params_.max_num_seqs * config_.vocab_size * item_size;
-    const auto reserve =
-        fixed_workspace_bytes + activation_bytes + logits_bytes;
-    const auto budget = total_bytes * params_.gpu_memory_utilization
-                        - (total_bytes - free_bytes) - reserve;
-    if (budget < block_bytes) {
-      throw std::runtime_error(
-          "insufficient GPU memory for KV cache and inference workspace");
-    }
-    const auto per_sequence =
-        (params_.max_model_len - 1) / params_.kvcache_block_size + 1;
-    const auto requested = per_sequence * params_.max_num_seqs;
-    const auto index_limit =
-        static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())
-        / params_.kvcache_block_size;
-    num_blocks_ = std::min({static_cast<std::size_t>(budget / block_bytes),
-                            requested, index_limit});
-    if (num_blocks_ < per_sequence) {
-      throw std::runtime_error(
-          "KV cache cannot hold max_model_len; reduce the configured limit");
-    }
     const std::vector<std::size_t> shape{
         config_.num_hidden_layers, num_blocks_, params_.kvcache_block_size,
         config_.num_key_value_heads, config_.head_dim};

@@ -78,8 +78,10 @@ int main(int argc, char** argv) {
                  "Per-step token budget; smaller values split prefill");
   app.add_option("--block-size", params.kvcache_block_size,
                  "Tokens per KV cache block");
-  app.add_option("--gpu-memory-utilization", params.gpu_memory_utilization,
-                 "Fraction of total GPU memory available to this engine");
+  app.add_option("--num-blocks", params.num_kvcache_blocks,
+                 "Total KV cache blocks shared by all sequences")
+      ->required()
+      ->check(CLI::PositiveNumber);
   app.add_option("--seed", params.seed, "Sampling random seed");
   app.add_option(
       "--repeat", repeat,
