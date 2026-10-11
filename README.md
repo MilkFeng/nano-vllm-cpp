@@ -135,8 +135,9 @@ kernels::cpu::dequantize_fp8(weight, scales.view().as_const(), output.view());
 
 FP8 权重直接借用 mmap 字节；scale 复制到 Tensor，保证浮点访问使用对齐的
 存储。反量化不分配输出，后续可为 CPU 未命中专家复用同一个工作区。
-当前 `ExpertStore` 仍保存 FP32 专家，尚未把这条 FP8 加载路径接入 MoE。
-本步骤也未实现原生 FP8 GEMM、激活量化或整模型反量化。
+`ExpertStore` 支持保存 FP8 权重和 scale，CPU 未命中专家与 GPU 固定缓存
+通过下面的按需展开接口使用它。完整 Qwen3.5 模型组装、原生 FP8 GEMM、激活
+量化仍待实现。
 
 ## 学习用 MoE
 
@@ -209,8 +210,60 @@ token 选中会分别计数；`expert_cache().num_slots()`
 和 `size_bytes()` 只统计 routed 缓存槽位和权重，不包含 Router、共享专家及工作区。
 
 当前支持多 token、FP32、1..1024 个专家、`1 <= top_k <= E`。缓存名单固定，
-populate/forward 同步传入的 stream，调用需串行。量化、动态换入换出作为后续
-步骤；当前文本生成使用原有 Qwen3 模型。
+populate/forward 同步传入的 stream，调用需串行。动态换入换出作为后续步骤；
+当前文本生成使用原有 Qwen3 模型。
+
+### FP8 专家在 RAM 中存储
+
+默认仍是 FP32。构造 `ExpertStore(H, I, E, DataType::Float8E4M3FN)`，或给
+`MoEConfig::expert_dtype` 设置该值，可让 routed 专家以 FP8+FP32 scale 保存：
+
+```cpp
+MoEConfig config{
+    .hidden_size = 2048,
+    .intermediate_size = 512,
+    .num_experts = 256,
+    .top_k = 8,
+    .shared_expert_intermediate_size = 512,
+    .expert_dtype = DataType::Float8E4M3FN,
+};
+MoE moe(config, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6},
+        ExpertExecutionMode::Overlap);
+```
+
+每个专家注册六个 CPU 参数：三个 `gate_proj/up_proj/down_proj.weight` 为
+FP8，三个同级 `weight_scale_inv` 为 FP32，按 `128x128` 分块。通过参数接口
+初始化，或把模块注册到 `Model` 后用 `load_ckpt()` 加载；GPU 副本与展开工作区
+不注册为参数。Router、共享专家、门控及激活仍为 FP32；真实 checkpoint 中这些
+其他分支的 BF16/FP8 加载转换与完整 Qwen3.5 集成需后续处理。
+
+```text
+ExpertStore: 全部专家 FP8 权重 + scale（RAM）
+  ├── populate: 逐个展开常驻 ID → 上传 FP32 GPU 槽位
+  └── dispatch 未命中: 展开当前 ID → CPU FP32 SwiGLU → 上传输出
+```
+
+`weights(id)` 只返回 FP32 store 的直接视图。FP8 使用
+`prepare_weights(id, ExpertWeightWorkspace&)`：工作区按需分配，反复覆写，
+返回的三个 FP32 视图只在下次复用工作区前有效。它也接受 FP32 store，此时直接
+返回原始参数，不分配工作区。准备权重不会修改 RAM 中的原始字节或 scale。
+
+每个 `ExpertExecutor` 在第一次 CPU miss 时分配一个 FP32 专家工作区，后续
+miss、不同 expert ID、不同 token 和不同 CUDA stream 都复用它。只运行 GPU
+hits 时不分配；`cpu_weight_workspace_bytes()` 可查看该大小。它不随 K 或 E
+增长，计算完成后保留到 executor 析构。CPU 反量化也在调用线程上执行，Overlap
+模式先提交 GPU hits，再展开并计算 CPU misses。
+
+缓存初始化只展开驻留名单，复用一个临时 CPU 专家工作区；每个专家的三次 H2D
+完成后才展开下一个，防止异步上传读取被覆写的权重。工作区在初始化返回时释放。
+GPU 槽位保持 FP32，改变 RAM 权重或 scale 后需显式再次 populate。
+
+令 `Sr=ceil(I/128), Sc=ceil(H/128)`，RAM 权重字节数为
+`E*(3*H*I + 3*Sr*Sc*sizeof(float))`，GPU routed 权重字节数为
+`slots*3*H*I*sizeof(float)`，单个展开工作区为 `3*H*I*sizeof(float)`。
+三者分开统计，不包含 Router、共享分支和激活。
+按 `H=2048,I=512,E=256` 计算，一层 RAM routed 参数约 768 MiB（另加 scale），
+每个展开工作区 12 MiB；没有把全部 routed 专家永久展开成 FP32。
 
 ### 可选共享专家
 

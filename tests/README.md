@@ -20,6 +20,27 @@ safetensors 名称与单字节存储，以及 `129x257` 矩阵的 `128x128` 分�
 还检查 dtype、shape、scale 网格、连续性、空矩阵、零块尺寸、非法偏移和重叠范围。
 这些是合成权重测试；完整 Qwen3.5-FP8 的专家和生成结果需在权重下载后验证。
 
+## FP8 专家存储与 CPU/GPU 分担
+
+```bash
+./build/nano-vllm-cpp-fp8-moe-test --cpu
+./build/nano-vllm-cpp-fp8-moe-test --gpu
+compute-sanitizer --tool memcheck --error-exitcode 1 \
+  ./build/nano-vllm-cpp-fp8-moe-test --gpu
+```
+
+`fp8_expert_cpu` 用 `H=129,I=130,E=6` 检查 FP8+scale 参数注册、RAM 字节数、
+FP32 工作区只含一个专家、跨 ID 覆写与复用，CPU SwiGLU 对照独立 double 累加
+参考，以及保存/加载分片权重后仍保持 FP8 存储。期望浮点权重来自手写编码值表
+与各块 scale，独立于被测反量化函数。FP32 store 的 prepare 不分配工作区。
+
+`fp8_moe_cuda` 检查全 GPU、全 CPU、混合驻留、全 miss、全 hit 和共享分支，
+对照上述 FP32 参考的 Router、选中专家、权重、专家原始输出与最终合并结果。
+覆盖多 token、同步/Overlap、多个缓存槽位上传、scale 与字节变化后重新填充，
+不同 K/路由/stream 的执行器工作区复用，以及之前返回的输出仍然有效。
+未命中前展开工作区为零，第一次 miss 后固定为一个 FP32 专家。
+这些测试使用合成 checkpoint；完整 Qwen3.5 模型尚未接入。
+
 ## 小尺寸 MoE 验证
 
 配置构建时开启 `-DBUILD_TESTING=ON`，然后运行：

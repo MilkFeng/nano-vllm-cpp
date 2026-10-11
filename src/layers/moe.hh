@@ -16,15 +16,34 @@
 
 namespace nanovllm {
 
-// Owns all expert parameters in ordinary system RAM. Registered directly as
-// experts.0.gate_proj.weight, etc. GPU cache copies are separate runtime data.
+// Caller-owned FP32 weights for one expanded expert. Empty until an FP8
+// expert is prepared. Reused across expert IDs, never registered as parameters.
+struct ExpertWeightWorkspace {
+  Tensor gate;
+  Tensor up;
+  Tensor down;
+
+  [[nodiscard]] std::size_t size_bytes() const;
+};
+
+// Owns all routed parameters in ordinary system RAM. FP32 registers three
+// weights per expert; FP8 registers those weights plus three FP32 scale grids.
+// Names are experts.N.gate_proj.weight/weight_scale_inv, etc., when nested in
+// MoE. GPU cache copies and expanded CPU workspaces are separate runtime data.
 class ExpertStore final : public Module {
  public:
   ExpertStore(std::size_t hidden_size, std::size_t intermediate_size,
-              std::size_t num_experts);
+              std::size_t num_experts, DataType dtype = DataType::Float32);
 
+  // Direct borrowed FP32 weights; throws for an FP8 store.
   [[nodiscard]] kernels::cpu::ExpertWeights weights(
       std::size_t expert_id) const;
+  // FP32 returns the original weights without allocating. FP8 dequantizes one
+  // expert into workspace. Returned views are overwritten by its next reuse.
+  // FP8 block size is 128x128. Initialize all weights/scales before calling.
+  [[nodiscard]] kernels::cpu::ExpertWeights prepare_weights(
+      std::size_t expert_id, ExpertWeightWorkspace& workspace) const;
+  [[nodiscard]] DataType dtype() const noexcept;
   [[nodiscard]] std::size_t hidden_size() const noexcept;
   [[nodiscard]] std::size_t intermediate_size() const noexcept;
   [[nodiscard]] std::size_t num_experts() const noexcept;
@@ -33,7 +52,8 @@ class ExpertStore final : public Module {
  private:
   std::size_t hidden_size_;
   std::size_t intermediate_size_;
-  std::vector<std::unique_ptr<SwiGLUMLP>> experts_;
+  DataType dtype_;
+  std::vector<std::unique_ptr<Module>> experts_;
 };
 
 // Fixed resident list on CUDA device 0. Allocates only resident_ids.size()
@@ -49,6 +69,8 @@ class ExpertCache final {
   ExpertCache& operator=(ExpertCache&&) = delete;
 
   // Call after initializing RAM weights; call again after changing them.
+  // FP8 expands/uploads only resident IDs, using one temporary CPU expert.
+  // Waits for each FP8 upload before reusing its staging weights.
   // Publishes the mapping after all uploads complete. Synchronizes stream.
   void populate(cudaStream_t stream = nullptr);
   [[nodiscard]] int slot_of(std::size_t expert_id) const;
@@ -94,6 +116,8 @@ class ExpertExecutor final {
   [[nodiscard]] ExpertExecutionOutput forward(
       ConstTensorView input, std::span<const std::int32_t> expert_ids,
       cudaStream_t stream = nullptr) const;
+  // Zero for FP32 or before the first FP8 miss; otherwise one FP32 expert.
+  [[nodiscard]] std::size_t cpu_weight_workspace_bytes() const;
 
  private:
   [[nodiscard]] ExpertExecutionOutput forward_synchronous(
@@ -107,6 +131,7 @@ class ExpertExecutor final {
   const ExpertCache& cache_;
   ExpertExecutionMode mode_;
   mutable SwiGLUWorkspace gpu_workspace_;
+  mutable ExpertWeightWorkspace cpu_weight_workspace_;
   mutable Tensor host_input_;
   mutable Tensor host_parts_;
 };
@@ -118,6 +143,8 @@ struct MoEConfig {
   std::size_t top_k;
   // 0 disables the shared branch.
   std::size_t shared_expert_intermediate_size = 0;
+  // Routed RAM storage only. Router/shared branch/activations stay FP32.
+  DataType expert_dtype = DataType::Float32;
 
   void validate() const;
 };
@@ -139,8 +166,10 @@ struct MoEOutput {
   Tensor shared_gate_logits;   // Float32 [T,1], before sigmoid.
 };
 
-// FP32 MoE for [T,H], T>0, with an optional Qwen3.5-style shared branch. Routed
-// expert parameters are in RAM; only the fixed resident list is copied to GPU.
+// FP32 computation for [T,H], T>0, with an optional shared branch. Routed
+// RAM weights can be FP32 or FP8+scales. GPU slots hold expanded FP32 weights;
+// CPU misses reuse one FP32 expert workspace per executor. Only the fixed
+// resident list is copied to GPU.
 // The shared expert and its H->1 sigmoid gate stay on the selected device,
 // outside the routed cache. nullopt caches all routed experts; an empty
 // vector caches none. CPU construction creates reference weights without CUDA

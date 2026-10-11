@@ -135,6 +135,17 @@ if(BUILD_TESTING)
   add_test(NAME fp8_checkpoint_cpu COMMAND nano-vllm-cpp-fp8-checkpoint-test)
   set_tests_properties(fp8_checkpoint_cpu PROPERTIES LABELS "cpu;fp8;checkpoint")
 
+  add_executable(nano-vllm-cpp-fp8-moe-test tests/test_fp8_moe.cc)
+  target_include_directories(nano-vllm-cpp-fp8-moe-test PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+  target_compile_options(nano-vllm-cpp-fp8-moe-test PRIVATE -Wall -Wextra -Wpedantic)
+  target_link_libraries(nano-vllm-cpp-fp8-moe-test PRIVATE
+    nano-vllm-cpp::nano-vllm-cpp CUDA::cudart CUDA::cublas nlohmann_json::nlohmann_json)
+  add_test(NAME fp8_expert_cpu COMMAND nano-vllm-cpp-fp8-moe-test --cpu)
+  add_test(NAME fp8_moe_cuda COMMAND nano-vllm-cpp-fp8-moe-test --gpu)
+  set_tests_properties(fp8_expert_cpu PROPERTIES LABELS "cpu;fp8;moe")
+  set_tests_properties(fp8_moe_cuda PROPERTIES LABELS "cuda;fp8;moe" SKIP_RETURN_CODE 77)
+
   add_executable(nano-vllm-cpp-moe-test tests/test_moe.cc)
   target_include_directories(nano-vllm-cpp-moe-test PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src)
