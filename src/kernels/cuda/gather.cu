@@ -29,8 +29,7 @@ __global__ void gather_kernel(const T* __restrict__ hidden,
     assert((row != 0 || boundaries[row] == 0)
            && (row + 1 != batch || end == tokens));
 
-    output[index] =
-        hidden[(static_cast<std::size_t>(end) - 1) * width + index % width];
+    output[index] = hidden[(end - 1) * width + index % width];
   }
 }
 

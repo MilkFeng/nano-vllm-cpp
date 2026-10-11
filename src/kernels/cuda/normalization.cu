@@ -29,8 +29,9 @@ __device__ float input_value(const T* input, const T* residual, std::size_t n) {
   if constexpr (Fused) {
     value += detail::to_float(residual[n]);
     // Qwen3.5 normalizes the residual sum after rounding to its tensor dtype.
-    if constexpr (ZeroCentered)
+    if constexpr (ZeroCentered) {
       value = detail::to_float(detail::from_float<T>(value));
+    }
   }
   return value;
 }
@@ -53,8 +54,9 @@ __global__ void normalization_kernel(const T* input, const T* residual,
     for (std::size_t col = threadIdx.x; col < width; col += blockDim.x) {
       const float value =
           input_value<T, Fused, ZeroCentered>(input, residual, offset + col);
-      if constexpr (Fused)
+      if constexpr (Fused) {
         residual_output[offset + col] = detail::from_float<T>(value);
+      }
       if constexpr (ZeroCentered) {
         // Qwen3.5 applies (1 + weight) in FP32 before the output cast.
         output[offset + col] = detail::from_float<T>(
@@ -83,14 +85,15 @@ void launch_norm(ConstTensorView input, ConstTensorView residual,
     residual_data = residual.data<T>();
     residual_output_data = residual_output.data<T>();
   }
-  if (zero_centered)
+  if (zero_centered) {
     normalization_kernel<T, Fused, true><<<blocks, kThreads, 0, stream>>>(
         input.data<T>(), residual_data, weight.data<T>(), output.data<T>(),
         residual_output_data, rows, width, epsilon);
-  else
+  } else {
     normalization_kernel<T, Fused, false><<<blocks, kThreads, 0, stream>>>(
         input.data<T>(), residual_data, weight.data<T>(), output.data<T>(),
         residual_output_data, rows, width, epsilon);
+  }
 }
 
 __global__ void gated_norm_kernel(const float* input, const float* gate,

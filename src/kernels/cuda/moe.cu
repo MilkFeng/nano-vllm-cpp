@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
-#include <limits>
 
 #include "common/cuda_utils.hh"
 #include "kernels/cuda/common.cuh"

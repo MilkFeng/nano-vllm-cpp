@@ -109,21 +109,18 @@ __global__ void attention_kernel(const T* __restrict__ query,
     std::int64_t visible = 0;
     if constexpr (Decode) {
       visible = context_lens[sequence];
-      assert(visible >= 0
-             && static_cast<std::size_t>(visible) <= shape.context_capacity);
+      assert(visible >= 0 && visible <= shape.context_capacity);
     } else {
       assert(cu_query[0] == 0 && cu_key[0] == 0
-             && cu_query[shape.batch]
-                    == static_cast<std::int64_t>(shape.tokens));
+             && cu_query[shape.batch] == shape.tokens);
       if constexpr (!Paged) {
-        assert(cu_key[shape.batch]
-               == static_cast<std::int64_t>(shape.kv_tokens));
+        assert(cu_key[shape.batch] == shape.kv_tokens);
       }
       // upper_bound handles empty sequences (repeated cumulative lengths).
       std::size_t low = 0, high = shape.batch;
       while (low < high) {
         const auto middle = low + (high - low) / 2;
-        if (cu_query[middle + 1] <= static_cast<std::int64_t>(token)) {
+        if (cu_query[middle + 1] <= token) {
           low = middle + 1;
         } else {
           high = middle;
@@ -137,17 +134,15 @@ __global__ void attention_kernel(const T* __restrict__ query,
       const std::int64_t key_end = cu_key[sequence + 1];
       const auto query_length = query_end - query_begin;
       const auto key_length = key_end - key_begin;
-      assert(query_begin >= 0 && query_begin <= static_cast<std::int64_t>(token)
-             && static_cast<std::int64_t>(token) < query_end
-             && query_end <= static_cast<std::int64_t>(shape.tokens));
+      assert(query_begin >= 0 && query_begin <= token && token < query_end
+             && query_end <= shape.tokens);
       assert(key_begin >= 0 && key_length >= 0);
       if constexpr (Paged) {
-        assert(static_cast<std::size_t>(key_length) <= shape.context_capacity);
+        assert(key_length <= shape.context_capacity);
       } else {
-        assert(key_end <= static_cast<std::int64_t>(shape.kv_tokens));
+        assert(key_end <= shape.kv_tokens);
       }
-      const auto limit = key_length - query_length
-                         + static_cast<std::int64_t>(token) - query_begin + 1;
+      const auto limit = key_length - query_length + token - query_begin + 1;
       visible = limit < 0 ? 0 : (limit < key_length ? limit : key_length);
     }
 
@@ -167,31 +162,31 @@ __global__ void attention_kernel(const T* __restrict__ query,
     for (std::int64_t j = 0; j < visible; ++j) {
       std::size_t slot;
       if constexpr (Paged) {
-        const auto block_column =
-            static_cast<std::size_t>(j) / shape.block_size;
+        const auto block_column = j / shape.block_size;
         const auto block =
             block_tables[sequence * shape.max_blocks + block_column];
-        assert(block >= 0 && static_cast<std::size_t>(block) < shape.blocks);
+        assert(block >= 0 && block < shape.blocks);
         slot = static_cast<std::size_t>(block) * shape.block_size
                + static_cast<std::size_t>(j) % shape.block_size;
       } else {
-        slot = static_cast<std::size_t>(key_begin + j);
+        slot = key_begin + j;
       }
       const auto kv_offset = (slot * shape.kv_heads + kv_head) * shape.width;
       float dot = 0.0f;
 #pragma unroll
       for (unsigned part = 0; part < kValuesPerLane; ++part) {
         const auto d = lane + part * kWarpSize;
-        if (d < shape.width)
+        if (d < shape.width) {
           dot += q[part] * detail::to_float(key[kv_offset + d]);
+        }
       }
       dot = detail::warp_sum_reduce<float, false>(dot);
       float alpha = 0.0f, beta = 0.0f;
       if (lane == 0) {
         const float score = dot * scale;
         const float next_maximum = fmaxf(maximum, score);
-        alpha = expf(maximum - next_maximum);
-        beta = expf(score - next_maximum);
+        alpha = __expf(maximum - next_maximum);
+        beta = __expf(score - next_maximum);
         denominator = denominator * alpha + beta;
         maximum = next_maximum;
       }
