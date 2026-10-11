@@ -12,28 +12,6 @@
 #include "models/qwen3.hh"
 
 namespace nanovllm {
-namespace {
-
-class DeviceGuard {
- public:
-  DeviceGuard() {
-    check_cuda(cudaGetDevice(&previous_), "get CUDA device");
-    if (previous_ != 0) {
-      check_cuda(cudaSetDevice(0), "select CUDA device 0");
-    }
-  }
-
-  ~DeviceGuard() {
-    if (previous_ != 0) {
-      cudaSetDevice(previous_);
-    }
-  }
-
- private:
-  int previous_ = 0;
-};
-
-} // namespace
 
 ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
                          const std::filesystem::path& checkpoint)
@@ -62,7 +40,7 @@ ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
         "or reduce max_model_len");
   }
 
-  const DeviceGuard guard;
+  const CudaDeviceGuard guard(0);
   check_cuda(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking),
              "create inference stream");
   try {
@@ -106,7 +84,7 @@ std::vector<std::int32_t> ModelRunner::run(
   if (seqs.size() > params_.max_num_seqs) {
     throw std::invalid_argument("inference batch exceeds max_num_seqs");
   }
-  const DeviceGuard guard;
+  const CudaDeviceGuard guard(0);
   std::vector<std::int32_t> ids, positions, slots, cu_q{0}, cu_k{0}, lengths;
   std::vector<float> temperatures;
   std::size_t max_q = 0, max_k = 0, table_width = 0;

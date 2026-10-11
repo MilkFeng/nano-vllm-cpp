@@ -1,39 +1,10 @@
 #include "core/storage.hh"
 
-#include <format>
 #include <stdexcept>
 
 #include "common/cuda_utils.hh"
 
 namespace nanovllm {
-
-namespace {
-class CudaDeviceGuard {
- public:
-  explicit CudaDeviceGuard(int index) {
-    check_cuda(cudaGetDevice(&previous_device_),
-               "failed to get the current CUDA device");
-    if (previous_device_ == index) return;
-
-    const auto operation = std::format("failed to select CUDA device {}", index);
-    check_cuda(cudaSetDevice(index), operation);
-    restore_ = true;
-  }
-
-  ~CudaDeviceGuard() {
-    if (restore_) {
-      cudaSetDevice(previous_device_);
-    }
-  }
-
-  CudaDeviceGuard(const CudaDeviceGuard&) = delete;
-  CudaDeviceGuard& operator=(const CudaDeviceGuard&) = delete;
-
- private:
-  int previous_device_ = 0;
-  bool restore_ = false;
-};
-} // namespace
 
 Storage::Storage(std::size_t size_bytes, Device device)
     : size_bytes_(size_bytes),
