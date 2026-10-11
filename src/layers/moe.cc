@@ -363,6 +363,15 @@ MoE::MoE(MoEConfig config, Device device,
                config_.num_experts) {
   register_module("gate", gate_);
   register_module("experts", experts_);
+  if (config_.shared_expert_intermediate_size != 0) {
+    shared_expert_ = std::make_unique<SwiGLUMLP>(
+        config_.hidden_size, config_.shared_expert_intermediate_size,
+        DataType::Float32, device);
+    shared_expert_gate_ = std::make_unique<Linear>(
+        config_.hidden_size, 1, false, DataType::Float32, device);
+    register_module("shared_expert", *shared_expert_);
+    register_module("shared_expert_gate", *shared_expert_gate_);
+  }
   if (device == Device::cpu()) {
     if (gpu_expert_ids.has_value()) {
       throw std::invalid_argument(
@@ -417,6 +426,16 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
       Tensor::empty({1, config_.hidden_size}, DataType::Float32, device);
   kernels::cuda::moe_combine(executed.expert_outputs.view().as_const(),
                              weights.view().as_const(), output.view(), stream);
+  Tensor shared_output, shared_gate_logits;
+  if (shared_expert_) {
+    // Keep the two branches explicit: routed sum + sigmoid(gate) * shared MLP.
+    // This first version computes the shared branch after routed dispatch.
+    shared_output = shared_expert_->forward(hidden_states, stream);
+    shared_gate_logits = shared_expert_gate_->forward(hidden_states, stream);
+    kernels::cuda::moe_add_shared(shared_output.view().as_const(),
+                                  shared_gate_logits.view().as_const(),
+                                  output.view(), stream);
+  }
   check_cuda(cudaStreamSynchronize(stream), "complete MoE forward");
   return {std::move(output),
           std::move(logits),
@@ -424,7 +443,9 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
           std::move(weights),
           std::move(executed.expert_outputs),
           executed.gpu_experts,
-          executed.cpu_experts};
+          executed.cpu_experts,
+          std::move(shared_output),
+          std::move(shared_gate_logits)};
 }
 
 const MoEConfig& MoE::config() const noexcept {

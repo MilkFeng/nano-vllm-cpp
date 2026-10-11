@@ -66,4 +66,10 @@ void moe_route(ConstTensorView logits, TensorView expert_ids,
 void moe_combine(ConstTensorView expert_outputs, ConstTensorView expert_weights,
                  TensorView output, cudaStream_t stream = nullptr);
 
+// In-place addition: output += sigmoid(gate_logits) * shared_output.
+// shared_output/output: Float32 [1,H]; gate_logits: Float32 [1,1], finite.
+// H > 0; views must be disjoint. Routing and routed weights are unchanged.
+void moe_add_shared(ConstTensorView shared_output, ConstTensorView gate_logits,
+                    TensorView output, cudaStream_t stream = nullptr);
+
 } // namespace nanovllm::kernels::cuda

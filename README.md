@@ -98,7 +98,7 @@ x[1,H] → Router Linear → softmax → top-k → 选中概率重新归一化
 combine 时应用一次。权重可通过 `Module::named_parameters()` 初始化；测试
 展示了完整的权重初始化和运行方式。
 
-全部专家权重保存在 RAM 中的 `ExpertStore`，模型参数名仍为
+全部 routed 专家权重保存在 RAM 中的 `ExpertStore`，模型参数名仍为
 `experts.N.gate_proj.weight` 等。GPU 的 `ExpertCache` 只分配固定名单对应的
 专家槽位，缓存副本不注册为额外模型参数。Router 在 GPU 上计算，命中的专家
 在 GPU 槽位上执行，未命中的专家在 CPU 上执行；CPU 输出复制回 GPU 后统一
@@ -121,18 +121,68 @@ MoE moe({128, 64, 16, 2}, Device::cuda(0),
 
 初始化 `named_parameters()` 返回的权重后，调用
 `moe.populate_expert_cache(stream)`，再调用 `moe.forward(x, stream)`。
-专家参数在 CPU，Router 参数在所选设备上；复制参数时按目标设备选择
+routed 专家参数在 CPU，Router 参数在所选设备上；复制参数时按目标设备选择
 `memcpy` 或 CUDA 复制。RAM 权重修改后需要再次填充缓存。
 
-省略驻留名单（`std::nullopt`）缓存全部专家；传入显式空向量
-`std::vector<std::int32_t>{}` 分配零个 GPU 专家槽位，全部专家在 CPU 执行。
+省略驻留名单（`std::nullopt`）缓存全部 routed 专家；传入显式空向量
+`std::vector<std::int32_t>{}` 分配零个 GPU 专家槽位，全部选中 routed 专家在 CPU 执行。
 CPU 构造只创建参考权重。`MoEOutput` 的 `gpu_experts`、`cpu_experts` 记录
-本次选中专家的执行数量；`expert_cache().num_slots()` 和 `size_bytes()`
-可以检查缓存容量和实际 GPU 专家权重字节数。
+本次选中 routed 专家的执行数量，不包含共享分支；`expert_cache().num_slots()`
+和 `size_bytes()` 只统计 routed 缓存槽位和权重，不包含 Router、共享专家及工作区。
 
 当前支持单 token、FP32、1..1024 个专家、`1 <= top_k <= E`。缓存名单固定，
-populate/forward 同步传入的 stream，调用需串行。量化、共享专家、动态换入
-换出作为后续步骤；当前文本生成使用原有 Qwen3 模型。
+populate/forward 同步传入的 stream，调用需串行。量化、动态换入换出作为后续
+步骤；当前文本生成使用原有 Qwen3 模型。
+
+### 可选共享专家
+
+`MoEConfig::shared_expert_intermediate_size` 默认是 `0`，关闭共享分支。
+设为正数时，增加一个 SwiGLUMLP 和无 bias 的 `H → 1` Linear：
+
+```text
+y = routed_sum + sigmoid(shared_expert_gate(x)) * shared_expert(x)
+```
+
+共享专家每次 forward 都执行，不参与 Router 的 top-k，也不参与选中专家概率的
+归一化。它的中间维度可以与 routed 专家不同。门控 logit 为 `0` 时，sigmoid
+系数是 `0.5`；关闭分支应将配置维度设为 `0`。
+
+```cpp
+MoEConfig config{
+    .hidden_size = 128,
+    .intermediate_size = 64,
+    .num_experts = 16,
+    .top_k = 2,
+    .shared_expert_intermediate_size = 32,
+};
+MoE moe(config, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6},
+        ExpertExecutionMode::Overlap);
+```
+
+共享分支直接挂在 `MoE` 下，注册以下参数：
+
+```text
+shared_expert.gate_proj.weight   [Is,H]
+shared_expert.up_proj.weight     [Is,H]
+shared_expert.down_proj.weight   [H,Is]
+shared_expert_gate.weight        [1,H]
+```
+
+GPU 构造时这四个参数常驻 GPU，不占 routed expert cache 的槽位；CPU 构造时
+它们位于 RAM，供独立参考实现使用。共享分支额外的 FP32 权重字节数是
+`(3 * H * Is + H) * sizeof(float)`，不含激活和临时工作区。初始化参数仍然通过
+`named_parameters()`；`populate_expert_cache()` 只上传 routed 专家的缓存副本。
+
+这一版先完成 routed dispatch 和 combine，再用现有层计算共享专家、门控，并
+通过 `kernels::cuda::moe_add_shared()` 原地加入输出。同步和 Overlap 模式使用
+相同共享分支；共享分支尚未加入 CPU/GPU 计算重叠，工作区使用现有层的临时分配。
+
+`MoEOutput::shared_expert_output` 返回未经门控的 `[1,H]` 输出，
+`shared_gate_logits` 返回 sigmoid 之前的 `[1,1]` logit；关闭分支时两者为空。
+最终 `hidden_states` 包含 routed 和共享两部分。CPU 参考接口的可选
+`SharedExpertWeights` 传入这四个权重，默认省略时保持原有 routed 计算。
+
+### CPU/GPU 重叠执行
 
 第四个构造参数选择执行方式，默认 `ExpertExecutionMode::Synchronous` 保留
 按 Router 排名逐个分派的路径。开启重叠执行：

@@ -79,6 +79,22 @@ __global__ void combine_kernel(const float* __restrict__ parts,
   }
 }
 
+__global__ void add_shared_kernel(const float* __restrict__ shared_output,
+                                  const float* __restrict__ gate_logits,
+                                  float* __restrict__ output,
+                                  std::size_t hidden_size) {
+  const float logit = gate_logits[0];
+  const float exponential = expf(-fabsf(logit));
+  const float weight = logit >= 0.0f ? 1.0f / (1.0f + exponential)
+                                     : exponential / (1.0f + exponential);
+  const std::size_t start_d =
+      static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
+  for (std::size_t d = start_d; d < hidden_size; d += step) {
+    output[d] += weight * shared_output[d];
+  }
+}
+
 } // namespace
 
 void moe_route(ConstTensorView logits, TensorView expert_ids,
@@ -121,6 +137,30 @@ void moe_combine(ConstTensorView expert_outputs, ConstTensorView expert_weights,
       expert_outputs.data<float>(), expert_weights.data<float>(),
       output.data<float>(), hidden_size, top_k);
   check_cuda(cudaGetLastError(), "MoE combine kernel launch");
+}
+
+void moe_add_shared(ConstTensorView shared_output, ConstTensorView gate_logits,
+                    TensorView output, cudaStream_t stream) {
+  detail::assert_tensor(shared_output);
+  detail::assert_tensor(gate_logits);
+  detail::assert_tensor(output);
+  assert(same_device(shared_output, gate_logits, output));
+  assert(same_dtype(shared_output, gate_logits, output));
+  assert(output.dtype() == DataType::Float32);
+  assert(output.rank() == 2);
+  assert(output.shape()[0] == 1);
+  assert(output.shape()[1] > 0);
+  assert(same_shape(shared_output, output));
+  assert(gate_logits.rank() == 2);
+  assert(gate_logits.shape()[0] == 1);
+  assert(gate_logits.shape()[1] == 1);
+  const auto hidden_size = output.shape()[1];
+  const auto blocks = static_cast<unsigned>(
+      std::min<std::size_t>((hidden_size + kThreads - 1) / kThreads, 65535));
+  add_shared_kernel<<<blocks, kThreads, 0, stream>>>(
+      shared_output.data<float>(), gate_logits.data<float>(),
+      output.data<float>(), hidden_size);
+  check_cuda(cudaGetLastError(), "MoE shared branch kernel launch");
 }
 
 } // namespace nanovllm::kernels::cuda

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <iostream>
 #include <numeric>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -79,11 +80,21 @@ std::vector<ExpertWeights> expert_views(const MoE& moe) {
   return views;
 }
 
+std::optional<kernels::cpu::SharedExpertWeights> shared_weights(
+    const MoE& moe) {
+  if (moe.config().shared_expert_intermediate_size == 0) return std::nullopt;
+  return kernels::cpu::SharedExpertWeights{
+      {moe.parameter("shared_expert.gate_proj.weight").view(),
+       moe.parameter("shared_expert.up_proj.weight").view(),
+       moe.parameter("shared_expert.down_proj.weight").view()},
+      moe.parameter("shared_expert_gate.weight").view()};
+}
+
 MoEReferenceOutput reference(const MoE& moe, const Tensor& input) {
   const auto experts = expert_views(moe);
-  return kernels::cpu::moe_reference(input.view(),
-                                     moe.parameter("gate.weight").view(),
-                                     experts, moe.config().top_k);
+  return kernels::cpu::moe_reference(
+      input.view(), moe.parameter("gate.weight").view(), experts,
+      moe.config().top_k, shared_weights(moe));
 }
 
 // A fixed integer generator avoids dependency on standard-library float RNGs.
@@ -119,6 +130,11 @@ void check_reference(const MoEReferenceOutput& result,
           && result.expert_ids.size() == config.top_k
           && result.expert_outputs.size() == config.top_k * config.hidden_size,
       "reference output shape mismatch");
+  const auto shared_width =
+      config.shared_expert_intermediate_size != 0 ? config.hidden_size : 0;
+  require(result.shared_expert_output.size() == shared_width
+              && result.shared_gate_logits.size() == (shared_width ? 1u : 0u),
+          "reference shared output shape mismatch");
   auto sorted_ids = result.expert_ids;
   std::ranges::sort(sorted_ids);
   require(std::adjacent_find(sorted_ids.begin(), sorted_ids.end())
@@ -149,6 +165,79 @@ void initialize_analytic(MoE& moe) {
                   : id == 1 ? down1
                             : unused);
   }
+}
+
+void initialize_shared_analytic(MoE& moe) {
+  initialize_analytic(moe);
+  // Routed I=1, shared I=2; the second shared channel is zero.
+  set_parameter(moe, "shared_expert.gate_proj.weight",
+                std::vector<float>{1, 0, 0, 0});
+  set_parameter(moe, "shared_expert.up_proj.weight",
+                std::vector<float>{0, 1, 0, 0});
+  set_parameter(moe, "shared_expert.down_proj.weight",
+                std::vector<float>{2, 0, -4, 0});
+  set_parameter(moe, "shared_expert_gate.weight", std::vector<float>{0, 0});
+}
+
+void test_shared_cpu() {
+  MoE routed({2, 1, 3, 2}, Device::cpu());
+  initialize_analytic(routed);
+  MoE shared({2, 1, 3, 2, 2}, Device::cpu());
+  initialize_shared_analytic(shared);
+  const std::vector<float> values{1, 2};
+  const auto input = cpu_tensor({1, 2}, values);
+  const auto baseline = reference(routed, input);
+  require(!routed.has_parameter("shared_expert.gate_proj.weight")
+              && !routed.has_parameter("shared_expert_gate.weight")
+              && baseline.shared_expert_output.empty()
+              && baseline.shared_gate_logits.empty(),
+          "disabled shared branch should allocate no parameters or outputs");
+  require(shared.named_parameters().size() == 1 + 3 * 3 + 4,
+          "shared branch should register exactly four weights");
+  const double s = 1.0 / (1.0 + std::exp(-1.0));
+  for (const float logit : {0.0f, -2.0f, 2.0f, -1000.0f, 1000.0f}) {
+    const std::vector<float> gate{logit, 0};
+    set_parameter(shared, "shared_expert_gate.weight", gate);
+    const auto actual = reference(shared, input);
+    const double weight = 1.0 / (1.0 + std::exp(-double(logit)));
+    const std::vector<float> expected{float(2 * s + weight * 4 * s),
+                                      float(7 * s - weight * 8 * s)};
+    compare(actual.hidden_states, expected, "hand-computed shared MoE", 1e-6f,
+            1e-6f);
+    compare(actual.shared_expert_output,
+            std::vector<float>{float(4 * s), float(-8 * s)},
+            "raw shared SwiGLU", 1e-6f, 1e-6f);
+    require(actual.shared_gate_logits == std::vector<float>{logit},
+            "shared gate output should contain the raw logit");
+    require(actual.router_logits == baseline.router_logits
+                && actual.expert_ids == baseline.expert_ids
+                && actual.expert_weights == baseline.expert_weights
+                && actual.expert_outputs == baseline.expert_outputs,
+            "shared branch must not change routing or routed expert rows");
+    if (logit == -1000.0f)
+      require(actual.hidden_states == baseline.hidden_states,
+              "closed shared gate should reproduce the routed output");
+    check_reference(actual, shared.config());
+  }
+  const auto experts = expert_views(shared);
+  const auto bad_gate = cpu_tensor({2, 2}, std::vector<float>(4));
+  auto bad = *shared_weights(shared);
+  bad.gate_weight = bad_gate.view();
+  expect_invalid([&] {
+    (void)kernels::cpu::moe_reference(
+        input.view(), shared.parameter("gate.weight").view().as_const(),
+        experts, 2, bad);
+  });
+  bad = *shared_weights(shared);
+  const auto bad_up = cpu_tensor({1, 2}, std::vector<float>(2));
+  bad.expert.up = bad_up.view();
+  expect_invalid([&] {
+    (void)kernels::cpu::moe_reference(
+        input.view(), shared.parameter("gate.weight").view().as_const(),
+        experts, 2, bad);
+  });
+  std::cout << "CPU shared expert: hand-computed outputs, gate limits and "
+               "shapes passed\n";
 }
 
 void test_cpu() {
@@ -183,6 +272,7 @@ void test_cpu() {
         input.view(), analytic.parameter("gate.weight").view().as_const(),
         experts, 4);
   });
+  test_shared_cpu();
   std::cout
       << "CPU reference: analytical result, top-k limits, shapes passed\n";
 }
@@ -262,6 +352,33 @@ void test_combine(cudaStream_t stream) {
   compare(download<float>(output, stream), expected, "combine", 2e-6f, 2e-6f);
 }
 
+void test_add_shared(cudaStream_t stream) {
+  constexpr std::size_t hidden_size = 513;
+  std::vector<float> routed(hidden_size), shared(hidden_size);
+  for (std::size_t d = 0; d < hidden_size; ++d) {
+    routed[d] = (static_cast<int>(d % 13) - 6) * 0.2f;
+    shared[d] = (static_cast<int>(d % 11) - 5) * 0.3f;
+  }
+  const auto shared_tensor =
+      upload(cpu_tensor({1, hidden_size}, shared), stream);
+  for (const float logit : {0.0f, -2.0f, 2.0f, -1000.0f, 1000.0f}) {
+    const auto gate =
+        upload(cpu_tensor({1, 1}, std::vector<float>{logit}), stream);
+    auto output = upload(cpu_tensor({1, hidden_size}, routed), stream);
+    kernels::cuda::moe_add_shared(shared_tensor.view(), gate.view(),
+                                  output.view(), stream);
+    const double weight = 1.0 / (1.0 + std::exp(-double(logit)));
+    std::vector<float> expected(hidden_size);
+    for (std::size_t d = 0; d < hidden_size; ++d)
+      expected[d] = float(routed[d] + weight * shared[d]);
+    compare(download<float>(output, stream), expected, "add shared", 2e-6f,
+            2e-6f);
+    require(download<float>(shared_tensor, stream) == shared
+                && download<float>(gate, stream) == std::vector<float>{logit},
+            "shared addition modified an input");
+  }
+}
+
 void check_gpu_moe(const MoE& cpu, const Tensor& input, cudaStream_t stream,
                    const std::string& label) {
   const auto expected = reference(cpu, input);
@@ -295,6 +412,16 @@ void check_gpu_moe(const MoE& cpu, const Tensor& input, cudaStream_t stream,
             expected.expert_weights, label + " weights", 2e-7f, 2e-6f);
     compare(download<float>(actual.expert_outputs, stream),
             expected.expert_outputs, label + " expert outputs");
+    if (cpu.config().shared_expert_intermediate_size != 0) {
+      compare(download<float>(actual.shared_expert_output, stream),
+              expected.shared_expert_output, label + " raw shared output");
+      compare(download<float>(actual.shared_gate_logits, stream),
+              expected.shared_gate_logits, label + " shared gate logits");
+    } else {
+      require(actual.shared_expert_output.numel() == 0
+                  && actual.shared_gate_logits.numel() == 0,
+              label + ": disabled shared outputs should be empty");
+    }
     const auto maximum = compare(download<float>(actual.hidden_states, stream),
                                  expected.hidden_states, label + " output");
     std::cout << (mode == ExpertExecutionMode::Overlap ? "overlap " : "sync ")
@@ -334,6 +461,7 @@ int test_gpu() {
                stream.handle);
   }
   test_combine(stream.handle);
+  test_add_shared(stream.handle);
   std::cout << "CUDA route/combine: ties, extreme scores, multi-block widths "
                "passed\n";
 
@@ -352,6 +480,23 @@ int test_gpu() {
           "E=" + std::to_string(config.num_experts) + " K="
               + std::to_string(config.top_k) + " seed=" + std::to_string(seed));
     }
+  }
+  MoE shared_analytic({2, 1, 3, 2, 2}, Device::cpu());
+  initialize_shared_analytic(shared_analytic);
+  for (const float logit : {0.0f, -2.0f, 2.0f, -1000.0f, 1000.0f}) {
+    set_parameter(shared_analytic, "shared_expert_gate.weight",
+                  std::vector<float>{logit, 0});
+    check_gpu_moe(shared_analytic, cpu_tensor({1, 2}, values), stream.handle,
+                  "shared analytic gate=" + std::to_string(logit));
+  }
+  for (const auto config :
+       {MoEConfig{128, 64, 16, 2, 37}, MoEConfig{7, 5, 5, 1, 3},
+        MoEConfig{9, 7, 5, 5, 11}, MoEConfig{3, 2, 1, 1, 4}}) {
+    MoE cpu(config, Device::cpu());
+    initialize(cpu, 42);
+    check_gpu_moe(cpu, random_input(config.hidden_size, 7), stream.handle,
+                  "shared E=" + std::to_string(config.num_experts)
+                      + " K=" + std::to_string(config.top_k));
   }
   MoE tied({128, 64, 16, 2}, Device::cpu());
   initialize(tied, 11, true);

@@ -43,7 +43,7 @@ compute-sanitizer --tool racecheck --error-exitcode 1 \
 4 槽位混合执行、4 槽位全未命中、4 槽位全命中。两组输入分别选择
 `[7,2]` 和 `[9,4]`；改变路由后再次执行原输入，检查输出行和临时缓冲区。
 
-测试检查缓存只分配指定数量的 GPU 专家，全部真实专家参数仍在 RAM，缓存
+测试检查缓存只分配指定数量的 GPU 专家，全部 routed 专家参数仍在 RAM，缓存
 副本没有额外注册为模型参数。还检查填充完成前禁止使用缓存、GPU 副本独立
 于 RAM 参数，以及显式重新填充后的结果。输出记录每次的专家编号、CPU/GPU
 执行计数、槽位数量、GPU 权重字节数和最终输出误差。
@@ -54,6 +54,25 @@ compute-sanitizer --tool racecheck --error-exitcode 1 \
 compute-sanitizer --tool memcheck --error-exitcode 1 \
   ./build/nano-vllm-cpp-moe-offload-test --gpu
 ```
+
+## 共享专家
+
+`moe_cpu` 增加可手算的共享分支：输入 `x=[1,2]`，记 `s=SiLU(1)`，
+routed 输出是 `[2s,7s]`，原始 shared 输出是 `[4s,-8s]`。共享门控 logit
+为 `0` 时，sigmoid 系数为 `0.5`，最终结果应是 `[4s,3s]`。测试还检查
+`-2`、`2`、`-1000`、`1000` 的门控，以及无效共享矩阵形状；共享分支不能
+改变 Router logits、专家编号、路由权重和 routed expert 原始输出。
+
+`moe_cuda` 对同步和 Overlap 模式都比较共享专家原始输出、门控 logit 与最终
+结果，覆盖共享/routed 中间维度不同、top-1、top-E、单专家和非整齐维度。
+共享合并算子单独用 `H=513` 检查多 CUDA block、极端 sigmoid 值、原地加法
+和只读输入。关闭共享分支的原有测试继续运行，返回的共享中间结果应为空。
+
+`moe_offload_cuda` 在 `H=128, I=64, Is=37, E=16, K=2` 上检查全 GPU routed、
+全 CPU routed 和混合缓存。共享专家和门控始终在 GPU，另外注册四个参数；
+测试检查 GPU 共享权重字节数、routed 缓存大小和 routed CPU/GPU 计数，并要求
+同步/Overlap 的各项结果逐值相同。所有数值结果另外与独立 CPU 参考对照。
+上述 CTest 和 compute-sanitizer 命令同时覆盖共享分支。
 
 ## CPU/GPU 重叠执行
 

@@ -19,6 +19,16 @@ void validate_matrix(ConstTensorView matrix, std::size_t rows,
   }
 }
 
+void validate_expert(const ExpertWeights& expert, std::size_t hidden_size) {
+  if (expert.gate.rank() != 2 || expert.gate.shape()[0] == 0) {
+    throw std::invalid_argument("invalid MoE expert intermediate dimension");
+  }
+  const auto intermediate_size = expert.gate.shape()[0];
+  validate_matrix(expert.gate, intermediate_size, hidden_size);
+  validate_matrix(expert.up, intermediate_size, hidden_size);
+  validate_matrix(expert.down, hidden_size, intermediate_size);
+}
+
 std::vector<float> matvec(ConstTensorView weight,
                           std::span<const float> input) {
   std::vector<float> result(weight.shape()[0]);
@@ -47,10 +57,10 @@ std::vector<float> expert_forward(const ExpertWeights& weights,
 
 } // namespace
 
-MoEReferenceOutput moe_reference(ConstTensorView input,
-                                 ConstTensorView router_weight,
-                                 std::span<const ExpertWeights> experts,
-                                 std::size_t top_k) {
+MoEReferenceOutput moe_reference(
+    ConstTensorView input, ConstTensorView router_weight,
+    std::span<const ExpertWeights> experts, std::size_t top_k,
+    std::optional<SharedExpertWeights> shared_expert) {
   if (input.rank() != 2 || input.shape()[0] != 1 || input.shape()[1] == 0
       || experts.empty() || top_k == 0 || top_k > experts.size()) {
     throw std::invalid_argument(
@@ -59,14 +69,10 @@ MoEReferenceOutput moe_reference(ConstTensorView input,
   const auto hidden_size = input.shape()[1];
   validate_matrix(input, 1, hidden_size);
   validate_matrix(router_weight, experts.size(), hidden_size);
-  for (const auto& expert : experts) {
-    if (expert.gate.rank() != 2 || expert.gate.shape()[0] == 0) {
-      throw std::invalid_argument("invalid MoE expert intermediate dimension");
-    }
-    const auto intermediate_size = expert.gate.shape()[0];
-    validate_matrix(expert.gate, intermediate_size, hidden_size);
-    validate_matrix(expert.up, intermediate_size, hidden_size);
-    validate_matrix(expert.down, hidden_size, intermediate_size);
+  for (const auto& expert : experts) validate_expert(expert, hidden_size);
+  if (shared_expert) {
+    validate_expert(shared_expert->expert, hidden_size);
+    validate_matrix(shared_expert->gate_weight, 1, hidden_size);
   }
 
   const std::span<const float> x(input.data<float>(), hidden_size);
@@ -118,6 +124,22 @@ MoEReferenceOutput moe_reference(ConstTensorView input,
              * result.expert_outputs[rank * hidden_size + d];
     }
     result.hidden_states[d] = static_cast<float>(sum);
+  }
+  if (shared_expert) {
+    result.shared_expert_output = expert_forward(shared_expert->expert, x);
+    result.shared_gate_logits = matvec(shared_expert->gate_weight, x);
+    const double logit = result.shared_gate_logits[0];
+    if (!std::isfinite(logit)) {
+      throw std::invalid_argument(
+          "MoE reference needs a finite shared gate logit");
+    }
+    const double exponential = std::exp(-std::abs(logit));
+    const double weight = logit >= 0.0 ? 1.0 / (1.0 + exponential)
+                                       : exponential / (1.0 + exponential);
+    for (std::size_t d = 0; d < hidden_size; ++d) {
+      result.hidden_states[d] = static_cast<float>(
+          result.hidden_states[d] + weight * result.shared_expert_output[d]);
+    }
   }
   return result;
 }

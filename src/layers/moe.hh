@@ -116,24 +116,32 @@ struct MoEConfig {
   std::size_t intermediate_size;
   std::size_t num_experts;
   std::size_t top_k;
+  // 0 disables the shared branch.
+  std::size_t shared_expert_intermediate_size = 0;
 
   void validate() const;
 };
 
-// All tensor outputs live on CUDA. Expert rows follow router rank, not ID or
-// cache slot. Weights are applied once when combining the unweighted rows.
+// Nonempty tensor outputs live on CUDA. Expert rows follow router rank, not ID
+// or cache slot. Weights are applied once when combining the unweighted rows.
 struct MoEOutput {
   Tensor hidden_states;  // Float32 [1,H].
   Tensor router_logits;  // Float32 [1,E].
   Tensor expert_ids;     // Int32 [1,K].
   Tensor expert_weights; // Float32 [1,K], sum to 1.
   Tensor expert_outputs; // Float32 [K,H].
+  // Execution counts cover routed experts, excluding the shared branch.
   std::size_t gpu_experts = 0;
   std::size_t cpu_experts = 0;
+  // Shared intermediates are empty when the branch is disabled.
+  Tensor shared_expert_output; // Raw Float32 [1,H].
+  Tensor shared_gate_logits;   // Float32 [1,1], before sigmoid.
 };
 
-// Single-token FP32 routed MoE. All expert parameters are in RAM; only the
-// fixed resident list is copied to GPU. nullopt caches all experts; an empty
+// Single-token FP32 MoE with an optional Qwen3.5-style shared branch. Routed
+// expert parameters are in RAM; only the fixed resident list is copied to GPU.
+// The shared expert and its H->1 sigmoid gate stay on the selected device,
+// outside the routed cache. nullopt caches all routed experts; an empty
 // vector caches none. CPU construction creates reference weights without CUDA
 // allocations. Initialize parameters, then populate_expert_cache(), then
 // forward(). Input shape/device/dtype use Debug assertions.
@@ -157,6 +165,8 @@ class MoE final : public Module {
   MoEConfig config_;
   Linear gate_;
   ExpertStore experts_;
+  std::unique_ptr<SwiGLUMLP> shared_expert_;
+  std::unique_ptr<Linear> shared_expert_gate_;
   std::unique_ptr<ExpertCache> cache_;
   std::unique_ptr<ExpertExecutor> executor_;
 };

@@ -8,6 +8,7 @@
 #include <cstring>
 #include <iostream>
 #include <numeric>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -60,11 +61,12 @@ void set_values(Module& module, const std::string& name,
 }
 
 struct Fixture {
-  MoE cpu{{128, 64, 16, 2}, Device::cpu()};
+  MoE cpu;
   Tensor input = Tensor::empty({1, 128}, DataType::Float32);
   Tensor other_input = Tensor::empty({1, 128}, DataType::Float32);
 
-  Fixture() {
+  explicit Fixture(std::size_t shared_intermediate_size = 0)
+      : cpu({128, 64, 16, 2, shared_intermediate_size}, Device::cpu()) {
     std::uint32_t state = 123;
     for (const auto& [name, parameter] : cpu.named_parameters()) {
       auto view = parameter->view();
@@ -92,14 +94,25 @@ struct Fixture {
   }
 };
 
+std::optional<kernels::cpu::SharedExpertWeights> shared_weights(
+    const MoE& moe) {
+  if (moe.config().shared_expert_intermediate_size == 0) return std::nullopt;
+  return kernels::cpu::SharedExpertWeights{
+      {moe.parameter("shared_expert.gate_proj.weight").view(),
+       moe.parameter("shared_expert.up_proj.weight").view(),
+       moe.parameter("shared_expert.down_proj.weight").view()},
+      moe.parameter("shared_expert_gate.weight").view()};
+}
+
 kernels::cpu::MoEReferenceOutput reference(const MoE& cpu, const Tensor& input,
                                            std::size_t top_k = 2) {
   std::vector<kernels::cpu::ExpertWeights> experts;
   for (std::size_t id = 0; id < cpu.config().num_experts; ++id) {
     experts.push_back(cpu.expert_store().weights(id));
   }
-  return kernels::cpu::moe_reference(
-      input.view(), cpu.parameter("gate.weight").view(), experts, top_k);
+  return kernels::cpu::moe_reference(input.view(),
+                                     cpu.parameter("gate.weight").view(),
+                                     experts, top_k, shared_weights(cpu));
 }
 
 void test_cpu() {
@@ -191,13 +204,15 @@ std::vector<T> download(const Tensor& gpu, cudaStream_t stream) {
 }
 
 void copy_parameters(const MoE& cpu, MoE& gpu, cudaStream_t stream) {
-  require(gpu.named_parameters().size() == 1 + 3 * cpu.config().num_experts,
+  const auto shared_size = cpu.config().shared_expert_intermediate_size;
+  require(gpu.named_parameters().size()
+              == 1 + 3 * cpu.config().num_experts + (shared_size ? 4 : 0),
           "cache copies must not be registered as model parameters");
   for (const auto& [name, parameter] : cpu.named_parameters()) {
     const auto source = parameter->view();
     auto destination = gpu.parameter(name).view();
     const auto expected_device =
-        name == "gate.weight" ? Device::cuda(0) : Device::cpu();
+        name.starts_with("experts.") ? Device::cpu() : Device::cuda(0);
     require(destination.device() == expected_device,
             "wrong parameter residency: " + name);
     if (destination.device() == Device::cpu()) {
@@ -206,9 +221,21 @@ void copy_parameters(const MoE& cpu, MoE& gpu, cudaStream_t stream) {
       check_cuda(
           cudaMemcpyAsync(destination.data(), source.data(),
                           source.size_bytes(), cudaMemcpyHostToDevice, stream),
-          "upload router");
+          "upload GPU MoE parameter");
     }
   }
+  std::size_t gpu_parameter_bytes = 0;
+  for (const auto& [name, parameter] : gpu.named_parameters()) {
+    if (parameter->view().device() == Device::cuda(0))
+      gpu_parameter_bytes += parameter->view().size_bytes();
+  }
+  const auto hidden_size = cpu.config().hidden_size;
+  const auto expected_bytes =
+      (hidden_size * cpu.config().num_experts
+       + (shared_size ? 3 * hidden_size * shared_size + hidden_size : 0))
+      * sizeof(float);
+  require(gpu_parameter_bytes == expected_bytes,
+          "shared expert/gate must be separate from routed cache copies");
 }
 
 void check_forward(const MoE& cpu, const MoE& gpu, const Tensor& input,
@@ -226,6 +253,16 @@ void check_forward(const MoE& cpu, const MoE& gpu, const Tensor& input,
           expected.expert_weights, label + " weights");
   compare(download<float>(actual.expert_outputs, stream),
           expected.expert_outputs, label + " unweighted rows");
+  if (cpu.config().shared_expert_intermediate_size != 0) {
+    compare(download<float>(actual.shared_expert_output, stream),
+            expected.shared_expert_output, label + " raw shared output");
+    compare(download<float>(actual.shared_gate_logits, stream),
+            expected.shared_gate_logits, label + " shared gate logits");
+  } else {
+    require(actual.shared_expert_output.numel() == 0
+                && actual.shared_gate_logits.numel() == 0,
+            label + ": disabled shared outputs should be empty");
+  }
   const float maximum =
       compare(download<float>(actual.hidden_states, stream),
               expected.hidden_states, label + " combined output");
@@ -236,10 +273,18 @@ void check_forward(const MoE& cpu, const MoE& gpu, const Tensor& input,
       ++expected_hits;
   }
   require(actual.gpu_experts == expected_hits
-              && actual.cpu_experts == 2 - expected_hits,
+              && actual.cpu_experts == cpu.config().top_k - expected_hits,
           label + ": wrong CPU/GPU execution counts");
   if (synchronous) {
     const auto baseline = synchronous->forward(gpu_input.view(), stream);
+    if (cpu.config().shared_expert_intermediate_size != 0) {
+      require(
+          download<float>(actual.shared_expert_output, stream)
+                  == download<float>(baseline.shared_expert_output, stream)
+              && download<float>(actual.shared_gate_logits, stream)
+                     == download<float>(baseline.shared_gate_logits, stream),
+          label + ": shared branch differs between execution modes");
+    }
     require(download<float>(actual.router_logits, stream)
                     == download<float>(baseline.router_logits, stream)
                 && download<std::int32_t>(actual.expert_ids, stream)
@@ -416,6 +461,10 @@ int test_gpu() {
   check_layout(fixture, {4, 2, 9, 0}, stream.handle, "mixed four slots");
   check_layout(fixture, {0, 1, 3, 5}, stream.handle, "all miss four slots");
   check_layout(fixture, {2, 5, 7, 11}, stream.handle, "all hit four slots");
+  Fixture shared(37);
+  check_layout(shared, all, stream.handle, "shared all GPU");
+  check_layout(shared, {}, stream.handle, "shared all CPU routed");
+  check_layout(shared, {4, 2, 9, 0}, stream.handle, "shared mixed four slots");
   test_workspace_reuse(fixture, stream.handle);
   test_refresh(fixture, stream.handle, ExpertExecutionMode::Synchronous);
   test_refresh(fixture, stream.handle, ExpertExecutionMode::Overlap);
