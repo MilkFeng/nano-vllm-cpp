@@ -4,12 +4,14 @@
 #include <array>
 #include <limits>
 #include <stdexcept>
+#include <unordered_set>
 #include <utility>
 
 #include "common/cuda_utils.hh"
 #include "core/forward_context.hh"
 #include "kernels/cuda/inference.hh"
 #include "models/qwen3.hh"
+#include "models/qwen35.hh"
 
 namespace nanovllm {
 
@@ -24,6 +26,21 @@ ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
       || params_.max_model_len > config_.max_position_embeddings) {
     throw std::invalid_argument(
         "invalid engine limits or KV cache block count");
+  }
+  const auto int32_max = std::size_t(std::numeric_limits<std::int32_t>::max());
+  if (params_.max_num_seqs > int32_max
+      || params_.max_num_batched_tokens > int32_max
+      || params_.max_model_len > int32_max)
+    throw std::invalid_argument("engine limits exceed the Int32 index range");
+  if (config_.architecture == ModelArchitecture::Qwen3
+      && !params_.gpu_expert_ids.empty())
+    throw std::invalid_argument("gpu_expert_ids requires a Qwen3.5 MoE model");
+  std::unordered_set<std::int32_t> expert_ids;
+  for (const auto id : params_.gpu_expert_ids) {
+    if (id < 0 || std::size_t(id) >= config_.num_experts
+        || !expert_ids.insert(id).second)
+      throw std::invalid_argument(
+          "GPU expert IDs must be unique and inside the model expert range");
   }
   const auto index_limit =
       static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())
@@ -44,23 +61,37 @@ ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
   check_cuda(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking),
              "create inference stream");
   try {
-    model_ = std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda(0));
+    if (config_.architecture == ModelArchitecture::Qwen35Moe)
+      model_ = std::make_unique<Qwen35ForCausalLM>(config_, Device::cuda(0),
+                                                   params_.gpu_expert_ids);
+    else
+      model_ = std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda(0));
     model_->load_ckpt(checkpoint);
     // Weight uploads use the default stream; publish them before inference on
     // our nonblocking stream, which does not implicitly wait for that stream.
     check_cuda(cudaStreamSynchronize(nullptr), "complete model weight uploads");
 
-    const std::vector<std::size_t> shape{
-        config_.num_hidden_layers, num_blocks_, params_.kvcache_block_size,
-        config_.num_key_value_heads, config_.head_dim};
-    key_cache_ = Tensor::empty(shape, model_->dtype(), model_->device());
-    value_cache_ = Tensor::empty(shape, model_->dtype(), model_->device());
-    const std::array layer_shape{num_blocks_, params_.kvcache_block_size,
-                                 config_.num_key_value_heads, config_.head_dim};
-    for (std::size_t i = 0; i < config_.num_hidden_layers; ++i) {
-      model_->transformer().layer(i).self_attention().set_kv_cache(
-          key_cache_.view().slice(0, i, 1).reshape(layer_shape),
-          value_cache_.view().slice(0, i, 1).reshape(layer_shape));
+    if (config_.architecture == ModelArchitecture::Qwen35Moe) {
+      hybrid_cache_ = std::make_unique<Qwen35Cache>(
+          config_, num_blocks_, params_.kvcache_block_size,
+          params_.max_num_seqs, model_->device());
+      static_cast<Qwen35ForCausalLM&>(*model_).transformer().set_cache(
+          *hybrid_cache_);
+    } else {
+      const std::vector<std::size_t> shape{
+          config_.num_hidden_layers, num_blocks_, params_.kvcache_block_size,
+          config_.num_key_value_heads, config_.head_dim};
+      key_cache_ = Tensor::empty(shape, model_->dtype(), model_->device());
+      value_cache_ = Tensor::empty(shape, model_->dtype(), model_->device());
+      const std::array layer_shape{num_blocks_, params_.kvcache_block_size,
+                                   config_.num_key_value_heads,
+                                   config_.head_dim};
+      auto& transformer = static_cast<Qwen3ForCausalLM&>(*model_).transformer();
+      for (std::size_t i = 0; i < config_.num_hidden_layers; ++i) {
+        transformer.layer(i).self_attention().set_kv_cache(
+            key_cache_.view().slice(0, i, 1).reshape(layer_shape),
+            value_cache_.view().slice(0, i, 1).reshape(layer_shape));
+      }
     }
   } catch (...) {
     cudaStreamDestroy(stream_);
@@ -76,6 +107,15 @@ ModelRunner::~ModelRunner() {
   }
 }
 
+std::size_t ModelRunner::kvcache_size_bytes() const {
+  return hybrid_cache_ ? hybrid_cache_->kv_bytes()
+                       : key_cache_.size_bytes() + value_cache_.size_bytes();
+}
+
+std::size_t ModelRunner::state_cache_size_bytes() const {
+  return hybrid_cache_ ? hybrid_cache_->state_bytes() : 0;
+}
+
 std::vector<std::int32_t> ModelRunner::run(
     std::span<const Sequence* const> seqs, bool prefill) {
   if (seqs.empty()) {
@@ -87,6 +127,8 @@ std::vector<std::int32_t> ModelRunner::run(
   const CudaDeviceGuard guard(0);
   std::vector<std::int32_t> ids, positions, slots, cu_q{0}, cu_k{0}, lengths;
   std::vector<float> temperatures;
+  std::vector<std::int32_t> state_ids;
+  std::unordered_set<std::size_t> used_state_slots;
   std::size_t max_q = 0, max_k = 0, table_width = 0;
   bool needs_cached_prefill = false;
   for (const auto* seq : seqs) {
@@ -96,6 +138,13 @@ std::vector<std::int32_t> ModelRunner::run(
       throw std::invalid_argument("invalid scheduled sequence");
     }
 
+    if (hybrid_cache_) {
+      if (!seq->state_slot || *seq->state_slot >= params_.max_num_seqs
+          || !used_state_slots.insert(*seq->state_slot).second)
+        throw std::invalid_argument(
+            "Qwen3.5 batch needs distinct valid sequence state slots");
+      state_ids.push_back(*seq->state_slot);
+    }
     const auto start = seq->num_cached_tokens;
     const auto count = seq->num_scheduled_tokens;
     if (start > seq->num_tokens() || count > seq->num_tokens() - start
@@ -124,6 +173,10 @@ std::vector<std::int32_t> ModelRunner::run(
       slots.push_back(block * params_.kvcache_block_size
                       + pos % params_.kvcache_block_size);
     }
+    if (end > std::size_t(std::numeric_limits<std::int32_t>::max())
+                  - std::size_t(cu_k.back()))
+      throw std::invalid_argument(
+          "packed KV lengths exceed the Int32 index range");
     cu_q.push_back(ids.size());
     cu_k.push_back(static_cast<std::size_t>(cu_k.back()) + end);
     lengths.push_back(end);
@@ -166,6 +219,7 @@ std::vector<std::int32_t> ModelRunner::run(
   auto boundaries_k = upload(cu_k, {cu_k.size()});
   auto context_lens = upload(lengths, {lengths.size()});
   auto block_tables = upload(tables, {seqs.size(), table_width});
+  auto state_indices = upload(state_ids, {state_ids.size()});
   auto temperature =
       Tensor::empty({seqs.size()}, DataType::Float32, model_->device());
 
@@ -185,7 +239,17 @@ std::vector<std::int32_t> ModelRunner::run(
   if (!prefill || needs_cached_prefill) {
     context.block_tables = block_tables.view().as_const();
   }
+  context.state_indices = state_indices.view().as_const();
   context.stream = stream_;
+
+  // New requests and preempted requests start from token zero. Slot contents
+  // may belong to an older owner; queue the reset before this forward.
+  if (hybrid_cache_ && prefill) {
+    for (const auto* seq : seqs) {
+      if (seq->num_cached_tokens == 0)
+        hybrid_cache_->reset_state(*seq->state_slot, stream_);
+    }
+  }
 
   auto hidden = model_->forward(input_ids.view().as_const(),
                                 input_positions.view().as_const(), context);

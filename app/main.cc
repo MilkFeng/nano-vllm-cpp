@@ -42,7 +42,7 @@ int main(int argc, char** argv) {
   std::mt19937_64 gen(rd());
   std::uniform_int_distribution<uint64_t> dis(0, UINT64_MAX);
 
-  CLI::App app{"Single-GPU Qwen3 inference with C++ and CUDA"};
+  CLI::App app{"Single-GPU Qwen3 / Qwen3.5 MoE inference with C++ and CUDA"};
   std::string model_path;
   std::vector<std::string> prompts;
   nanovllm::EngineParams params;
@@ -53,9 +53,9 @@ int main(int argc, char** argv) {
 
   params.seed = dis(gen);
 
-  app.add_option(
-         "-m,--model", model_path,
-         "Directory containing Qwen3 model.safetensors and tokenizer files")
+  app.add_option("-m,--model", model_path,
+                 "Model directory containing config, safetensors weights or a "
+                 "shard index, and tokenizer files")
       ->required();
   app.add_option("-p,--prompt", prompts,
                  "User message; the model chat template is applied by default; "
@@ -73,7 +73,8 @@ int main(int argc, char** argv) {
   app.add_option("--max-model-len", params.max_model_len,
                  "Maximum total prompt and output length");
   app.add_option("--max-seqs", params.max_num_seqs,
-                 "Maximum sequences scheduled per batch");
+                 "Maximum sequences scheduled per batch; also live recurrent "
+                 "state slots for Qwen3.5");
   app.add_option("--max-batched-tokens", params.max_num_batched_tokens,
                  "Per-step token budget; smaller values split prefill");
   app.add_option("--block-size", params.kvcache_block_size,
@@ -82,6 +83,10 @@ int main(int argc, char** argv) {
                  "Total KV cache blocks shared by all sequences")
       ->required()
       ->check(CLI::PositiveNumber);
+  app.add_option("--gpu-expert-ids", params.gpu_expert_ids,
+                 "Qwen3.5 fixed GPU routed expert IDs for every layer; empty "
+                 "by default")
+      ->delimiter(',');
   app.add_option("--seed", params.seed, "Sampling random seed");
   app.add_option(
       "--repeat", repeat,

@@ -18,10 +18,11 @@ struct Scheduled {
 
 class Scheduler {
  public:
-  Scheduler(
-      std::size_t num_blocks, std::size_t block_size, std::size_t max_num_seqs,
-      std::size_t max_num_batched_tokens, std::int32_t eos_token_id,
-      std::size_t max_model_len = std::numeric_limits<std::size_t>::max());
+  Scheduler(std::size_t num_blocks, std::size_t block_size,
+            std::size_t max_num_seqs, std::size_t max_num_batched_tokens,
+            std::int32_t eos_token_id,
+            std::size_t max_model_len = std::numeric_limits<std::size_t>::max(),
+            bool use_recurrent_state = false);
   ~Scheduler() = default;
 
   Scheduler(const Scheduler&) = delete;
@@ -36,7 +37,8 @@ class Scheduler {
   [[nodiscard]] Scheduled schedule();
   void postprocess(const Scheduled& scheduled,
                    std::span<const std::int32_t> token_ids);
-  // Release requests, retaining reusable completed KV blocks across calls.
+  // Release requests and state slots. Completed KV blocks are retained only
+  // when recurrent state is disabled; KV alone cannot restore linear state.
   void clear();
 
   [[nodiscard]] const Sequence& sequence(std::size_t seq_id) const {
@@ -53,6 +55,8 @@ class Scheduler {
                                         const SamplingParams& sampling_params);
 
   void preempt(std::size_t seq_id);
+  void allocate_state_slot(Sequence& sequence);
+  void release_state_slot(Sequence& sequence);
 
  private:
   std::size_t num_blocks_;
@@ -61,6 +65,8 @@ class Scheduler {
   std::size_t max_num_batched_tokens_;
   std::int32_t eos_token_id_;
   std::size_t max_model_len_;
+  bool use_recurrent_state_;
+  std::deque<std::size_t> free_state_slots_;
 
   BlockManager block_manager_;
 

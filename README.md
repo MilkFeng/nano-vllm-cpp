@@ -1,6 +1,6 @@
 # nano-vllm-cpp
 
-使用 C++ 和 CUDA 实现 nano-vllm 的单 GPU Qwen3 推理链路。
+使用 C++ 和 CUDA 实现 nano-vllm 的单 GPU 推理链路，支持 dense Qwen3 与文本 Qwen3.5 MoE。
 
 ## 构建
 
@@ -10,7 +10,7 @@
 cmake -S . -B build \
   -DCMAKE_TOOLCHAIN_FILE="$HOME/vcpkg/scripts/buildsystems/vcpkg.cmake" \
   -DCMAKE_CUDA_ARCHITECTURES=120 \
-  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+  -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j4
 ```
 
@@ -18,8 +18,9 @@ cmake --build build -j4
 
 ## 生成文本
 
-模型目录需要包含 `config.json`、`model.safetensors`、`tokenizer.json` 和
-`tokenizer_config.json`。
+模型目录需要包含 `config.json`、`tokenizer.json`、`tokenizer_config.json`，以及
+`model.safetensors` 或 `model.safetensors.index.json` 与它列出的权重分片。程序按
+配置中的 `architectures` 自动选择 Qwen3 或 Qwen3.5 MoE，无需手动指定模型类型。
 
 ```bash
 ./build/nano-vllm-cpp --model "$HOME/models/Qwen3-0.6B" \
@@ -30,12 +31,12 @@ cmake --build build -j4
 ```
 
 - `--prompt` 默认是一条用户消息，程序读取模型的 `chat_template` 并自动应用。重复 `--prompt` 可批量提交独立对话，输出顺序与输入一致。
-- 默认关闭思考模式；`--thinking` 开启模型模板中的 `enable_thinking`。
-- `--raw-prompt` 用于原始文本续写或已经格式化的输入，与 `--thinking` 互斥。
+- 默认开启思考模式；`--thinking=false` 关闭模型模板中的 `enable_thinking`。
 - `--temperature 0` 使用 greedy 解码，正数使用温度采样；`--seed` 设置随机种子。
 - `--max-batched-tokens` 限制每轮 token 数，较长输入会分块 prefill。
 - `--num-blocks` 必填，指定全部请求共享的 KV 块池大小；`--block-size` 指定每块 token 数，默认 256。程序按指定数量分配，不再自动估算显存容量。
-- `--json` 输出生成文本和 token ID；`--repeat 2` 在同一引擎中重复请求，以使用前缀缓存。
+- `--gpu-expert-ids 0,2` 设置 Qwen3.5 各层固定常驻 GPU 的 routed 专家 ID，默认为空；其余专家在 CPU 计算。共享专家一直在 GPU，不计入名单。
+- `--json` 输出生成文本和 token ID；`--repeat 2` 在同一引擎中重复请求。Qwen3 保留前缀缓存，Qwen3.5 每次从零状态开始。
 - 达到 EOS、`--max-tokens` 或总长度 `--max-model-len` 时结束；`--ignore-eos` 可忽略 EOS。
 
 KV 块数和 block size 必须大于零，块池至少容纳一条 `max_model_len` 长度的序列，总 token 容量不得超过 Int32 slot 索引范围。启动日志显示块数和全部 K/V 缓存的字节数。当前 dense Qwen3 的缓存字节数为 `2 * num_hidden_layers * num_blocks * block_size * num_key_value_heads * head_dim * sizeof(dtype)`；配置时还需给权重、激活和计算工作区留出显存，缓存分配成功不保证最大 batch 能运行。`--gpu-memory-utilization` 已移除。
@@ -43,6 +44,30 @@ KV 块数和 block size 必须大于零，块池至少容纳一条 `max_model_le
 C++ 调用方也必须设置 `EngineParams::num_kvcache_blocks`；默认值 `0` 会报参数错误。例如 `EngineParams params; params.num_kvcache_blocks = 16;`，配合默认 block size 256，可容纳一条默认长度 4096 的序列。
 
 默认温度为 1，只做全词表温度采样；当前不会加载 `generation_config.json` 中的 temperature、top-k 或 top-p 配置。`--max-model-len` 限制总上下文长度；输出长度仍由 `--max-tokens` 控制，默认最多生成 64 个 token。
+
+### Qwen3.5 FP8 CLI
+
+接入的目标是 `Qwen/Qwen3.5-35B-A3B-FP8`，使用下载后的原始分片，无需离线
+转换。先用少量 KV 块、一个活跃序列和空 GPU 专家名单：
+
+```bash
+./build/nano-vllm-cpp --model "$HOME/models/Qwen3.5-35B-A3B-FP8" \
+  --prompt 'Hello' --thinking=false \
+  --temperature 0 --max-tokens 8 \
+  --max-model-len 128 --max-seqs 1 --max-batched-tokens 32 \
+  --num-blocks 8 --block-size 16
+```
+
+`--max-seqs` 还决定 Qwen3.5 预分配的递推状态槽位数，并限制全部活跃序列数，
+包含分块 prefill 中的序列。35B-A3B 当前每个槽位约 62.8 MiB；不要沿用 dense
+Qwen3 的默认值 512，这会仅为 linear 状态分配约 31.4 GiB。日志分别显示 K/V
+字节数、状态槽位与状态字节数、每层 GPU 专家数。可加 `--gpu-expert-ids 0,2`，
+两个 FP32 routed 专家在 40 层共增加约 960 MiB 常驻权重。
+
+这条命令给出运行接口，完整 35B 尚未在本机验证：当前 WSL 只有 22 GiB RAM，
+仅全部 routed FP8 权重就约 30 GiB，需先让 WSL 使用足够的物理内存。模型加载
+后非专家参数和 GPU 专家仍使用 FP32 计算，KV 和递推状态也在 GPU；没有实现
+原生 FP8 GEMM 或将 KV 放到系统 RAM。
 
 ### C++ 聊天模板接口
 
@@ -61,13 +86,13 @@ const std::array prompts{
 auto outputs = engine.generate(prompts, {.temperature = 0.0f});
 ```
 
-模板接口默认 `add_generation_prompt=true`、`enable_thinking=true`，与 nano-vllm 示例的调用一致；CLI 显式传入关闭思考模式的选项。库的 `generate()` 接受已格式化的 prompt，不会重复套模板。同一个引擎的 `generate()` 应串行调用，跨调用保留可复用的完整 KV 块。
+模板接口默认 `add_generation_prompt=true`、`enable_thinking=true`，CLI 通过 `--thinking=false` 可关闭思考。库的 `generate()` 接受已格式化的 prompt，不会重复套模板。同一个引擎的 `generate()` 应串行调用；Qwen3 跨调用保留可复用的完整 KV 块，Qwen3.5 重新计算全部输入。
 
 输出只包含新生成的 token。`<|im_start|>assistant` 已属于输入，不会回显；`<|im_end|>` 是新生成的正常结束标记，当前文本解码保留特殊 token。
 
 ## 代码组织
 
-`src/layers/` 放通用的 `Linear`、`Embedding`、`RMSNorm`、`SwiGLUMLP`、`LMHead` 和 `RotaryEmbedding`。这些层接收具体维度，不依赖 `ModelConfig`；CUDA 算子和头文件放在 `src/kernels/cuda/`；CPU 算子和参考计算放在 `src/kernels/cpu/`。
+`src/layers/` 放通用的 `Linear`、`Embedding`、`RMSNorm`、`SwiGLUMLP`、`LMHead` 和 `RotaryEmbedding`。这些层接收具体维度，不依赖 `ModelConfig`；CUDA 算子和头文件放在 `src/kernels/cuda/`；CPU 算子放在 `src/kernels/cpu/`。
 
 `src/models/qwen3.hh/.cc` 负责 Qwen3 Attention、DecoderLayer 和模型组装。`compute_logits()` 在 prefill 时选出每条序列最后一个 token 的 hidden state，再交给只做词表投影的 `LMHead`。`src/core/forward_context.hh` 保存由 ModelRunner 准备的执行元数据，包括 KV block table 和 CUDA stream。
 
@@ -85,7 +110,7 @@ Token IDs → Embedding
 
 内部 CUDA 算子只接受连续 Tensor，并使用调用线程已经选好的 device 0。通用模型配置约束，以及模型和算子内部的 shape、dtype 和索引约束使用 Debug 断言；Qwen3 支持范围、用户参数和 CUDA/cuBLAS 运行错误在 Release 中也会检查。缓冲区重叠关系由调用者保证。RoPE 直接原地修改 Q/K。
 
-当前支持 CUDA device 0 上的 dense Qwen3、单文件 safetensors 权重、未缩放的 RoPE，以及偶数且不超过 256 的 head dimension。Attention 是用于打通计算链路的基础实现；FlashAttention 级优化、CUDA Graph 和张量并行仍待实现。KV 块数由命令行或 `EngineParams` 手动指定。
+当前支持 CUDA device 0 上的 dense Qwen3 与文本 Qwen3.5 MoE，支持单文件及分片 safetensors、未缩放的 RoPE，以及偶数且不超过 256 的 full attention head dimension。Attention 是用于打通计算链路的基础实现；FlashAttention 级优化、CUDA Graph 和张量并行仍待实现。KV 块数由命令行或 `EngineParams` 手动指定。
 
 FP16/BF16 的舍入会受 GEMM 的 batch 大小影响；候选分数接近时，生成 token 可能随批量配置变化，也不保证与 Transformers 逐 token 相同。当前融合 residual 和 RMSNorm 的计算顺序沿用 nano-vllm。
 
@@ -100,8 +125,8 @@ FP16/BF16 的舍入会受 GEMM 的 batch 大小影响；候选分数接近时，
 这些引用和 span 借用 reader 的生命周期，打开其他分片不会使它们失效；调用需
 串行。读取器不复制权重，也不自动反量化。`Model::load_ckpt()` 复用该读取器，
 支持上述三种路径，继续严格检查名称、shape 和 dtype 后才复制参数。
-CLI 文本生成仍只调用 dense Qwen3。Qwen3.5 已有完整文本模型和 forward，
-Engine/CLI 的模型选择、混合缓存分配及序列状态槽位管理尚未接入。
+Engine/CLI 按 architecture 调用相应模型，加载器接受模型目录以自动选择单文件
+或分片索引。Qwen3.5 同时分配 full 层的 paged KV 和 linear 层的独立状态槽位。
 
 新增 `DataType::Float8E4M3FN`，每元素 1 字节，对应 safetensors 的 `F8_E4M3`。
 CPU `kernels::cpu::dequantize_fp8()` 将二维权重还原到调用方提供的 FP32 工作区：
@@ -213,7 +238,7 @@ token 选中会分别计数；`expert_cache().num_slots()`
 
 当前支持多 token、FP32、1..1024 个专家、`1 <= top_k <= E`。缓存名单固定，
 populate/forward 同步传入的 stream，调用需串行。动态换入换出作为后续步骤；
-当前文本生成使用原有 Qwen3 模型。
+文本生成支持 Qwen3 与 Qwen3.5 MoE，后者使用下面的 FP8 RAM store。
 
 ### FP8 专家在 RAM 中存储
 
@@ -294,8 +319,8 @@ model.transformer().set_cache(cache);
 // auto logits = model.compute_logits(hidden.view().as_const(), context);
 ```
 
-这个例子展示模型接口，尚不能通过 CLI 运行 Qwen3.5。GPU expert ID 名单应用于
-每层；默认名单为空，仅把 routed 权重放在 RAM。CPU 构造可以检查和加载参数，
+这个例子展示直接调用模型的接口；Engine/CLI 负责准备调度元数据和缓存。GPU
+expert ID 名单应用于每层；默认名单为空，仅把 routed 权重放在 RAM。CPU 构造可以检查和加载参数，
 forward 需要 CUDA 设备 0。所有参数需完整加载后才能执行。
 
 配置按 `architectures` 读取：ConditionalGeneration 使用 `text_config` 与
@@ -356,13 +381,30 @@ decode 每条序列输入一个 token，context length 包含当前 token。
 linear 层的历史和状态，旧 K/V 的可见范围则由 block table 与长度控制。
 重置与 forward 应使用同一 stream，跨 stream 前需同步。没有绑定缓存时，
 只支持从零状态开始的 stateless prefill。现有 prefix cache 只保存 K/V 块，
-尚不能复用 GatedDeltaNet 的递推状态；Engine 接入时需先关闭这类 prefix reuse。
+不能复用 GatedDeltaNet 的递推状态，因此 Engine 已对 Qwen3.5 关闭 prefix reuse。
 
 按 35B-A3B 的 10 个 full 层和 30 个 linear 层计算，当前 FP32 K/V 每个逻辑
 token 占 40 KiB；linear 状态每个序列约 62.8 MiB，与上下文长度无关。
 非专家权重展开和全部 FP8 routed 专家仍需足够的 VRAM/RAM；本次验证环境的
 WSL 只分到 22 GiB RAM，未加载完整 35B 模型。以后运行整模型前需确认 WSL
 确实能使用机器的 48 GiB 内存。
+
+### Engine 中的序列状态槽位
+
+`ModelRunner` 持有 `std::unique_ptr<Model>`，通过虚函数调用 `forward()` 和
+`compute_logits()`。Qwen3 继续分配全部层的 K/V；Qwen3.5 绑定 `Qwen35Cache`，
+只给 full 层分配 K/V，并为 `max_num_seqs` 条序列预分配 linear 状态。
+
+`Scheduler` 在 Qwen3.5 模式维护空闲槽位队列。`Sequence::state_slot` 的生命周期是：
+
+1. 首次分配 KV 块时取一个空闲槽位；没有槽位时等待，让活跃序列继续 decode。
+2. 分块 prefill 和 decode 保留同一槽位。ModelRunner 按本轮 batch 顺序上传
+   `state_indices`，槽位不随 batch 行号变化。
+3. 结束、抢占或 `clear()` 时归还槽位。抢占也释放 KV，保留 token IDs，之后
+   从 token 0 重算。首次/重算 prefill 前在推理 stream 上清零槽位的全部状态。
+
+异常路径会清理本轮请求；后续新请求拿到旧槽位时仍会清零。KV 前缀复用关闭，
+避免复用只有 K/V 而缺失递推状态的上下文。Qwen3 使用原有前缀缓存和调度策略。
 
 ### Qwen3.5 基础算子和非专家加载
 
@@ -471,7 +513,8 @@ MoE 对照实现已移除。
 
 验证运行在 RTX 5060 Ti、CUDA 13.3，数值参考使用 Transformers 5.15.1 的
 官方 Qwen3.5 MoE FP32 实现，并读取相同的 BF16/FP8 权重后展开。临时验证程序
-放在 `/tmp/nanovllm-qwen35-forward`，未重新添加已删除的 tests 目录或 CTest 项。
+放在 `/tmp/nanovllm-qwen35-forward` 与 `/tmp/nanovllm-qwen35-engine`，未重新
+添加已删除的 tests 目录或 CTest 项。
 
 - 四层小模型（3 个 linear + 1 个 full，4 个 routed 专家，top-2 与共享专家）
   的 hidden states、logits、卷积历史和递推状态对齐，最大绝对误差小于 `2e-6`。
@@ -482,5 +525,12 @@ MoE 对照实现已移除。
 - 完整小模型的 CUDA memcheck 与 racecheck 均通过；原有 Qwen3-0.6B 的
   `Hello`、贪心生成 8 token 与此前结果一致。
 
-这些检查验证计算和缓存语义，未验证完整 35B 文本生成、Engine/CLI 集成、视觉
-输入，也没有宣称与官方动态 FP8 推理逐 token 一致或报告整模型速度。
+Engine/CLI 接入后，额外验证了六条请求共享两个状态槽位、4-token 分块 prefill、
+三轮重复调用，以及 8 个 KV 块触发的抢占重算。所有生成 token 与独立的官方
+FP32 全上下文推理一致；覆盖空/混合 GPU 专家名单及两种 checkpoint 前缀。
+官方 35B tokenizer/聊天模板的四种纯文本输入与 Transformers 完全一致，
+Qwen3-0.6B 重复生成保留原有结果。Engine 调度的 CUDA memcheck 为 0 个错误，
+Scheduler 的 ASan/UBSan 生命周期压测通过。
+
+这些检查未验证完整 35B 文本生成和视觉输入，也没有宣称与官方动态 FP8 推理
+逐 token 一致或报告整模型速度。

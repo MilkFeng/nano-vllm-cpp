@@ -29,7 +29,8 @@ struct BlockAllocation {
 
 class BlockManager {
  public:
-  BlockManager(std::size_t num_blocks, std::size_t block_size);
+  BlockManager(std::size_t num_blocks, std::size_t block_size,
+               bool enable_prefix_cache = true);
   ~BlockManager() = default;
 
   BlockManager(const BlockManager&) = delete;
@@ -77,6 +78,7 @@ class BlockManager {
  private:
   std::vector<Block> blocks_;
   std::size_t block_size_;
+  bool enable_prefix_cache_;
 
   std::unordered_map<std::uint64_t, std::size_t> hash_to_block_id_;
 

@@ -129,12 +129,13 @@ class Qwen35ForCausalLM final : public Model {
                             ModelLoadOptions options = {}) override;
   [[nodiscard]] Tensor forward(ConstTensorView input_ids,
                                ConstTensorView positions,
-                               const ForwardContext& context) const;
-  [[nodiscard]] Tensor compute_logits(ConstTensorView hidden_states,
-                                      const ForwardContext& context) const;
+                               const ForwardContext& context) const override;
+  [[nodiscard]] Tensor compute_logits(
+      ConstTensorView hidden_states,
+      const ForwardContext& context) const override;
   [[nodiscard]] const ModelConfig& config() const noexcept;
-  [[nodiscard]] DataType dtype() const noexcept;
-  [[nodiscard]] Device device() const noexcept;
+  [[nodiscard]] DataType dtype() const noexcept override;
+  [[nodiscard]] Device device() const noexcept override;
   [[nodiscard]] Qwen35Model& transformer() noexcept;
   [[nodiscard]] LMHead& lm_head() noexcept;
 

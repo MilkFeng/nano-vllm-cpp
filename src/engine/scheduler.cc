@@ -1,6 +1,7 @@
 #include "engine/scheduler.hh"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <stdexcept>
 
@@ -11,16 +12,22 @@ namespace nanovllm {
 Scheduler::Scheduler(std::size_t num_blocks, std::size_t block_size,
                      std::size_t max_num_seqs,
                      std::size_t max_num_batched_tokens,
-                     std::int32_t eos_token_id, std::size_t max_model_len)
+                     std::int32_t eos_token_id, std::size_t max_model_len,
+                     bool use_recurrent_state)
     : num_blocks_(num_blocks),
       block_size_(block_size),
       max_num_seqs_(max_num_seqs),
       max_num_batched_tokens_(max_num_batched_tokens),
       eos_token_id_(eos_token_id),
       max_model_len_(max_model_len),
-      block_manager_(num_blocks, block_size) {
+      use_recurrent_state_(use_recurrent_state),
+      block_manager_(num_blocks, block_size, !use_recurrent_state) {
   if (max_num_seqs == 0 || max_num_batched_tokens == 0 || max_model_len == 0) {
     throw std::invalid_argument("scheduler limits must be positive");
+  }
+  if (use_recurrent_state_) {
+    for (std::size_t slot = 0; slot < max_num_seqs_; ++slot)
+      free_state_slots_.push_back(slot);
   }
 }
 
@@ -62,6 +69,9 @@ Scheduled Scheduler::schedule() {
     BlockAllocation alloc;
 
     if (seq.block_ids.empty()) {
+      // Live states, including unfinished chunked prefills, share this pool.
+      // Leave new requests waiting until a running sequence frees a slot.
+      if (use_recurrent_state_ && free_state_slots_.empty()) break;
       if (seq.num_blocks() > num_blocks_) {
         throw std::runtime_error("sequence exceeds KV cache capacity");
       }
@@ -95,6 +105,7 @@ Scheduled Scheduler::schedule() {
 
     if (seq.block_ids.empty()) {
       block_manager_.prefill_allocate(seq, alloc);
+      allocate_state_slot(seq);
     }
 
     seq.num_scheduled_tokens = std::min(num_tokens, remaining_tokens);
@@ -195,6 +206,7 @@ void Scheduler::postprocess(const Scheduled& scheduled,
         || seq.num_tokens() >= max_model_len_) {
       seq.status = SequenceStatus::Finished;
       block_manager_.deallocate(seq);
+      release_state_slot(seq);
       std::erase(runnings_, seq.id);
     }
   }
@@ -204,6 +216,7 @@ void Scheduler::postprocess(const Scheduled& scheduled,
 void Scheduler::clear() {
   for (auto& seq : sequences_) {
     if (!seq.block_ids.empty()) block_manager_.deallocate(seq);
+    release_state_slot(seq);
   }
   sequences_.clear();
   waitings_.clear();
@@ -235,6 +248,20 @@ void Scheduler::preempt(std::size_t seq_id) {
   auto& seq = sequences_[seq_id];
   seq.status = SequenceStatus::Waiting;
   block_manager_.deallocate(seq);
+  release_state_slot(seq);
   waitings_.push_front(seq_id);
 }
+void Scheduler::allocate_state_slot(Sequence& seq) {
+  if (!use_recurrent_state_) return;
+  assert(!seq.state_slot && !free_state_slots_.empty());
+  seq.state_slot = free_state_slots_.front();
+  free_state_slots_.pop_front();
+}
+
+void Scheduler::release_state_slot(Sequence& seq) {
+  if (!seq.state_slot) return;
+  free_state_slots_.push_back(*seq.state_slot);
+  seq.state_slot.reset();
+}
+
 } // namespace nanovllm

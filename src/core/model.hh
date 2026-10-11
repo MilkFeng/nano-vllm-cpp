@@ -4,6 +4,7 @@
 #include <map>
 #include <string>
 
+#include "core/forward_context.hh"
 #include "core/module.hh"
 
 namespace nanovllm {
@@ -25,12 +26,23 @@ struct ModelLoadResult {
 // about model architectures.
 class Model : public Module {
  public:
-  ~Model() override = default;
+  virtual ~Model() override = default;
 
   // Accepts a safetensors file, a shard index, or a model directory.
-  // Copies registered tensors without dtype conversion or dequantization.
+  // The default implementation copies exact dtypes. Derived models may
+  // override loading to convert or dequantize their checkpoint weights.
   virtual ModelLoadResult load_ckpt(const std::filesystem::path& ckpt_path,
                                     ModelLoadOptions options = {});
+
+  // Execution interfaces shared by the model runner. Forward returns hidden
+  // states; compute_logits selects prefill's last rows and projects vocabulary.
+  [[nodiscard]] virtual Tensor forward(ConstTensorView input_ids,
+                                       ConstTensorView positions,
+                                       const ForwardContext& context) const = 0;
+  [[nodiscard]] virtual Tensor compute_logits(
+      ConstTensorView hidden_states, const ForwardContext& context) const = 0;
+  [[nodiscard]] virtual DataType dtype() const noexcept = 0;
+  [[nodiscard]] virtual Device device() const noexcept = 0;
 
  protected:
   Model() = default;

@@ -24,6 +24,9 @@ struct Sequence {
 
   std::vector<std::size_t> block_ids;
   std::size_t block_size;
+  // Assigned by Scheduler while this sequence owns recurrent state. Stable
+  // across batches/chunks; released on completion, preemption or clear.
+  std::optional<std::size_t> state_slot = std::nullopt;
 
   SamplingParams sampling_params;
 

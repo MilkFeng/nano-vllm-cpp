@@ -30,10 +30,6 @@ class LLMPath {
 
   std::filesystem::path model_path() const { return model_path_; }
 
-  std::filesystem::path model_safetensors_path() const {
-    return model_path_ / kModelSafetensorsPath;
-  }
-
   std::filesystem::path model_config_path() const {
     return model_path_ / kModelConfigPath;
   }
@@ -49,7 +45,6 @@ class LLMPath {
  private:
   std::filesystem::path model_path_;
 
-  constexpr static std::string_view kModelSafetensorsPath = "model.safetensors";
   constexpr static std::string_view kModelConfigPath = "config.json";
 
   constexpr static std::string_view kTokenizerConfigPath =
@@ -68,16 +63,26 @@ class LLMEngine::Impl {
             ModelConfig::read_from_file(model_path_.model_config_path())),
         tokenizer_(model_path_.tokenizer_path(),
                    model_path_.tokenizer_config_path()),
-        model_runner_(params, model_config_,
-                      model_path_.model_safetensors_path()),
+        model_runner_(params, model_config_, model_path_.model_path()),
         scheduler_(model_runner_.num_blocks(), params.kvcache_block_size,
                    params.max_num_seqs, params.max_num_batched_tokens,
-                   tokenizer_.eos_token_id(), params.max_model_len) {
-    logger_->info("Loaded Qwen3 with "
-                  + std::to_string(model_runner_.num_blocks())
+                   tokenizer_.eos_token_id(), params.max_model_len,
+                   model_config_.architecture == ModelArchitecture::Qwen35Moe) {
+    const bool hybrid =
+        model_config_.architecture == ModelArchitecture::Qwen35Moe;
+    logger_->info(std::string("Loaded ") + (hybrid ? "Qwen3.5 MoE" : "Qwen3")
+                  + " with " + std::to_string(model_runner_.num_blocks())
                   + " KV cache blocks ("
                   + std::to_string(model_runner_.kvcache_size_bytes())
                   + " bytes for K and V)");
+    if (hybrid) {
+      logger_->info(
+          std::to_string(params_.max_num_seqs) + " recurrent state slots ("
+          + std::to_string(model_runner_.state_cache_size_bytes())
+          + " bytes for conv and recurrent state); prefix cache disabled; "
+          + std::to_string(params_.gpu_expert_ids.size())
+          + " GPU routed experts per layer");
+    }
   }
 
   ~Impl() = default;

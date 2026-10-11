@@ -14,9 +14,11 @@ void Block::reset() {
   ref_count = 1;
 }
 
-BlockManager::BlockManager(std::size_t num_blocks, std::size_t block_size)
+BlockManager::BlockManager(std::size_t num_blocks, std::size_t block_size,
+                           bool enable_prefix_cache)
     : blocks_(num_blocks),
-      block_size_(block_size) {
+      block_size_(block_size),
+      enable_prefix_cache_(enable_prefix_cache) {
   if (num_blocks == 0 || block_size == 0) {
     throw std::invalid_argument(
         "KV cache must have positive block count and size");
@@ -40,6 +42,8 @@ BlockAllocation BlockManager::predict_prefill_allocation(
       .num_new_blocks = seq.num_blocks(),
       .num_allocate_blocks = seq.num_blocks(),
   };
+
+  if (!enable_prefix_cache_) return allocation;
 
   for (std::size_t i = 0; i + 1 < seq.num_blocks(); ++i) {
     const auto token_ids = seq.block_token_ids(i);
@@ -144,6 +148,7 @@ void BlockManager::deallocate(Sequence& seq) {
 }
 
 void BlockManager::hash_completed_blocks(const Sequence& seq) {
+  if (!enable_prefix_cache_) return;
   const auto begin = seq.num_cached_tokens / block_size_;
   const auto end =
       (seq.num_cached_tokens + seq.num_scheduled_tokens) / block_size_;
