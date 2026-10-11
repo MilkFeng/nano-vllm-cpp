@@ -73,6 +73,8 @@ class ExpertCache final {
   // Waits for each FP8 upload before reusing its staging weights.
   // Publishes the mapping after all uploads complete. Synchronizes stream.
   void populate(cudaStream_t stream = nullptr);
+  // Prevent execution with old slots while RAM parameters are replaced.
+  void invalidate() noexcept;
   [[nodiscard]] int slot_of(std::size_t expert_id) const;
   [[nodiscard]] const SwiGLUMLP& expert_at_slot(std::size_t slot) const;
   [[nodiscard]] bool ready() const noexcept;
@@ -186,6 +188,8 @@ class MoE final : public Module {
       ExpertExecutionMode mode = ExpertExecutionMode::Synchronous);
 
   void populate_expert_cache(cudaStream_t stream = nullptr);
+  // A no-op for CPU construction. Populate again before GPU forward.
+  void invalidate_expert_cache() noexcept;
   [[nodiscard]] MoEOutput forward(ConstTensorView hidden_states,
                                   cudaStream_t stream = nullptr) const;
   [[nodiscard]] const MoEConfig& config() const noexcept;

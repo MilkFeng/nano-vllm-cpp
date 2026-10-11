@@ -15,10 +15,11 @@ struct RMSNormOutput {
 
 // Standard RMSNorm multiplies by weight directly. The second forward
 // fuses residual addition and returns the updated residual separately.
+// zero_centered=true uses (1 + weight) in FP32, as required by Qwen3.5.
 class RMSNorm final : public Module {
  public:
   RMSNorm(std::size_t normalized_size, float epsilon, DataType dtype,
-          Device device);
+          Device device, bool zero_centered = false);
 
   [[nodiscard]] Tensor forward(ConstTensorView input,
                                cudaStream_t stream = nullptr) const;
@@ -33,6 +34,7 @@ class RMSNorm final : public Module {
  private:
   std::size_t normalized_size_;
   float epsilon_;
+  bool zero_centered_;
   Parameter weight_;
 };
 

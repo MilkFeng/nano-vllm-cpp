@@ -37,8 +37,7 @@ __global__ void rotary_embedding_kernel(
     const std::int32_t* __restrict__ positions, T* __restrict__ query,
     T* __restrict__ key, const float* __restrict__ cache, std::size_t pairs,
     std::size_t query_heads, std::size_t key_heads, std::size_t half_dim,
-    std::size_t max_positions) {
-  const auto head_dim = 2 * half_dim;
+    std::size_t head_dim, std::size_t max_positions) {
   const auto total_heads = query_heads + key_heads;
 
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
@@ -58,7 +57,7 @@ __global__ void rotary_embedding_kernel(
     T* data = is_query ? query : key;
     const auto offset = (token * heads + local_head) * head_dim + dimension;
     const auto cache_offset =
-        static_cast<std::size_t>(position) * head_dim + dimension;
+        static_cast<std::size_t>(position) * (2 * half_dim) + dimension;
 
     // Read both halves before rotating in place.
     const float first = detail::to_float(data[offset]);
@@ -110,20 +109,23 @@ void apply_rotary_embedding(ConstTensorView positions, TensorView query,
   assert(positions.shape()[0] == query.shape()[0]
          && query.shape()[0] == key.shape()[0]);
   assert(query.shape()[2] == key.shape()[2]
-         && query.shape()[2] == cos_sin_cache.shape()[1]);
+         && cos_sin_cache.shape()[1] <= query.shape()[2]);
+  assert(same_device(positions, query, key, cos_sin_cache));
   if (query.shape()[0] == 0) {
     return;
   }
 
   const auto dtype = query.dtype();
-  const auto pairs = query.numel() / 2 + key.numel() / 2;
+  const auto half_dim = cos_sin_cache.shape()[1] / 2;
+  const auto pairs =
+      query.shape()[0] * (query.shape()[1] + key.shape()[1]) * half_dim;
   const auto blocks = static_cast<unsigned>(
       std::min<std::size_t>((pairs + kThreads - 1) / kThreads, 65535));
   detail::dispatch_float(dtype, [&]<typename T> {
     rotary_embedding_kernel<<<blocks, kThreads, 0, stream>>>(
         positions.data<std::int32_t>(), query.data<T>(), key.data<T>(),
         cos_sin_cache.data<float>(), pairs, query.shape()[1], key.shape()[1],
-        query.shape()[2] / 2, cos_sin_cache.shape()[0]);
+        half_dim, query.shape()[2], cos_sin_cache.shape()[0]);
   });
 
   check_cuda(cudaGetLastError(), "apply_rotary_embedding launch");

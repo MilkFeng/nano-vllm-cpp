@@ -114,10 +114,10 @@ output[r,c] = decode_e4m3fn(weight[r,c]) * weight_scale_inv[r/Br,c/Bc]
 连续、非空，输入与输出存储不能重叠。解码保留正负零、次正规数和 NaN，最大
 有限绝对值为 448；它不解释 E4M3FNUZ 或 E5M2。
 
-权重下载完成后，读取一个专家的 gate 矩阵可用：
+对于 scale 已经是 FP32 的 checkpoint，读取一个专家的 gate 矩阵可用：
 
 ```cpp
-Checkpoint checkpoint("/path/to/Qwen3.5-35B-A3B-FP8");
+Checkpoint checkpoint("/path/to/fp8-checkpoint-with-f32-scales");
 const std::string prefix =
     "model.language_model.layers.0.mlp.experts.0.gate_proj";
 const auto& info = checkpoint.tensor(prefix + ".weight");
@@ -134,7 +134,8 @@ kernels::cpu::dequantize_fp8(weight, scales.view().as_const(), output.view());
 ```
 
 FP8 权重直接借用 mmap 字节；scale 复制到 Tensor，保证浮点访问使用对齐的
-存储。反量化不分配输出，后续可为 CPU 未命中专家复用同一个工作区。
+存储。官方 Qwen3.5 FP8 权重的 scale 是 BF16，可用下面的模型专用加载器
+转换。反量化不分配输出，后续可为 CPU 未命中专家复用同一个工作区。
 `ExpertStore` 支持保存 FP8 权重和 scale，CPU 未命中专家与 GPU 固定缓存
 通过下面的按需展开接口使用它。完整 Qwen3.5 模型组装、原生 FP8 GEMM、激活
 量化仍待实现。
@@ -234,8 +235,9 @@ MoE moe(config, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6},
 每个专家注册六个 CPU 参数：三个 `gate_proj/up_proj/down_proj.weight` 为
 FP8，三个同级 `weight_scale_inv` 为 FP32，按 `128x128` 分块。通过参数接口
 初始化，或把模块注册到 `Model` 后用 `load_ckpt()` 加载；GPU 副本与展开工作区
-不注册为参数。Router、共享专家、门控及激活仍为 FP32；真实 checkpoint 中这些
-其他分支的 BF16/FP8 加载转换与完整 Qwen3.5 集成需后续处理。
+不注册为参数。Router、共享专家、门控及激活仍为 FP32。官方 Qwen3.5 FP8
+checkpoint 的 scale 也可以是 BF16，需要用下面的模型专用加载器转换；通用
+`Model::load_ckpt()` 只接受 dtype 相同的参数。完整 Qwen3.5 模型组装仍需后续实现。
 
 ```text
 ExpertStore: 全部专家 FP8 权重 + scale（RAM）
@@ -264,6 +266,93 @@ GPU 槽位保持 FP32，改变 RAM 权重或 scale 后需显式再次 populate�
 三者分开统计，不包含 Router、共享分支和激活。
 按 `H=2048,I=512,E=256` 计算，一层 RAM routed 参数约 768 MiB（另加 scale），
 每个展开工作区 12 MiB；没有把全部 routed 专家永久展开成 FP32。
+
+### 加载官方 Qwen3.5 FP8 的单层 MoE
+
+`ModelConfig` 按 `architectures` 解析 Qwen3 或 Qwen3.5 MoE；Qwen3.5
+从 `text_config` 读取文本结构，包括 full/linear 层类型、GatedDeltaNet 尺寸和
+partial RoPE。`dtype` 保留未量化参数的 checkpoint dtype（BF16），FP8 存储
+配置单独保存在 `quantization_config`。配置可从模型目录或 `config.json` 读取。
+完整 attention、vision、MTP 和文本生成仍未接入。
+
+```cpp
+#include "models/qwen35.hh"
+
+const auto model_dir = std::filesystem::path("/path/to/Qwen3.5-35B-A3B-FP8");
+const auto config = ModelConfig::read_from_file(model_dir);
+Checkpoint checkpoint(model_dir);
+MoE moe(qwen35_moe_config(config), Device::cuda(0),
+        std::vector<std::int32_t>{0, 2, 4, 6}, ExpertExecutionMode::Overlap);
+const auto loaded = load_qwen35_moe_layer(moe, config, checkpoint, 0);
+moe.populate_expert_cache();
+// moe.forward(...) now accepts Float32 [T, config.hidden_size].
+```
+
+加载器仅读取 `model.language_model.layers.L.mlp.*`。Routed 专家的 FP8 字节
+原样复制到 RAM，其 BF16/F32 scale 转成 FP32；Router 和共享门控从 BF16/F32
+转成 FP32；共享专家的 FP8 权重乘对应 scale 后展开为 FP32，放到 MoE 所在设备。
+CPU 构造也可以加载，用于检查权重；`MoE::forward()` 仍只在 CUDA 设备执行。
+GPU 常驻名单必须明确传入，否则现有 MoE 默认会缓存全部专家。
+
+先检查本层全部所需张量的 shape、dtype 和共享专家 scale 网格，再写入参数。
+其他层和其他模块不要求加载。`loaded.num_tensors/num_bytes` 统计源 tensor 和
+源字节数，包含共享专家的 scale，和运行时参数大小不同。可复用同一个
+`Checkpoint` 加载多层，但这里只创建一个 MoE，不会自动创建或加载全部 40 层。
+
+调用必须与 forward/cache population 串行。校验失败保留原参数和缓存；校验通过
+后先使旧 GPU 缓存失效，复制失败则参数可能部分更新。成功后显式调用
+`populate_expert_cache()`，包括空常驻名单，防止重新加载后执行旧的 GPU 副本。
+计算仍使用展开后的 FP32 权重，不执行 checkpoint 中的动态 FP8 激活量化。
+
+### Qwen3.5 基础算子和非专家加载
+
+`RMSNorm` 增加末尾的 `zero_centered` 构造参数，默认 `false` 保持 Qwen3 的
+语义；设为 `true` 时，在 FP32 中完成归一化并乘 `1 + weight`，最后转换到
+输出 dtype。带 residual 的版本先将相加结果舍入到 tensor dtype，再归一化。
+
+新增 `layers/gated_rms_norm.hh/.cc`，供 GatedDeltaNet 使用。它直接乘 weight，
+再逐元素乘 `SiLU(gate)`，目前只支持 FP32 计算。两种 norm 不可互换：
+
+```text
+zero-centered: y = x / sqrt(mean(x²) + eps) * (1 + weight)
+gated:         y = x / sqrt(mean(x²) + eps) * weight * SiLU(gate)
+```
+
+`RotaryEmbedding` 增加末尾的 `rotary_dim` 参数，默认 `0` 表示旋转整个 head。
+35B-A3B 的 head_dim=256，partial_rotary_factor=0.25，实际旋转 64 维，
+配对 `(i,i+32)`；后面的 192 维保持原值。当前只实现文本位置，配置中的
+`mrope_section/mrope_interleaved` 已保留，尚不处理图像/视频的三轴位置。
+
+`load_qwen35_module()` 给注册过的非专家 FP32 参数加载权重。支持任意形状的
+BF16/F32 参数，以及有对应 BF16/F32 `weight_scale_inv` 的二维 FP8 矩阵。
+从实际 tensor dtype 选择转换规则，包含 norm、Linear、embedding 和卷积参数，
+无需离线转换整个 checkpoint。CPU 目标直接写入；CUDA 目标逐参数用 CPU
+暂存区展开后同步上传。`Model::load_ckpt()` 原有的精确 dtype 复制接口保留。
+
+```cpp
+#include "layers/rms_norm.hh"
+#include "layers/gated_rms_norm.hh"
+#include "layers/rotary_embedding.hh"
+
+RMSNorm input_norm(config.hidden_size, config.rms_norm_eps,
+                   DataType::Float32, Device::cuda(0), true);
+const auto norm_loaded = load_qwen35_module(
+    input_norm, config, checkpoint,
+    "model.language_model.layers.0.input_layernorm");
+RotaryEmbedding rope(config.max_position_embeddings, config.head_dim,
+                      config.rope_theta, Device::cuda(0), config.rotary_dim());
+GatedRMSNorm gated_norm(config.linear_value_head_dim, config.rms_norm_eps,
+                        Device::cuda(0));
+const auto gated_loaded = load_qwen35_module(
+    gated_norm, config, checkpoint,
+    "model.language_model.layers.0.linear_attn.norm");
+```
+
+非专家加载器按 `prefix + 注册名称` 找 tensor，忽略其他参数；先检查全部 shape、
+dtype、scale，再写参数。scale 即使被多个参数引用或显式注册，也只统计一次。
+MoE 应使用 `load_qwen35_moe_layer()`，以保留 routed FP8 和正确使专家缓存失效。
+这一阶段提供配置、算子和加载基础；完整 attention、GatedDeltaNet 状态更新及
+继承 `Model` 的 Qwen3.5 模型类属于后续接入工作。
 
 ### 可选共享专家
 

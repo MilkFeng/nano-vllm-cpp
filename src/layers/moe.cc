@@ -178,9 +178,13 @@ ExpertCache::ExpertCache(const ExpertStore& source,
   ready_ = slots_.empty(); // Zero slots means all selected experts run on CPU.
 }
 
-void ExpertCache::populate(cudaStream_t stream) {
+void ExpertCache::invalidate() noexcept {
   ready_ = false;
   std::ranges::fill(expert_to_slot_, -1);
+}
+
+void ExpertCache::populate(cudaStream_t stream) {
+  invalidate();
   ExpertWeightWorkspace workspace;
   try {
     for (std::size_t slot = 0; slot < slots_.size(); ++slot) {
@@ -490,6 +494,10 @@ MoE::MoE(MoEConfig config, Device device,
   }
   cache_ = std::make_unique<ExpertCache>(experts_, std::move(*gpu_expert_ids));
   executor_ = std::make_unique<ExpertExecutor>(experts_, *cache_, mode);
+}
+
+void MoE::invalidate_expert_cache() noexcept {
+  if (cache_) cache_->invalidate();
 }
 
 void MoE::populate_expert_cache(cudaStream_t stream) {

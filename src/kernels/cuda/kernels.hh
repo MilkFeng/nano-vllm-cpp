@@ -17,17 +17,28 @@ namespace nanovllm::kernels::cuda {
 
 // input: [D], [T,D] or [T,H,D]; weight: [D]; output matches input shape.
 // Accumulation is FP32. The normalized value is rounded to the input dtype
-// before multiplying by weight, matching nano-vllm's RMSNorm.
+// before multiplying by weight, matching nano-vllm's RMSNorm. With
+// zero_centered=true, multiply by (1 + weight) in FP32 before the output cast.
 void rms_norm(ConstTensorView input, ConstTensorView weight, TensorView output,
-              float epsilon, cudaStream_t stream = nullptr);
+              float epsilon, cudaStream_t stream = nullptr,
+              bool zero_centered = false);
 
 // residual has the same shape as input. Both outputs have that shape and must
 // be disjoint. Statistics use the FP32 sum; residual_output stores its rounded
-// value. output may alias input and residual_output may alias residual.
+// value. zero_centered=true also rounds the sum before computing statistics,
+// matching Qwen3.5 residual addition. Outputs may alias their respective
+// inputs.
 void fused_add_rms_norm(ConstTensorView input, ConstTensorView residual,
                         ConstTensorView weight, TensorView output,
                         TensorView residual_output, float epsilon,
-                        cudaStream_t stream = nullptr);
+                        cudaStream_t stream = nullptr,
+                        bool zero_centered = false);
+
+// FP32 input/gate/output: [D], [T,D] or [T,H,D]; weight: FP32 [D].
+// output = RMSNorm(input) * weight * SiLU(gate). Weight is used directly.
+void gated_rms_norm(ConstTensorView input, ConstTensorView gate,
+                    ConstTensorView weight, TensorView output, float epsilon,
+                    cudaStream_t stream = nullptr);
 
 // gate, up, output: [T,I].
 void silu_and_mul(ConstTensorView gate, ConstTensorView up, TensorView output,
@@ -38,15 +49,15 @@ void silu_and_mul(ConstTensorView gate, ConstTensorView up, TensorView output,
 void embedding(ConstTensorView input_ids, ConstTensorView weight,
                TensorView output, cudaStream_t stream = nullptr);
 
-// cache: Float32 [max_positions,D], D positive and even. Stores cos in the
-// first D/2 columns, sin in the second; theta must be finite and positive.
+// cache: Float32 [max_positions,R], R positive and even. Stores cos in the
+// first R/2 columns, sin in the second; theta must be finite and positive.
 void build_rope_cache(TensorView cos_sin_cache, float theta,
                       cudaStream_t stream = nullptr);
 
 // positions: contiguous Int32 [T], in [0,max_positions).
 // query/key: [T,Nq,D] / [T,Nkv,D], disjoint from each other, cache and
-// positions. Rotates pairs (i, i+D/2) in place, using the FP32 cache built
-// above.
+// positions. Cache width R <= D; rotates pairs (i, i+R/2) in the first
+// R columns using the FP32 cache above. Columns [R,D) are untouched.
 void apply_rotary_embedding(ConstTensorView positions, TensorView query,
                             TensorView key, ConstTensorView cos_sin_cache,
                             cudaStream_t stream = nullptr);
