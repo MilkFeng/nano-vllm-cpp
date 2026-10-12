@@ -97,7 +97,6 @@ int main(int argc, char** argv) {
   app.add_flag("--json", json_output,
                "Print generated text and token IDs as JSON");
 
-  // Windows narrow argv uses the system code page; tokenizers expects UTF-8.
   argv = app.ensure_utf8(argv);
   CLI11_PARSE(app, argc, argv);
 
@@ -107,8 +106,7 @@ int main(int argc, char** argv) {
     }
 
     const auto logger = std::make_shared<ConsoleLogger>();
-    nanovllm::LLMEngine engine(std::filesystem::u8path(model_path), params,
-                               logger);
+    nanovllm::LLMEngine engine(model_path, params, logger);
 
     for (auto& prompt : prompts) {
       const std::array messages{nanovllm::ChatMessage{"user", prompt}};
