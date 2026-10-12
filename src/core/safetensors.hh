@@ -73,7 +73,12 @@ class Safetensors {
 
   std::filesystem::path path_;
 
+#ifdef _WIN32
+  void* file_handle_ = nullptr;
+  void* mapping_handle_ = nullptr;
+#else
   int fd_ = -1;
+#endif
   std::byte* mapping_ = nullptr;
   std::size_t file_size_ = 0;
 

@@ -1,14 +1,19 @@
 #include "safetensors.hh"
 
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#ifdef _WIN32
+  #include <windows.h>
+#else
+  #include <fcntl.h>
+  #include <sys/mman.h>
+  #include <sys/stat.h>
+  #include <unistd.h>
+#endif
 
 #include <cassert>
 #include <cerrno>
 #include <cstdint>
 #include <format>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string_view>
@@ -99,6 +104,49 @@ std::uint64_t decode_u64_le(const std::byte* bytes) noexcept {
 Safetensors::Safetensors(const std::filesystem::path& path)
     : path_(path) {
   try {
+#ifdef _WIN32
+    file_handle_ =
+        ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file_handle_ == INVALID_HANDLE_VALUE) {
+      const auto error = ::GetLastError();
+      file_handle_ = nullptr;
+      throw std::system_error(
+          static_cast<int>(error), std::system_category(),
+          std::format("failed to open Safetensors file '{}'", path.string()));
+    }
+
+    LARGE_INTEGER file_size{};
+    if (!::GetFileSizeEx(file_handle_, &file_size)) {
+      const auto error = ::GetLastError();
+      throw std::system_error(
+          static_cast<int>(error), std::system_category(),
+          std::format("failed to stat Safetensors file '{}'", path.string()));
+    }
+    if (file_size.QuadPart < static_cast<LONGLONG>(kHeaderLengthSize)
+        || static_cast<std::uint64_t>(file_size.QuadPart)
+               > std::numeric_limits<std::size_t>::max()) {
+      throw std::runtime_error("invalid Safetensors file size");
+    }
+    file_size_ = static_cast<std::size_t>(file_size.QuadPart);
+
+    mapping_handle_ = ::CreateFileMappingW(file_handle_, nullptr, PAGE_READONLY,
+                                           0, 0, nullptr);
+    if (mapping_handle_ == nullptr) {
+      const auto error = ::GetLastError();
+      throw std::system_error(
+          static_cast<int>(error), std::system_category(),
+          std::format("failed to map Safetensors file '{}'", path.string()));
+    }
+    mapping_ = static_cast<std::byte*>(
+        ::MapViewOfFile(mapping_handle_, FILE_MAP_READ, 0, 0, 0));
+    if (mapping_ == nullptr) {
+      const auto error = ::GetLastError();
+      throw std::system_error(
+          static_cast<int>(error), std::system_category(),
+          std::format("failed to map Safetensors file '{}'", path.string()));
+    }
+#else
     fd_ = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
     if (fd_ == -1) {
       throw std::system_error(
@@ -115,6 +163,10 @@ Safetensors::Safetensors(const std::filesystem::path& path)
 
     file_size_ = file_stat.st_size;
 
+    if (file_size_ < kHeaderLengthSize) {
+      throw std::runtime_error("invalid Safetensors file size");
+    }
+
     void* const mapping =
         ::mmap(nullptr, file_size_, PROT_READ, MAP_PRIVATE, fd_, 0);
     if (mapping == MAP_FAILED) {
@@ -123,8 +175,12 @@ Safetensors::Safetensors(const std::filesystem::path& path)
           std::format("failed to map Safetensors file '{}'", path.string()));
     }
     mapping_ = static_cast<std::byte*>(mapping);
+#endif
 
     const auto header_size = decode_u64_le(mapping_);
+    if (header_size > file_size_ - kHeaderLengthSize) {
+      throw std::runtime_error("Safetensors header exceeds file size");
+    }
     data_offset_ = kHeaderLengthSize + header_size;
     data_size_ = file_size_ - data_offset_;
 
@@ -145,12 +201,18 @@ Safetensors::~Safetensors() {
 
 Safetensors::Safetensors(Safetensors&& other) noexcept
     : path_(std::move(other.path_)),
+#ifdef _WIN32
+      file_handle_(std::exchange(other.file_handle_, nullptr)),
+      mapping_handle_(std::exchange(other.mapping_handle_, nullptr)),
+#else
       fd_(std::exchange(other.fd_, -1)),
+#endif
       mapping_(std::exchange(other.mapping_, nullptr)),
       file_size_(std::exchange(other.file_size_, 0)),
       data_offset_(std::exchange(other.data_offset_, 0)),
       data_size_(std::exchange(other.data_size_, 0)),
-      tensor_map_(std::move(other.tensor_map_)) {}
+      tensor_map_(std::move(other.tensor_map_)) {
+}
 
 Safetensors& Safetensors::operator=(Safetensors&& other) noexcept {
   if (this == &other) {
@@ -159,7 +221,12 @@ Safetensors& Safetensors::operator=(Safetensors&& other) noexcept {
 
   close();
   path_ = std::move(other.path_);
+#ifdef _WIN32
+  file_handle_ = std::exchange(other.file_handle_, nullptr);
+  mapping_handle_ = std::exchange(other.mapping_handle_, nullptr);
+#else
   fd_ = std::exchange(other.fd_, -1);
+#endif
   mapping_ = std::exchange(other.mapping_, nullptr);
   file_size_ = std::exchange(other.file_size_, 0);
   data_offset_ = std::exchange(other.data_offset_, 0);
@@ -170,13 +237,28 @@ Safetensors& Safetensors::operator=(Safetensors&& other) noexcept {
 
 void Safetensors::close() noexcept {
   if (mapping_ != nullptr) {
+#ifdef _WIN32
+    ::UnmapViewOfFile(mapping_);
+#else
     ::munmap(mapping_, file_size_);
+#endif
     mapping_ = nullptr;
   }
+#ifdef _WIN32
+  if (mapping_handle_ != nullptr) {
+    ::CloseHandle(mapping_handle_);
+    mapping_handle_ = nullptr;
+  }
+  if (file_handle_ != nullptr) {
+    ::CloseHandle(file_handle_);
+    file_handle_ = nullptr;
+  }
+#else
   if (fd_ != -1) {
     ::close(fd_);
     fd_ = -1;
   }
+#endif
 
   file_size_ = 0;
   data_offset_ = 0;

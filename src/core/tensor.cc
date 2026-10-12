@@ -1,5 +1,7 @@
 #include "core/tensor.hh"
 
+#include <stdexcept>
+
 namespace nanovllm {
 
 namespace {

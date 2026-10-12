@@ -17,6 +17,15 @@ set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES OFF)
 
 include(FetchContent)
 
+if(MSVC)
+  # Match the dynamic CRT used by the x64-windows vcpkg triplet and Rust.
+  set(TOKENIZERS_CPP_MSVC_RUNTIME_LIBRARY "MD" CACHE STRING "")
+  add_compile_options(
+    "$<$<COMPILE_LANGUAGE:CXX>:/utf-8>"
+    "$<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/utf-8>"
+  )
+endif()
+
 find_package(Git REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
@@ -25,7 +34,8 @@ find_package(xxHash CONFIG REQUIRED)
 find_package(magic_enum CONFIG REQUIRED)
 find_package(CUDAToolkit REQUIRED)
 
-find_program(CARGO_EXECUTABLE cargo HINTS "$ENV{HOME}/.cargo/bin")
+find_program(CARGO_EXECUTABLE cargo HINTS
+  "$ENV{CARGO_HOME}/bin" "$ENV{USERPROFILE}/.cargo/bin" "$ENV{HOME}/.cargo/bin")
 if(NOT CARGO_EXECUTABLE)
   message(
     FATAL_ERROR
@@ -84,9 +94,14 @@ target_include_directories(nano-vllm-cpp SYSTEM PRIVATE ${minja_SOURCE_DIR}/incl
 target_compile_options(
   nano-vllm-cpp
   PRIVATE
-  $<$<COMPILE_LANGUAGE:CXX>:-Wall -Wextra -Wpedantic>
-  $<$<COMPILE_LANGUAGE:CUDA>:--display-error-number --generate-line-info>
+  "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/W4>"
+  "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic>"
+  "$<$<COMPILE_LANGUAGE:CUDA>:--display-error-number;--generate-line-info>"
 )
+
+if(WIN32)
+  target_compile_definitions(nano-vllm-cpp PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
+endif()
 
 target_link_libraries(
   nano-vllm-cpp
@@ -114,10 +129,4 @@ target_link_libraries(
   nano-vllm-cpp::nano-vllm-cpp
   CLI11::CLI11
   nlohmann_json::nlohmann_json
-)
-
-set_target_properties(
-  nano-vllm-cpp-cli
-  PROPERTIES
-  OUTPUT_NAME nano-vllm-cpp
 )

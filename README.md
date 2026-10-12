@@ -4,7 +4,24 @@
 
 ## 构建
 
-需要 CMake 3.28+、支持 C++20 的主机编译器和标准库、CUDA Toolkit、Rust/Cargo，以及 `vcpkg.json` 中列出的 C++ 依赖。首次配置会获取 tokenizers-cpp 和固定版本的 minja。
+需要 CMake 3.28+、支持 C++20 的主机编译器和标准库、CUDA Toolkit、Rust/Cargo，以及 `vcpkg.json` 中列出的 C++ 依赖。首次配置会获取 tokenizers-cpp（含子模块）和 minja，构建 tokenizer 时还会下载 Rust crate。
+
+### Windows 原生构建
+
+安装 Visual Studio 2022 的“使用 C++ 的桌面开发”工作负载、Windows SDK 和“适用于 Windows 的 C++ CMake 工具”，以及 CUDA Toolkit、Git、Rust 的 `x86_64-pc-windows-msvc` 工具链。打开 **x64 Native Tools Command Prompt for VS 2022**，输入 `powershell` 进入继承该环境的 PowerShell，确保 `cmake`、`ninja`、`nvcc`、`git`、`cargo` 在 PATH 中。
+
+在项目目录运行：
+
+```powershell
+$env:VCPKG_ROOT = 'C:\Program Files\Microsoft Visual Studio\2022\Community\VC\vcpkg'
+powershell -ExecutionPolicy Bypass -File .\scripts\build.ps1
+```
+
+脚本只执行 CMake 配置和并行构建，默认 Release，使用 Ninja，因此不需要 CUDA 的 Visual Studio 构建集成。`VCPKG_ROOT` 未设置时默认使用 `$HOME\vcpkg`；`vcpkg.json` 已指定 baseline，CMake 会自动安装清单中的依赖。首次构建需能访问 GitHub 和 crates.io。
+
+构建目录为 `build/windows/Release`，避免与原有 VS 生成器缓存冲突；可执行文件为 `build/windows/Release/nano-vllm-cpp-cli.exe`。CUDA 架构使用 `native` 自动检测本机 GPU（RTX 5060 Ti 为 `120`），也可修改脚本中的该参数。Windows 使用 `x64-windows` triplet 和动态 MSVC CRT，权重文件读取已适配 Windows 文件映射 API。
+
+### Linux 构建
 
 ```bash
 cmake -S . -B build \
@@ -23,7 +40,7 @@ cmake --build build -j4
 配置中的 `architectures` 自动选择 Qwen3 或 Qwen3.5 MoE，无需手动指定模型类型。
 
 ```bash
-./build/nano-vllm-cpp --model "$HOME/models/Qwen3-0.6B" \
+./build/nano-vllm-cpp-cli --model "$HOME/models/Qwen3-0.6B" \
   --prompt 'Hello' \
   --temperature 0 --max-tokens 16 \
   --max-model-len 128 --max-seqs 4 --max-batched-tokens 128 \
@@ -51,7 +68,7 @@ C++ 调用方也必须设置 `EngineParams::num_kvcache_blocks`；默认值 `0` 
 转换。先用少量 KV 块、一个活跃序列和空 GPU 专家名单：
 
 ```bash
-./build/nano-vllm-cpp --model "$HOME/models/Qwen3.5-35B-A3B-FP8" \
+./build/nano-vllm-cpp-cli --model "$HOME/models/Qwen3.5-35B-A3B-FP8" \
   --prompt 'Hello' --thinking=false \
   --temperature 0 --max-tokens 8 \
   --max-model-len 128 --max-seqs 1 --max-batched-tokens 32 \
