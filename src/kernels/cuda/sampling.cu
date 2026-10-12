@@ -60,9 +60,9 @@ __global__ void sample_kernel(const T* __restrict__ logits,
 
     const float maximum = scores[0];
     const int greedy_index = indices[0];
-    assert(isfinite(maximum)
-           && "sampling requires at least one finite logit per row");
-    // Every thread must finish reading the reduction result before reuse.
+
+    assert(isfinite(maximum));
+
     __syncthreads();
     if (temperature == 0.0f) {
       if (threadIdx.x == 0) output[row] = greedy_index;
@@ -76,8 +76,6 @@ __global__ void sample_kernel(const T* __restrict__ logits,
       curand_init(seed, row * vocab + col, step, &state);
       const float exponential = fmaxf(-logf(curand_uniform(&state)), 1.0e-10f);
       const float logit = detail::to_float(logits[row * vocab + col]);
-      // Divide first when temperature can shrink finite extreme logits;
-      // subtract first for small temperatures to avoid infinity - infinity.
       const float centered = temperature >= 1.0f
                                  ? logit / temperature - maximum / temperature
                                  : (logit - maximum) / temperature;

@@ -17,8 +17,6 @@ class BlasHandle {
  public:
   BlasHandle() {
     check_blas(cublasCreate(&handle_), "cublasCreate");
-    // Keep split-K reductions in the FP32 accumulator type even when the
-    // output uses FP16/BF16. The compute type alone permits reduced reductions.
     const auto status = cublasSetMathMode(
         handle_, static_cast<cublasMath_t>(
                      CUBLAS_DEFAULT_MATH
@@ -108,9 +106,7 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
 
     check_cuda(cudaGetLastError(), "linear bias launch");
   }
-  // Row-major Y = X * W^T is column-major Y^T = W * X^T. Initializing C
-  // with bias and beta=1 adds it inside GEMM before the output dtype
-  // conversion.
+
   const float alpha = 1.0f, beta = bias ? 1.0f : 0.0f;
   const auto type = cuda_dtype(input.dtype());
   check_blas(cublasGemmEx(handle, CUBLAS_OP_T, CUBLAS_OP_N, static_cast<int>(n),

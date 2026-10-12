@@ -58,11 +58,9 @@ __global__ void normalization_kernel(const T* input, const T* residual,
         residual_output[offset + col] = detail::from_float<T>(value);
       }
       if constexpr (ZeroCentered) {
-        // Qwen3.5 applies (1 + weight) in FP32 before the output cast.
         output[offset + col] = detail::from_float<T>(
             value * inv_rms * (1.0f + detail::to_float(weight[col])));
       } else {
-        // Preserve nano-vllm/Qwen3's intermediate rounding semantics.
         const T normalized = detail::from_float<T>(value * inv_rms);
         output[offset + col] = detail::from_float<T>(
             detail::to_float(normalized) * detail::to_float(weight[col]));
