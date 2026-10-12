@@ -9,7 +9,9 @@ $executable = Join-Path $projectRoot 'build\windows\Release\nano-vllm-cpp-cli.ex
 
 & $executable `
     --model $MODEL `
-    --prompt '你好' `
-    --max-tokens 256 `
-    --num-blocks 256
+    --prompt 'hello' `
+    --max-tokens 512 `
+    --num-blocks 256 `
+    --max-seqs 1 `
+    --gpu-expert-ids 0,2,4
 exit $LASTEXITCODE

@@ -1,5 +1,8 @@
 #include <CLI/CLI.hpp>
 #include <array>
+#include <chrono>
+#include <filesystem>
+#include <format>
 #include <iostream>
 #include <mutex>
 #include <nanovllm/nanovllm.hh>
@@ -94,6 +97,8 @@ int main(int argc, char** argv) {
   app.add_flag("--json", json_output,
                "Print generated text and token IDs as JSON");
 
+  // Windows narrow argv uses the system code page; tokenizers expects UTF-8.
+  argv = app.ensure_utf8(argv);
   CLI11_PARSE(app, argc, argv);
 
   try {
@@ -102,7 +107,8 @@ int main(int argc, char** argv) {
     }
 
     const auto logger = std::make_shared<ConsoleLogger>();
-    nanovllm::LLMEngine engine(model_path, params, logger);
+    nanovllm::LLMEngine engine(std::filesystem::u8path(model_path), params,
+                               logger);
 
     for (auto& prompt : prompts) {
       const std::array messages{nanovllm::ChatMessage{"user", prompt}};
@@ -112,7 +118,21 @@ int main(int argc, char** argv) {
 
     std::vector<nanovllm::GenerationOutput> outputs;
     for (std::size_t i = 0; i < repeat; ++i) {
+      const auto start = std::chrono::steady_clock::now();
       outputs = engine.generate(prompts, sampling);
+      const auto seconds = std::chrono::duration<double>(
+                               std::chrono::steady_clock::now() - start)
+                               .count();
+      std::size_t generated_tokens = 0;
+      for (const auto& output : outputs) {
+        generated_tokens += output.token_ids.size();
+      }
+      const auto tokens_per_second =
+          seconds > 0.0 ? generated_tokens / seconds : 0.0;
+      logger->info(std::format(
+          "Generation {}/{}: {} output tokens in {:.3f} s "
+          "({:.2f} tok/s; includes prefill)",
+          i + 1, repeat, generated_tokens, seconds, tokens_per_second));
     }
 
     if (json_output) {

@@ -54,7 +54,14 @@ cmake --build build -j4
 - `--num-blocks` 必填，指定全部请求共享的 KV 块池大小；`--block-size` 指定每块 token 数，默认 256。程序按指定数量分配，不再自动估算显存容量。
 - `--gpu-expert-ids 0,2` 设置 Qwen3.5 各层固定常驻 GPU 的 routed 专家 ID，默认为空；其余专家在 CPU 计算。共享专家一直在 GPU，不计入名单。
 - `--json` 输出生成文本和 token ID；`--repeat 2` 在同一引擎中重复请求。Qwen3 保留前缀缓存，Qwen3.5 每次从零状态开始。
+- 每次生成结束后，日志输出实际生成 token 数、耗时和 `tok/s`。耗时仅计入 `generate()`，包含输入编码、prefill、decode 和输出解码，不包含模型加载及聊天模板渲染；多条请求统计总输出吞吐，`--repeat` 的每轮单独记录。
 - 达到 EOS、`--max-tokens` 或总长度 `--max-model-len` 时结束；`--ignore-eos` 可忽略 EOS。
+
+PowerShell 中可同时显示并保存启动日志（含 `tok/s`）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\start.ps1 2>&1 | Tee-Object -FilePath run.log
+```
 
 KV 块数和 block size 必须大于零，块池至少容纳一条 `max_model_len` 长度的序列，总 token 容量不得超过 Int32 slot 索引范围。启动日志显示块数和全部 K/V 缓存的字节数。当前 dense Qwen3 的缓存字节数为 `2 * num_hidden_layers * num_blocks * block_size * num_key_value_heads * head_dim * sizeof(dtype)`；配置时还需给权重、激活和计算工作区留出显存，缓存分配成功不保证最大 batch 能运行。`--gpu-memory-utilization` 已移除。
 
