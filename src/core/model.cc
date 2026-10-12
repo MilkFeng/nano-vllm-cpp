@@ -93,8 +93,6 @@ ModelLoadResult Model::load_ckpt(const std::filesystem::path& ckpt_path) {
   const auto destinations = checkpoint_destinations();
   const auto& checkpoint_tensors = ckpt.weight_map();
 
-  // Validate the complete mapping before copying anything, so a missing or
-  // incompatible tensor cannot leave the model partially initialized.
   for (const auto& [name, destination] : destinations) {
     const auto source = checkpoint_tensors.find(name);
     if (source == checkpoint_tensors.end()) {
@@ -109,10 +107,6 @@ ModelLoadResult Model::load_ckpt(const std::filesystem::path& ckpt_path) {
   result.num_tensors = destinations.size();
   for (const auto& [name, destination] : destinations) {
     const auto source_size = ckpt.tensor(name).byte_size();
-    if (source_size
-        > std::numeric_limits<std::uint64_t>::max() - result.num_bytes) {
-      throw std::overflow_error("loaded model byte count is too large");
-    }
     result.num_bytes += source_size;
   }
 

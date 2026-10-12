@@ -272,8 +272,7 @@ MoEConfig config{
     .shared_expert_intermediate_size = 512,
     .expert_dtype = DataType::Float8E4M3FN,
 };
-MoE moe(config, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6},
-        ExpertExecutionMode::Overlap);
+MoE moe(config, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 
 每个专家注册六个 CPU 参数：三个 `gate_proj/up_proj/down_proj.weight` 为
@@ -298,8 +297,8 @@ ExpertStore: 全部专家 FP8 权重 + scale（RAM）
 每个 `ExpertExecutor` 在第一次 CPU miss 时分配一个 FP32 专家工作区，后续
 miss、不同 expert ID、不同 token 和不同 CUDA stream 都复用它。只运行 GPU
 hits 时不分配；`cpu_weight_workspace_bytes()` 可查看该大小。它不随 K 或 E
-增长，计算完成后保留到 executor 析构。CPU 反量化也在调用线程上执行，Overlap
-模式先提交 GPU hits，再展开并计算 CPU misses。
+增长，计算完成后保留到 executor 析构。CPU 反量化也在调用线程上执行，
+executor 先提交 GPU hits，再展开并计算 CPU misses。
 
 缓存初始化只展开驻留名单，复用一个临时 CPU 专家工作区；每个专家的三次 H2D
 完成后才展开下一个，防止异步上传读取被覆写的权重。工作区在初始化返回时释放。
@@ -326,8 +325,7 @@ FFN 使用带共享专家的 MoE。`forward()` 返回最终归一化的 hidden s
 const auto model_dir = std::filesystem::path("/path/to/Qwen3.5-35B-A3B-FP8");
 const auto config = ModelConfig::read_from_file(model_dir);
 Qwen35ForCausalLM model(config, Device::cuda(0),
-                        std::vector<std::int32_t>{0, 2},
-                        ExpertExecutionMode::Overlap);
+                        std::vector<std::int32_t>{0, 2});
 const auto loaded = model.load_ckpt(model_dir);
 Qwen35Cache cache(config, /*num_blocks=*/128, /*block_size=*/16,
                   /*state_slots=*/4);
@@ -469,8 +467,7 @@ MoEConfig config{
     .top_k = 2,
     .shared_expert_intermediate_size = 32,
 };
-MoE moe(config, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6},
-        ExpertExecutionMode::Overlap);
+MoE moe(config, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 
 共享分支直接挂在 `MoE` 下，注册以下参数：
@@ -488,26 +485,23 @@ GPU 构造时这四个参数常驻 GPU，不占 routed expert cache 的槽位；
 `named_parameters()`；`populate_expert_cache()` 只上传 routed 专家的缓存副本。
 
 这一版先完成 routed dispatch 和 combine，再用现有层计算共享专家、门控，并
-通过 `kernels::cuda::moe_add_shared()` 原地加入输出。同步和 Overlap 模式使用
-相同共享分支；共享分支尚未加入 CPU/GPU 计算重叠，工作区使用现有层的临时分配。
+通过 `kernels::cuda::moe_add_shared()` 原地加入输出。共享分支尚未加入
+CPU/GPU 计算重叠，工作区使用现有层的临时分配。
 
 `MoEOutput::shared_expert_output` 返回未经门控的 `[T,H]` 输出，
 `shared_gate_logits` 返回 sigmoid 之前的 `[T,1]` logits；关闭分支时两者为空。
-最终 `hidden_states` 包含 routed 和共享两部分。CPU 参考接口的可选
-`SharedExpertWeights` 传入这四个权重，默认省略时保持原有 routed 计算。
+最终 `hidden_states` 包含 routed 和共享两部分。
 
 ### CPU/GPU 重叠执行
 
-第四个构造参数选择执行方式，默认 `ExpertExecutionMode::Synchronous` 保留
-按 Router 排名逐个分派的路径。开启重叠执行：
+`ExpertExecutor::forward()` 统一使用 CPU/GPU 重叠执行，无需选择执行模式：
 
 ```cpp
 MoE moe({128, 64, 16, 2}, Device::cuda(0),
-        std::vector<std::int32_t>{0, 2, 4, 6},
-        ExpertExecutionMode::Overlap);
+        std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 
-对每个 token，Overlap 先划分 GPU hits / CPU misses，有 misses 时下载一次
+对每个 token，executor 先划分 GPU hits / CPU misses，有 misses 时下载一次
 该 token 的输入并等待完成，随后提交它的全部 GPU hits，再由调用线程计算 CPU
 misses。CPU 输出上传到原始排名对应的行；一个 stream 保证 GPU 专家、上传和
 combine 的顺序。重叠发生在同一个 token 内，token 之间仍逐个执行。`forward()`

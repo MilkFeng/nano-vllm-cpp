@@ -157,7 +157,9 @@ ExpertCache::ExpertCache(const ExpertStore& source,
         source.hidden_size(), source.intermediate_size(), DataType::Float32,
         Device::cuda(0)));
   }
-  ready_ = slots_.empty(); // Zero slots means all selected experts run on CPU.
+
+  // zero slots means all selected experts run on CPU
+  ready_ = slots_.empty();
 }
 
 void ExpertCache::invalidate() noexcept {
@@ -241,22 +243,15 @@ const ExpertStore& ExpertCache::source() const noexcept {
 }
 
 ExpertExecutor::ExpertExecutor(const ExpertStore& store,
-                               const ExpertCache& cache,
-                               ExpertExecutionMode mode)
+                               const ExpertCache& cache)
     : store_(store),
-      cache_(cache),
-      mode_(mode) {
+      cache_(cache) {
   if (&cache.source() != &store) {
     throw std::invalid_argument(
         "executor and cache must use the same RAM store");
   }
 
-  if (mode_ != ExpertExecutionMode::Synchronous
-      && mode_ != ExpertExecutionMode::Overlap) {
-    throw std::invalid_argument("invalid expert execution mode");
-  }
-
-  if (mode_ == ExpertExecutionMode::Overlap && cache_.num_slots() != 0) {
+  if (cache_.num_slots() != 0) {
     // One workspace serves every GPU hit: one stream orders all reads/writes.
     const auto shape = std::vector<std::size_t>{1, store_.intermediate_size()};
     gpu_workspace_ = {
@@ -280,71 +275,6 @@ ExpertExecutionOutput ExpertExecutor::forward(
     }
   }
 
-  if (mode_ == ExpertExecutionMode::Overlap) {
-    return forward_overlap(input, expert_ids, stream);
-  }
-  return forward_synchronous(input, expert_ids, stream);
-}
-
-ExpertExecutionOutput ExpertExecutor::forward_synchronous(
-    ConstTensorView input, std::span<const std::int32_t> expert_ids,
-    cudaStream_t stream) const {
-  ExpertExecutionOutput result{
-      Tensor::empty({expert_ids.size(), store_.hidden_size()},
-                    DataType::Float32, Device::cuda(0))};
-  Tensor host_input, host_parts;
-  std::vector<Tensor> gpu_results;
-  gpu_results.reserve(expert_ids.size());
-  try {
-    for (std::size_t rank = 0; rank < expert_ids.size(); ++rank) {
-      const auto id = static_cast<std::size_t>(expert_ids[rank]);
-      const auto slot = cache_.slot_of(id);
-      auto destination = result.expert_outputs.slice(0, rank, 1);
-      if (slot >= 0) {
-        gpu_results.push_back(
-            cache_.expert_at_slot(slot).forward(input, stream));
-        check_cuda(
-            cudaMemcpyAsync(destination.data(), gpu_results.back().data(),
-                            destination.size_bytes(), cudaMemcpyDeviceToDevice,
-                            stream),
-            "copy GPU expert output");
-        ++result.gpu_experts;
-      } else {
-        if (host_input.numel() == 0) {
-          host_input =
-              Tensor::empty({1, store_.hidden_size()}, DataType::Float32);
-          host_parts = Tensor::empty({expert_ids.size(), store_.hidden_size()},
-                                     DataType::Float32);
-          check_cuda(cudaMemcpyAsync(host_input.data(), input.data(),
-                                     input.size_bytes(), cudaMemcpyDeviceToHost,
-                                     stream),
-                     "download MoE input for CPU experts");
-          check_cuda(cudaStreamSynchronize(stream),
-                     "complete CPU expert input download");
-        }
-        auto host_row = host_parts.slice(0, rank, 1);
-        kernels::cpu::expert_forward(
-            host_input.view().as_const(),
-            store_.prepare_weights(id, cpu_weight_workspace_), host_row.view());
-        check_cuda(cudaMemcpyAsync(destination.data(), host_row.data(),
-                                   destination.size_bytes(),
-                                   cudaMemcpyHostToDevice, stream),
-                   "upload CPU expert output");
-        ++result.cpu_experts;
-      }
-    }
-    check_cuda(cudaStreamSynchronize(stream),
-               "complete CPU/GPU expert dispatch");
-  } catch (...) {
-    cudaStreamSynchronize(stream);
-    throw;
-  }
-  return result;
-}
-
-ExpertExecutionOutput ExpertExecutor::forward_overlap(
-    ConstTensorView input, std::span<const std::int32_t> expert_ids,
-    cudaStream_t stream) const {
   struct Task {
     std::size_t rank;
     std::size_t expert_id;
@@ -419,8 +349,7 @@ std::size_t ExpertExecutor::cpu_weight_workspace_bytes() const {
 }
 
 MoE::MoE(MoEConfig config, Device device,
-         std::optional<std::vector<std::int32_t>> gpu_expert_ids,
-         ExpertExecutionMode mode)
+         std::optional<std::vector<std::int32_t>> gpu_expert_ids)
     : config_(config),
       gate_(config_.hidden_size, config_.num_experts, false, DataType::Float32,
             device),
@@ -451,7 +380,7 @@ MoE::MoE(MoEConfig config, Device device,
     std::iota(gpu_expert_ids->begin(), gpu_expert_ids->end(), 0);
   }
   cache_ = std::make_unique<ExpertCache>(experts_, std::move(*gpu_expert_ids));
-  executor_ = std::make_unique<ExpertExecutor>(experts_, *cache_, mode);
+  executor_ = std::make_unique<ExpertExecutor>(experts_, *cache_);
 }
 
 void MoE::invalidate_expert_cache() noexcept {

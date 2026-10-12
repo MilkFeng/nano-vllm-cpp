@@ -20,11 +20,14 @@ namespace nanovllm {
 class Qwen35Attention final : public Module {
  public:
   Qwen35Attention(const ModelConfig& config, Device device);
+
   [[nodiscard]] Tensor forward(ConstTensorView positions,
                                ConstTensorView hidden_states,
                                const ForwardContext& context) const;
+
   void set_kv_cache(TensorView key, TensorView value);
   void clear_kv_cache() noexcept;
+
   [[nodiscard]] ConstTensorView key_cache() const;
   [[nodiscard]] ConstTensorView value_cache() const;
 
@@ -68,8 +71,7 @@ class Qwen35DecoderLayer final : public Module {
  public:
   Qwen35DecoderLayer(const ModelConfig& config, std::size_t index,
                      Device device,
-                     const std::vector<std::int32_t>& gpu_expert_ids,
-                     ExpertExecutionMode mode);
+                     const std::vector<std::int32_t>& gpu_expert_ids);
 
   [[nodiscard]] Qwen35DecoderLayerOutput forward(
       ConstTensorView positions, ConstTensorView hidden_states,
@@ -90,13 +92,15 @@ class Qwen35DecoderLayer final : public Module {
 class Qwen35Model final : public Module {
  public:
   Qwen35Model(const ModelConfig& config, Device device,
-              const std::vector<std::int32_t>& gpu_expert_ids,
-              ExpertExecutionMode mode);
+              const std::vector<std::int32_t>& gpu_expert_ids);
+
   [[nodiscard]] Tensor forward(ConstTensorView input_ids,
                                ConstTensorView positions,
                                const ForwardContext& context) const;
+
   void set_cache(Qwen35Cache& cache);
   void clear_cache() noexcept;
+
   [[nodiscard]] Embedding& embed_tokens() noexcept;
   [[nodiscard]] std::size_t num_layers() const noexcept;
   [[nodiscard]] Qwen35DecoderLayer& layer(std::size_t index);
@@ -110,10 +114,9 @@ class Qwen35Model final : public Module {
 
 class Qwen35ForCausalLM final : public Model {
  public:
-  explicit Qwen35ForCausalLM(
-      const ModelConfig& config, Device device = Device::cpu(),
-      std::vector<std::int32_t> gpu_expert_ids = {},
-      ExpertExecutionMode mode = ExpertExecutionMode::Overlap);
+  explicit Qwen35ForCausalLM(const ModelConfig& config,
+                             Device device = Device::cpu(),
+                             std::vector<std::int32_t> gpu_expert_ids = {});
 
   ModelLoadResult load_ckpt(const std::filesystem::path& path) override;
 

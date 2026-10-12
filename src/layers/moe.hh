@@ -83,15 +83,9 @@ struct ExpertExecutionOutput {
   std::size_t cpu_experts = 0;
 };
 
-enum class ExpertExecutionMode {
-  Synchronous, // original router-order dispatcher, used as the comparison path.
-  Overlap, // submit every GPU hit, then compute CPU misses on the host thread.
-};
-
 class ExpertExecutor final {
  public:
-  ExpertExecutor(const ExpertStore& store, const ExpertCache& cache,
-                 ExpertExecutionMode mode = ExpertExecutionMode::Synchronous);
+  ExpertExecutor(const ExpertStore& store, const ExpertCache& cache);
 
   ExpertExecutor(const ExpertExecutor&) = delete;
   ExpertExecutor& operator=(const ExpertExecutor&) = delete;
@@ -105,16 +99,8 @@ class ExpertExecutor final {
   [[nodiscard]] std::size_t cpu_weight_workspace_bytes() const;
 
  private:
-  [[nodiscard]] ExpertExecutionOutput forward_synchronous(
-      ConstTensorView input, std::span<const std::int32_t> expert_ids,
-      cudaStream_t stream) const;
-  [[nodiscard]] ExpertExecutionOutput forward_overlap(
-      ConstTensorView input, std::span<const std::int32_t> expert_ids,
-      cudaStream_t stream) const;
-
   const ExpertStore& store_;
   const ExpertCache& cache_;
-  ExpertExecutionMode mode_;
   mutable SwiGLUWorkspace gpu_workspace_;
   mutable ExpertWeightWorkspace cpu_weight_workspace_;
   mutable Tensor host_input_;
@@ -146,8 +132,7 @@ class MoE final : public Module {
  public:
   explicit MoE(
       MoEConfig config, Device device = Device::cuda(0),
-      std::optional<std::vector<std::int32_t>> gpu_expert_ids = std::nullopt,
-      ExpertExecutionMode mode = ExpertExecutionMode::Synchronous);
+      std::optional<std::vector<std::int32_t>> gpu_expert_ids = std::nullopt);
 
   void populate_expert_cache(cudaStream_t stream = nullptr);
   void invalidate_expert_cache() noexcept;
