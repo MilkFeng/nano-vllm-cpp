@@ -7,17 +7,16 @@
 
 namespace nanovllm {
 
-// Qwen3.5 linear attention, FP32 computation. Parameters use checkpoint names.
-// Recurrent/conv caches are borrowed runtime data, never model parameters.
 class GatedDeltaNet final : public Module {
  public:
   GatedDeltaNet(const ModelConfig& config, Device device);
+
   [[nodiscard]] Tensor forward(ConstTensorView hidden_states,
                                const ForwardContext& context) const;
-  // conv: [slots,2*Hk*Dk+Hv*Dv,K-1]; recurrent: [slots,Hv,Dk,Dv].
-  // The owner keeps these alive and resets slots before a new sequence.
+
   void set_state_cache(TensorView conv, TensorView recurrent);
   void clear_state_cache() noexcept;
+
   [[nodiscard]] ConstTensorView conv_state() const;
   [[nodiscard]] ConstTensorView recurrent_state() const;
 

@@ -16,9 +16,6 @@
 
 namespace nanovllm {
 
-// Tensor shapes, dtypes and execution metadata are internal preconditions,
-// checked with debug assertions. CUDA/cuBLAS failures throw in all builds.
-
 class Qwen3Attention final : public Module {
  public:
   Qwen3Attention(const ModelConfig& config, DataType dtype, Device device);
@@ -27,10 +24,9 @@ class Qwen3Attention final : public Module {
                                ConstTensorView hidden_states,
                                const ForwardContext& context = {}) const;
 
-  // KV-cache views are non-owning. ModelRunner must keep the backing storage
-  // alive for as long as the model can execute.
   void set_kv_cache(TensorView key_cache, TensorView value_cache);
   void clear_kv_cache() noexcept;
+
   [[nodiscard]] ConstTensorView key_cache() const;
   [[nodiscard]] ConstTensorView value_cache() const;
 
@@ -51,9 +47,6 @@ class Qwen3Attention final : public Module {
   float scaling_;
   bool qkv_bias_;
 
-  // The checkpoint stores Q/K/V separately. Keeping these parameters unpacked
-  // makes strict loading work with the generic Model loader. A future fused
-  // GEMM may pack or concatenate them when kernels are initialized.
   Linear q_proj_;
   Linear k_proj_;
   Linear v_proj_;
@@ -64,6 +57,23 @@ class Qwen3Attention final : public Module {
 
   TensorView key_cache_;
   TensorView value_cache_;
+};
+
+class Qwen3Cache final {
+ public:
+  Qwen3Cache(const ModelConfig& config, std::size_t num_blocks,
+             std::size_t block_size, Device device = Device::cuda(0));
+
+  Qwen3Cache(const Qwen3Cache&) = delete;
+  Qwen3Cache& operator=(const Qwen3Cache&) = delete;
+
+  [[nodiscard]] TensorView key_cache(std::size_t layer);
+  [[nodiscard]] TensorView value_cache(std::size_t layer);
+
+  [[nodiscard]] std::size_t kv_bytes() const;
+
+ private:
+  Tensor key_, value_;
 };
 
 struct Qwen3DecoderLayerOutput {
@@ -98,6 +108,9 @@ class Qwen3Model final : public Module {
                                ConstTensorView positions,
                                const ForwardContext& context = {}) const;
 
+  void set_cache(Qwen3Cache& cache);
+  void clear_cache() noexcept;
+
   [[nodiscard]] Embedding& embed_tokens() noexcept;
   [[nodiscard]] const Embedding& embed_tokens() const noexcept;
   [[nodiscard]] std::size_t num_layers() const noexcept;
@@ -119,6 +132,7 @@ class Qwen3ForCausalLM final : public Model {
   [[nodiscard]] Tensor forward(
       ConstTensorView input_ids, ConstTensorView positions,
       const ForwardContext& context = {}) const override;
+
   [[nodiscard]] Tensor compute_logits(
       ConstTensorView hidden_states,
       const ForwardContext& context = {}) const override;

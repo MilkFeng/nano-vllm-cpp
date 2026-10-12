@@ -55,6 +55,7 @@ class Scheduler {
                                         const SamplingParams& sampling_params);
 
   void preempt(std::size_t seq_id);
+
   void allocate_state_slot(Sequence& sequence);
   void release_state_slot(Sequence& sequence);
 

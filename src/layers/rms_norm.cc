@@ -14,18 +14,11 @@ RMSNorm::RMSNorm(std::size_t normalized_size, float epsilon, DataType dtype,
       epsilon_(epsilon),
       zero_centered_(zero_centered),
       weight_(Tensor::empty({normalized_size_}, dtype, device)) {
-  assert(normalized_size_ > 0);
-  assert(std::isfinite(epsilon_) && epsilon_ > 0);
   register_parameter("weight", weight_);
 }
 
 Tensor RMSNorm::forward(ConstTensorView input, cudaStream_t stream) const {
   const auto weight = weight_.view();
-  assert(input.rank() >= 1 && input.rank() <= 3);
-  assert(input.shape().back() == normalized_size_);
-  assert(input.device().type == DeviceType::Cuda);
-  assert(same_device(input, weight));
-  assert(same_dtype(input, weight));
   auto output = Tensor::empty({input.shape().begin(), input.shape().end()},
                               input.dtype(), input.device());
   kernels::cuda::rms_norm(input, weight, output.view(), epsilon_, stream,
@@ -36,12 +29,6 @@ Tensor RMSNorm::forward(ConstTensorView input, cudaStream_t stream) const {
 RMSNormOutput RMSNorm::forward(ConstTensorView input, ConstTensorView residual,
                                cudaStream_t stream) const {
   const auto weight = weight_.view();
-  assert(input.rank() >= 1 && input.rank() <= 3);
-  assert(input.shape().back() == normalized_size_);
-  assert(input.device().type == DeviceType::Cuda);
-  assert(same_device(input, weight, residual));
-  assert(same_shape(input, residual));
-  assert(same_dtype(input, residual, weight));
   const std::vector<std::size_t> shape(input.shape().begin(),
                                        input.shape().end());
   RMSNormOutput result{Tensor::empty(shape, input.dtype(), input.device()),

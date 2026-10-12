@@ -22,11 +22,14 @@ struct Sequence {
   std::size_t num_cached_tokens;
   std::size_t num_scheduled_tokens;
 
+  // KV cache blocks
   std::vector<std::size_t> block_ids;
+
+  // KV cache block size
   std::size_t block_size;
-  // Assigned by Scheduler while this sequence owns recurrent state. Stable
-  // across batches/chunks; released on completion, preemption or clear.
-  std::optional<std::size_t> state_slot = std::nullopt;
+
+  // linear attention state slot for qwen3.5
+  std::optional<std::size_t> state_slot;
 
   SamplingParams sampling_params;
 

@@ -8,9 +8,6 @@
 
 namespace nanovllm {
 
-// Non-owning execution metadata prepared by ModelRunner. Empty tensor views
-// mean that the corresponding metadata is not used by the current execution
-// mode.
 struct ForwardContext {
   bool is_prefill = false;
   ConstTensorView cu_seqlens_q;
@@ -20,10 +17,6 @@ struct ForwardContext {
   ConstTensorView slot_mapping;
   ConstTensorView context_lens;
   ConstTensorView block_tables;
-  // Optional Int32 [B] mapping packed prefill/decode rows to persistent
-  // recurrent-state slots. Distinct slots within each call; stable per
-  // sequence. Empty means slot = batch row. Used by hybrid/linear attention
-  // only.
   ConstTensorView state_indices;
   cudaStream_t stream = nullptr;
 };

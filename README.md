@@ -96,6 +96,24 @@ auto outputs = engine.generate(prompts, {.temperature = 0.0f});
 
 `src/models/qwen3.hh/.cc` 负责 Qwen3 Attention、DecoderLayer 和模型组装。`compute_logits()` 在 prefill 时选出每条序列最后一个 token 的 hidden state，再交给只做词表投影的 `LMHead`。`src/core/forward_context.hh` 保存由 ModelRunner 准备的执行元数据，包括 KV block table 和 CUDA stream。
 
+`Qwen3Cache` 统一持有全部层的 K/V，两个 Tensor 的 shape 均为
+`[num_hidden_layers, num_blocks, block_size, num_key_value_heads, head_dim]`，
+dtype 与 Qwen3 模型一致。`key_cache(layer)` / `value_cache(layer)` 返回该层
+的四维借用视图，`kv_bytes()` 统计 K/V 总字节数；它不注册为模型参数。
+直接调用模型时，在加载权重后构造缓存并绑定：
+
+```cpp
+Qwen3Cache cache(config, /*num_blocks=*/128, /*block_size=*/16,
+                 model.device());
+model.transformer().set_cache(cache);
+// Prepare ForwardContext metadata and execute prefill/decode.
+// Before destroying the cache while retaining the model:
+model.transformer().clear_cache();
+```
+
+缓存需覆盖所有使用它的 forward 的生命周期，释放前需等待相关 CUDA 操作完成。
+新序列的 KV 可见范围由 block table 和 context length 控制，无需清零整个缓存。
+
 ## 已实现链路
 
 ```text
@@ -392,8 +410,9 @@ WSL 只分到 22 GiB RAM，未加载完整 35B 模型。以后运行整模型前
 ### Engine 中的序列状态槽位
 
 `ModelRunner` 持有 `std::unique_ptr<Model>`，通过虚函数调用 `forward()` 和
-`compute_logits()`。Qwen3 继续分配全部层的 K/V；Qwen3.5 绑定 `Qwen35Cache`，
-只给 full 层分配 K/V，并为 `max_num_seqs` 条序列预分配 linear 状态。
+`compute_logits()`。Qwen3 绑定 `Qwen3Cache`，分配全部层的 K/V；Qwen3.5
+绑定 `Qwen35Cache`，只给 full 层分配 K/V，并为 `max_num_seqs` 条序列预分配
+linear 状态。
 
 `Scheduler` 在 Qwen3.5 模式维护空闲槽位队列。`Sequence::state_slot` 的生命周期是：
 

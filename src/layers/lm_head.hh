@@ -8,8 +8,6 @@
 
 namespace nanovllm {
 
-// Projects every input row to vocabulary logits. An optional tied weight
-// shares Tensor storage with the embedding rather than copying it.
 class LMHead final : public Module {
  public:
   LMHead(std::size_t vocab_size, std::size_t hidden_size, DataType dtype,
@@ -17,6 +15,7 @@ class LMHead final : public Module {
 
   [[nodiscard]] Tensor forward(ConstTensorView hidden_states,
                                cudaStream_t stream = nullptr) const;
+
   [[nodiscard]] Parameter& weight() noexcept;
   [[nodiscard]] const Parameter& weight() const noexcept;
 

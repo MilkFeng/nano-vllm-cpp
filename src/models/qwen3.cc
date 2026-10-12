@@ -3,8 +3,10 @@
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "kernels/cuda/attention.hh"
 #include "kernels/cuda/inference.hh"
@@ -18,22 +20,11 @@ namespace {
          && same_device(tensor, reference) && tensor.is_contiguous();
 }
 
-ModelConfig validate_qwen3_config(ModelConfig config) {
-  config.assert_valid();
-  if (config.model_type != "qwen3") {
-    throw std::invalid_argument("Qwen3ForCausalLM requires model_type 'qwen3'");
-  }
-  if (config.head_dim == 0 || config.head_dim > 256
-      || config.head_dim % 2 != 0) {
-    throw std::invalid_argument("Qwen3 head_dim must be even and in [2, 256]");
-  }
-  if (config.hidden_act != HiddenAct::SiLU) {
-    throw std::invalid_argument("Qwen3 requires hidden_act 'silu'");
-  }
-  if (config.rope_scaling) {
-    throw std::invalid_argument("Qwen3 RoPE scaling is not implemented");
-  }
-  return config;
+TensorView cache_layer(Tensor& pool, std::size_t index) {
+  assert(index < pool.shape()[0]);
+  const std::array shape{pool.shape()[1], pool.shape()[2], pool.shape()[3],
+                         pool.shape()[4]};
+  return pool.view().slice(0, index, 1).reshape(shape);
 }
 
 } // namespace
@@ -57,18 +48,18 @@ Qwen3Attention::Qwen3Attention(const ModelConfig& config, DataType dtype,
   if (config.rope_scaling) {
     throw std::invalid_argument("Qwen3 RoPE scaling is not implemented");
   }
+
   register_module("q_proj", q_proj_);
   register_module("k_proj", k_proj_);
   register_module("v_proj", v_proj_);
   register_module("o_proj", o_proj_);
 
-  // This follows the nano-vllm Qwen3 implementation: bias-free QKV uses
-  // per-head Q/K RMSNorm, while the bias-enabled variant omits them.
   if (!qkv_bias_) {
     q_norm_ = std::make_unique<RMSNorm>(head_dim_, config.rms_norm_eps, dtype,
                                         device);
     k_norm_ = std::make_unique<RMSNorm>(head_dim_, config.rms_norm_eps, dtype,
                                         device);
+
     register_module("q_norm", *q_norm_);
     register_module("k_norm", *k_norm_);
   }
@@ -77,52 +68,37 @@ Qwen3Attention::Qwen3Attention(const ModelConfig& config, DataType dtype,
 Tensor Qwen3Attention::forward(ConstTensorView positions,
                                ConstTensorView hidden_states,
                                const ForwardContext& context) const {
+  const auto stream = context.stream;
   const auto device = q_proj_.weight().view().device();
-  assert(device.type == DeviceType::Cuda);
-  assert(same_device(hidden_states, q_proj_.weight().view()));
-  assert(hidden_states.rank() == 2 && hidden_states.shape()[1] == hidden_size_);
-  assert(is_index_vector(positions, hidden_states));
-  assert(positions.shape()[0] == hidden_states.shape()[0]);
+
   const auto tokens = hidden_states.shape()[0];
   const bool have_cache = key_cache_.numel() != 0 && value_cache_.numel() != 0;
   const bool paged_prefill = context.block_tables.numel() != 0;
-  if (have_cache) {
-    assert(is_index_vector(context.slot_mapping, hidden_states));
-    assert(context.slot_mapping.shape()[0] == tokens);
-  }
-  if (context.is_prefill) {
-    assert(is_index_vector(context.cu_seqlens_q, hidden_states));
-    assert(is_index_vector(context.cu_seqlens_k, hidden_states));
-    assert(context.cu_seqlens_q.shape()[0] > 0
-           && same_shape(context.cu_seqlens_q, context.cu_seqlens_k));
-    assert(!paged_prefill || have_cache);
-  } else {
-    assert(have_cache && is_index_vector(context.context_lens, hidden_states));
-    assert(context.context_lens.shape()[0] == tokens);
-    assert(context.block_tables.rank() == 2
-           && context.block_tables.shape()[0] == tokens);
-  }
 
-  const auto stream = context.stream;
   auto query_projection = q_proj_.forward(hidden_states, stream);
   auto key_projection = k_proj_.forward(hidden_states, stream);
   auto value_projection = v_proj_.forward(hidden_states, stream);
+
   auto query_heads =
       query_projection.reshape(std::array{tokens, num_heads_, head_dim_});
   auto key_heads =
       key_projection.reshape(std::array{tokens, num_kv_heads_, head_dim_});
   auto value =
       value_projection.reshape(std::array{tokens, num_kv_heads_, head_dim_});
+
   auto query = q_norm_ ? q_norm_->forward(query_heads.view().as_const(), stream)
                        : query_heads;
   auto key = k_norm_ ? k_norm_->forward(key_heads.view().as_const(), stream)
                      : key_heads;
+
   rotary_emb_.forward(positions, query.view(), key.view(), stream);
+
   if (have_cache) {
     kernels::cuda::store_kvcache(key.view().as_const(), value.view().as_const(),
                                  key_cache_, value_cache_, context.slot_mapping,
                                  stream);
   }
+
   auto attention_output = Tensor::empty({tokens, num_heads_, head_dim_},
                                         hidden_states.dtype(), device);
   if (context.is_prefill) {
@@ -140,22 +116,13 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
         context.context_lens, context.block_tables, attention_output.view(),
         scaling_, stream);
   }
+
   const auto flattened = attention_output.reshape(std::array{tokens, q_size_});
   return o_proj_.forward(flattened.view(), stream);
 }
 
 void Qwen3Attention::set_kv_cache(TensorView key_cache,
                                   TensorView value_cache) {
-  assert(key_cache.rank() == 4 && value_cache.rank() == 4);
-  assert(same_shape(key_cache, value_cache));
-  assert(key_cache.shape()[0] > 0 && key_cache.shape()[1] > 0
-         && key_cache.shape()[2] == num_kv_heads_
-         && key_cache.shape()[3] == head_dim_);
-  assert(key_cache.data() != value_cache.data());
-  assert(same_dtype(key_cache, value_cache, q_proj_.weight().view()));
-  assert(same_device(key_cache, value_cache, q_proj_.weight().view()));
-  assert(key_cache.is_contiguous() && value_cache.is_contiguous());
-
   key_cache_ = std::move(key_cache);
   value_cache_ = std::move(value_cache);
 }
@@ -197,6 +164,29 @@ float Qwen3Attention::scaling() const noexcept {
   return scaling_;
 }
 
+Qwen3Cache::Qwen3Cache(const ModelConfig& config, std::size_t num_blocks,
+                       std::size_t block_size, Device device) {
+  const std::vector<std::size_t> shape{
+      config.num_hidden_layers,   num_blocks,      block_size,
+      config.num_key_value_heads, config.head_dim,
+  };
+
+  key_ = Tensor::empty(shape, config.dtype, device);
+  value_ = Tensor::empty(shape, config.dtype, device);
+}
+
+TensorView Qwen3Cache::key_cache(std::size_t layer) {
+  return cache_layer(key_, layer);
+}
+
+TensorView Qwen3Cache::value_cache(std::size_t layer) {
+  return cache_layer(value_, layer);
+}
+
+std::size_t Qwen3Cache::kv_bytes() const {
+  return key_.size_bytes() + value_.size_bytes();
+}
+
 Qwen3DecoderLayer::Qwen3DecoderLayer(const ModelConfig& config, DataType dtype,
                                      Device device)
     : self_attn_(config, dtype, device),
@@ -215,6 +205,7 @@ Qwen3DecoderLayerOutput Qwen3DecoderLayer::forward(
     std::optional<ConstTensorView> residual,
     const ForwardContext& context) const {
   RMSNormOutput before_attention;
+
   auto residual_view = hidden_states;
   if (residual) {
     before_attention =
@@ -224,14 +215,16 @@ Qwen3DecoderLayerOutput Qwen3DecoderLayer::forward(
     before_attention.hidden_states =
         input_layernorm_.forward(hidden_states, context.stream);
   }
+
   auto attention = self_attn_.forward(
       positions, before_attention.hidden_states.view().as_const(), context);
-  // The initial residual borrows hidden_states only until this fused operation
-  // creates the owning updated residual returned to the next decoder layer.
+
   auto after_attention = post_attention_layernorm_.forward(
       attention.view().as_const(), residual_view, context.stream);
+
   auto output = mlp_.forward(after_attention.hidden_states.view().as_const(),
                              context.stream);
+
   return {std::move(output), std::move(after_attention.residual)};
 }
 
@@ -262,17 +255,34 @@ Tensor Qwen3Model::forward(ConstTensorView input_ids, ConstTensorView positions,
   auto hidden_states = embed_tokens_.forward(input_ids, context.stream);
   Tensor residual;
   for (std::size_t index = 0; index < layers_.size(); ++index) {
-    const auto residual_view =
-        index == 0 ? std::nullopt
-                   : std::optional<ConstTensorView>(residual.view().as_const());
+    std::optional<ConstTensorView> residual_view = std::nullopt;
+    if (index > 0) {
+      residual_view = residual.view().as_const();
+    }
+
     auto output = layer(index).forward(
         positions, hidden_states.view().as_const(), residual_view, context);
+
     hidden_states = std::move(output.hidden_states);
     residual = std::move(output.residual);
   }
+
   auto normalized = norm_.forward(hidden_states.view().as_const(),
                                   residual.view().as_const(), context.stream);
   return std::move(normalized.hidden_states);
+}
+
+void Qwen3Model::set_cache(Qwen3Cache& cache) {
+  for (std::size_t i = 0; i < layers_.size(); ++i) {
+    layer(i).self_attention().set_kv_cache(cache.key_cache(i),
+                                           cache.value_cache(i));
+  }
+}
+
+void Qwen3Model::clear_cache() noexcept {
+  for (std::size_t i = 0; i < layers_.size(); ++i) {
+    layer(i).self_attention().clear_kv_cache();
+  }
 }
 
 Embedding& Qwen3Model::embed_tokens() noexcept {
@@ -296,7 +306,7 @@ const Qwen3DecoderLayer& Qwen3Model::layer(std::size_t index) const {
 }
 
 Qwen3ForCausalLM::Qwen3ForCausalLM(const ModelConfig& config, Device device)
-    : config_(validate_qwen3_config(config)),
+    : config_(config),
       dtype_(config_.dtype),
       device_(device),
       model_(config_, dtype_, device_),
@@ -316,12 +326,7 @@ Tensor Qwen3ForCausalLM::forward(ConstTensorView input_ids,
 
 Tensor Qwen3ForCausalLM::compute_logits(ConstTensorView hidden_states,
                                         const ForwardContext& context) const {
-  // Prefill keeps only each sequence's last row before vocabulary projection.
   if (context.is_prefill) {
-    assert(hidden_states.rank() == 2
-           && hidden_states.shape()[1] == config_.hidden_size);
-    assert(is_index_vector(context.cu_seqlens_q, hidden_states));
-    assert(context.cu_seqlens_q.shape()[0] > 0);
     const auto batch = context.cu_seqlens_q.shape()[0] - 1;
     auto last_hidden =
         Tensor::empty({batch, config_.hidden_size}, hidden_states.dtype(),

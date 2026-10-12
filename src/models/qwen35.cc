@@ -28,8 +28,6 @@ bool is_float_source(DataType dtype) {
   return dtype == DataType::BFloat16 || dtype == DataType::Float32;
 }
 
-// mmap byte spans need not have float/uint16_t alignment. BF16 -> FP32 is
-// exact.
 void copy_float(const Checkpoint& checkpoint, std::string_view name,
                 TensorView output) {
   const auto& source = checkpoint.tensor(name);
@@ -55,18 +53,19 @@ Tensor float_tensor(const Checkpoint& checkpoint, std::string_view name) {
 struct LoadEntry {
   std::string name;
   TensorView destination;
-  std::string scale_name; // Nonempty for FP8 -> FP32 expansion.
+  std::string scale_name;
 };
 
 struct LoadPlan {
   std::vector<LoadEntry> entries;
   std::set<std::string, std::less<>> sources;
   ModelLoadResult result;
+
   void count(const Checkpoint& checkpoint, const std::string& name) {
-    if (!sources.insert(name).second) return;
+    if (!sources.insert(name).second) {
+      return;
+    }
     const auto bytes = checkpoint.tensor(name).byte_size();
-    if (bytes > std::numeric_limits<std::uint64_t>::max() - result.num_bytes)
-      throw std::overflow_error("loaded Qwen3.5 byte count is too large");
     ++result.num_tensors;
     result.num_bytes += bytes;
   }
@@ -76,31 +75,39 @@ LoadPlan plan_load(Module& module, const ModelConfig& config,
                    const Checkpoint& checkpoint, std::string_view prefix,
                    bool allow_packed_experts) {
   std::string stem(prefix);
-  if (!stem.empty() && !stem.ends_with('.')) stem += '.';
+  if (!stem.empty() && !stem.ends_with('.')) {
+    stem += '.';
+  }
+
   LoadPlan plan;
   for (const auto& [name, parameter] : module.named_parameters()) {
     LoadEntry entry{stem + name, parameter->view(), {}};
     const auto destination = entry.destination;
+
     if (!destination.is_contiguous()
         || (destination.dtype() != DataType::Float32
             && !(allow_packed_experts
                  && destination.dtype() == DataType::Float8E4M3FN
-                 && destination.device().type == DeviceType::Cpu)))
+                 && destination.device().type == DeviceType::Cpu))) {
       throw std::invalid_argument(
           "Qwen3.5 non-expert destinations must be contiguous FP32 tensors");
+    }
     const auto& source = checkpoint.tensor(entry.name);
-    if (!std::ranges::equal(source.shape, destination.shape()))
+    if (!std::ranges::equal(source.shape, destination.shape())) {
       throw std::runtime_error(
           std::format("tensor '{}' has an unexpected shape", entry.name));
+    }
     if (destination.dtype() == DataType::Float8E4M3FN) {
-      if (source.dtype != DataType::Float8E4M3FN)
+      if (source.dtype != DataType::Float8E4M3FN) {
         throw std::runtime_error(
             std::format("tensor '{}' must be F8_E4M3", entry.name));
+      }
     } else if (source.dtype == DataType::Float8E4M3FN) {
       if (!config.quantization_config || source.shape.size() != 2
-          || !entry.name.ends_with(".weight"))
+          || !entry.name.ends_with(".weight")) {
         throw std::runtime_error(
             "FP8 expansion needs block quantization and a 2D .weight tensor");
+      }
       entry.scale_name =
           entry.name.substr(0, entry.name.size() - 6) + "weight_scale_inv";
       const auto& scale = checkpoint.tensor(entry.scale_name);
@@ -161,15 +168,15 @@ void apply_load(const LoadPlan& plan, const ModelConfig& config,
 }
 
 MoEConfig qwen35_moe_config(const ModelConfig& config) {
-  if (!config.quantization_config)
-    throw std::invalid_argument(
-        "Qwen3.5 expert store currently requires an FP8 checkpoint");
-  return {config.hidden_size,
-          config.moe_intermediate_size,
-          config.num_experts,
-          config.num_experts_per_tok,
-          config.shared_expert_intermediate_size,
-          DataType::Float8E4M3FN};
+  assert(config.quantization_config);
+  return {
+      config.hidden_size,
+      config.moe_intermediate_size,
+      config.num_experts,
+      config.num_experts_per_tok,
+      config.shared_expert_intermediate_size,
+      DataType::Float8E4M3FN,
+  };
 }
 
 [[maybe_unused]] bool is_index_vector(ConstTensorView view,
@@ -307,6 +314,7 @@ Tensor Qwen35Attention::forward(ConstTensorView positions,
   const auto flattened = output.reshape(std::array{tokens, q_size_});
   return o_proj_.forward(flattened.view(), stream);
 }
+
 void Qwen35Attention::set_kv_cache(TensorView key, TensorView value) {
   assert(key.rank() == 4 && same_shape(key, value));
   assert(key.shape()[0] > 0 && key.shape()[1] > 0
@@ -318,13 +326,16 @@ void Qwen35Attention::set_kv_cache(TensorView key, TensorView value) {
   key_cache_ = key;
   value_cache_ = value;
 }
+
 void Qwen35Attention::clear_kv_cache() noexcept {
   key_cache_ = {};
   value_cache_ = {};
 }
+
 ConstTensorView Qwen35Attention::key_cache() const {
   return ConstTensorView(key_cache_);
 }
+
 ConstTensorView Qwen35Attention::value_cache() const {
   return ConstTensorView(value_cache_);
 }
@@ -368,21 +379,27 @@ void Qwen35Cache::reset_state(std::size_t slot, cudaStream_t stream) {
     zero_tensor(recurrent_state(i).slice(0, slot, 1), stream);
   }
 }
+
 TensorView Qwen35Cache::key_cache(std::size_t i) {
   return cache_layer(key_, i);
 }
+
 TensorView Qwen35Cache::value_cache(std::size_t i) {
   return cache_layer(value_, i);
 }
+
 TensorView Qwen35Cache::conv_state(std::size_t i) {
   return cache_layer(conv_, i);
 }
+
 TensorView Qwen35Cache::recurrent_state(std::size_t i) {
   return cache_layer(recurrent_, i);
 }
+
 std::size_t Qwen35Cache::kv_bytes() const {
   return key_.size_bytes() + value_.size_bytes();
 }
+
 std::size_t Qwen35Cache::state_bytes() const {
   return conv_.size_bytes() + recurrent_.size_bytes();
 }
@@ -406,6 +423,7 @@ Qwen35DecoderLayer::Qwen35DecoderLayer(
   register_module("input_layernorm", input_layernorm_);
   register_module("post_attention_layernorm", post_attention_layernorm_);
 }
+
 Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
     ConstTensorView positions, ConstTensorView hidden_states,
     std::optional<ConstTensorView> residual,
@@ -430,12 +448,15 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
       mlp_.forward(after.hidden_states.view().as_const(), context.stream);
   return {std::move(output.hidden_states), std::move(after.residual)};
 }
+
 Qwen35Attention* Qwen35DecoderLayer::self_attention() noexcept {
   return self_attn_.get();
 }
+
 GatedDeltaNet* Qwen35DecoderLayer::linear_attention() noexcept {
   return linear_attn_.get();
 }
+
 MoE& Qwen35DecoderLayer::mlp() noexcept {
   return mlp_;
 }
@@ -493,15 +514,19 @@ void Qwen35Model::clear_cache() noexcept {
       layer(i).linear_attention()->clear_state_cache();
   }
 }
+
 Embedding& Qwen35Model::embed_tokens() noexcept {
   return embed_tokens_;
 }
+
 std::size_t Qwen35Model::num_layers() const noexcept {
   return layers_.size();
 }
+
 Qwen35DecoderLayer& Qwen35Model::layer(std::size_t i) {
   return static_cast<Qwen35DecoderLayer&>(layers_.at(i));
 }
+
 const Qwen35DecoderLayer& Qwen35Model::layer(std::size_t i) const {
   return static_cast<const Qwen35DecoderLayer&>(layers_.at(i));
 }
@@ -531,41 +556,41 @@ ModelLoadResult Qwen35ForCausalLM::load_ckpt(
   if (!config_.tie_word_embeddings
       || checkpoint.weight_map().contains("lm_head.weight")) {
     auto head = plan_load(lm_head_, config_, checkpoint, "lm_head", false);
-    for (const auto& name : head.sources) plan.count(checkpoint, name);
-    for (auto& entry : head.entries) plan.entries.push_back(std::move(entry));
+
+    for (const auto& name : head.sources) {
+      plan.count(checkpoint, name);
+    }
+
+    for (auto& entry : head.entries) {
+      plan.entries.push_back(std::move(entry));
+    }
   }
 
-  // Preserve an executable old model on metadata failures. Once copying starts,
-  // forbid execution until all weights and all resident expert caches are
-  // ready.
-  loaded_ = false;
   model_.clear_cache();
-  for (std::size_t i = 0; i < model_.num_layers(); ++i)
+  for (std::size_t i = 0; i < model_.num_layers(); ++i) {
     model_.layer(i).mlp().invalidate_expert_cache();
-  apply_load(plan, config_, checkpoint);
-  if (device_.type == DeviceType::Cuda) {
-    for (std::size_t i = 0; i < model_.num_layers(); ++i)
-      model_.layer(i).mlp().populate_expert_cache();
   }
-  loaded_ = true;
+
+  apply_load(plan, config_, checkpoint);
+
+  if (device_.type == DeviceType::Cuda) {
+    for (std::size_t i = 0; i < model_.num_layers(); ++i) {
+      model_.layer(i).mlp().populate_expert_cache();
+    }
+  }
+
   return plan.result;
 }
 
 Tensor Qwen35ForCausalLM::forward(ConstTensorView input_ids,
                                   ConstTensorView positions,
                                   const ForwardContext& context) const {
-  if (!loaded_) throw std::runtime_error("load Qwen3.5 weights before forward");
   return model_.forward(input_ids, positions, context);
 }
+
 Tensor Qwen35ForCausalLM::compute_logits(ConstTensorView hidden_states,
                                          const ForwardContext& context) const {
-  if (!loaded_)
-    throw std::runtime_error("load Qwen3.5 weights before compute_logits");
   if (context.is_prefill) {
-    assert(hidden_states.rank() == 2
-           && hidden_states.shape()[1] == config_.hidden_size);
-    assert(is_index_vector(context.cu_seqlens_q, hidden_states)
-           && context.cu_seqlens_q.numel() > 1);
     const auto batch = context.cu_seqlens_q.shape()[0] - 1;
     auto last =
         Tensor::empty({batch, config_.hidden_size}, DataType::Float32, device_);
@@ -575,19 +600,25 @@ Tensor Qwen35ForCausalLM::compute_logits(ConstTensorView hidden_states,
   }
   return lm_head_.forward(hidden_states, context.stream);
 }
+
 const ModelConfig& Qwen35ForCausalLM::config() const noexcept {
   return config_;
 }
+
 DataType Qwen35ForCausalLM::dtype() const noexcept {
   return DataType::Float32;
 }
+
 Device Qwen35ForCausalLM::device() const noexcept {
   return device_;
 }
+
 Qwen35Model& Qwen35ForCausalLM::transformer() noexcept {
   return model_;
 }
+
 LMHead& Qwen35ForCausalLM::lm_head() noexcept {
   return lm_head_;
 }
+
 } // namespace nanovllm

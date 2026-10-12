@@ -19,8 +19,10 @@ class Linear final : public Module {
 
   [[nodiscard]] std::size_t in_features() const noexcept;
   [[nodiscard]] std::size_t out_features() const noexcept;
+
   [[nodiscard]] Parameter& weight() noexcept;
   [[nodiscard]] const Parameter& weight() const noexcept;
+
   [[nodiscard]] Parameter* bias() noexcept;
   [[nodiscard]] const Parameter* bias() const noexcept;
 

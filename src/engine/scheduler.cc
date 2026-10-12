@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <optional>
 #include <stdexcept>
 
 #include "engine/block_manager.hh"
@@ -243,6 +244,7 @@ Sequence Scheduler::spawn_sequence(std::size_t seq_id,
 
       .block_ids = {},
       .block_size = block_size_,
+      .state_slot = std::nullopt,
 
       .sampling_params = sampling_params,
   };
@@ -255,6 +257,7 @@ void Scheduler::preempt(std::size_t seq_id) {
   release_state_slot(seq);
   waitings_.push_front(seq_id);
 }
+
 void Scheduler::allocate_state_slot(Sequence& seq) {
   if (!use_recurrent_state_) {
     return;
