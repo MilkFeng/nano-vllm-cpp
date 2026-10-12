@@ -9,12 +9,6 @@
 
 namespace nanovllm {
 
-struct SwiGLUWorkspace {
-  Tensor gate;
-  Tensor up;
-  Tensor activated;
-};
-
 class SwiGLUMLP final : public Module {
  public:
   SwiGLUMLP(std::size_t hidden_size, std::size_t intermediate_size,
@@ -22,10 +16,6 @@ class SwiGLUMLP final : public Module {
 
   [[nodiscard]] Tensor forward(ConstTensorView hidden_states,
                                cudaStream_t stream = nullptr) const;
-
-  void forward_into(ConstTensorView hidden_states, TensorView output,
-                    SwiGLUWorkspace& workspace,
-                    cudaStream_t stream = nullptr) const;
 
  private:
   std::size_t hidden_size_;

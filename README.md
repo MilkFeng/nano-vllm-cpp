@@ -66,8 +66,9 @@ Qwen3 的默认值 512，这会仅为 linear 状态分配约 31.4 GiB。日志�
 
 这条命令给出运行接口，完整 35B 尚未在本机验证：当前 WSL 只有 22 GiB RAM，
 仅全部 routed FP8 权重就约 30 GiB，需先让 WSL 使用足够的物理内存。模型加载
-后非专家参数和 GPU 专家仍使用 FP32 计算，KV 和递推状态也在 GPU；没有实现
-原生 FP8 GEMM 或将 KV 放到系统 RAM。
+后非专家参数、激活和累加仍使用 FP32；GPU routed 专家保留 FP8 权重和 FP32
+scale，计算时动态量化激活并调用原生 cuBLASLt FP8 Tensor Core GEMM。
+KV 和递推状态也在 GPU，尚未放到系统 RAM。
 
 ### C++ 聊天模板接口
 
@@ -179,10 +180,12 @@ kernels::cpu::dequantize_fp8(weight, scales.view().as_const(), output.view());
 
 FP8 权重直接借用 mmap 字节；scale 复制到 Tensor，保证浮点访问使用对齐的
 存储。官方 Qwen3.5 FP8 权重的 scale 是 BF16，可用下面的模型专用加载器
-转换。反量化不分配输出，后续可为 CPU 未命中专家复用同一个工作区。
-`ExpertStore` 支持保存 FP8 权重和 scale，CPU 未命中专家与 GPU 固定缓存
-通过下面的按需展开接口使用它。Qwen3.5 模型加载器可直接读取官方 FP8
-checkpoint；原生 FP8 GEMM 和动态激活量化尚未实现。
+转换。反量化函数用于加载时展开非专家 FP8 矩阵，输出由调用方提供；
+CPU routed 专家的计算直接在点积内部解码。
+`ExpertStore` 支持保存 FP8 权重和 scale，CPU 未命中专家在点积内部解码，GPU
+固定缓存直接复制原始 FP8 权重和 FP32 scale。Qwen3.5 模型加载器可直接读取官方 FP8
+checkpoint；GPU routed 专家使用原生 FP8 GEMM 与动态激活量化，其他
+模块仍按下面的 FP32 路径执行。
 
 ## 学习用 MoE
 
@@ -224,7 +227,7 @@ combine。Router 的整批专家编号一次下载到 CPU；对每个有未命�
 ```text
 批量 Router → expert_ids[T,K]
             → for each token: ExpertExecutor(input[1,H], ids[1,K])
-                ├── ExpertCache 命中 → GPU SwiGLUMLP
+                ├── ExpertCache 命中 → GPU FP8Expert → 原生 FP8 GEMM
                 └── 未命中 → ExpertStore → CPU expert_forward → 上传输出
             → 按 token 和排名收集 expert_outputs[T*K,H]
             → CUDA combine → y[T,H]
@@ -254,14 +257,14 @@ CPU 构造只创建参考权重。`MoEOutput` 的 `gpu_experts`、`cpu_experts` 
 token 选中会分别计数；`expert_cache().num_slots()`
 和 `size_bytes()` 只统计 routed 缓存槽位和权重，不包含 Router、共享专家及工作区。
 
-当前支持多 token、FP32、1..1024 个专家、`1 <= top_k <= E`。缓存名单固定，
+当前支持多 token、FP32 激活与 FP8 专家、1..1024 个专家、`1 <= top_k <= E`。缓存名单固定，
 populate/forward 同步传入的 stream，调用需串行。动态换入换出作为后续步骤；
 文本生成支持 Qwen3 与 Qwen3.5 MoE，后者使用下面的 FP8 RAM store。
 
-### FP8 专家在 RAM 中存储
+### FP8 专家在 RAM 和 GPU 中存储
 
-默认仍是 FP32。构造 `ExpertStore(H, I, E, DataType::Float8E4M3FN)`，或给
-`MoEConfig::expert_dtype` 设置该值，可让 routed 专家以 FP8+FP32 scale 保存：
+`ExpertStore(H, I, E)` 和 GPU 专家缓存统一保存 FP8 权重与 FP32 scale，
+不提供 FP32 专家存储模式：
 
 ```cpp
 MoEConfig config{
@@ -270,14 +273,13 @@ MoEConfig config{
     .num_experts = 256,
     .top_k = 8,
     .shared_expert_intermediate_size = 512,
-    .expert_dtype = DataType::Float8E4M3FN,
 };
 MoE moe(config, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 
 每个专家注册六个 CPU 参数：三个 `gate_proj/up_proj/down_proj.weight` 为
 FP8，三个同级 `weight_scale_inv` 为 FP32，按 `128x128` 分块。通过参数接口
-初始化，或把模块注册到 `Model` 后用 `load_ckpt()` 加载；GPU 副本与展开工作区
+初始化，或把模块注册到 `Model` 后用 `load_ckpt()` 加载；GPU 副本与计算工作区
 不注册为参数。Router、共享专家、门控及激活仍为 FP32。官方 Qwen3.5 FP8
 checkpoint 的 scale 也可以是 BF16，需要用下面的模型专用加载器转换；通用
 `Model::load_ckpt()` 的默认实现只接受 dtype 相同的参数，Qwen3.5 模型会覆盖它
@@ -285,31 +287,51 @@ checkpoint 的 scale 也可以是 BF16，需要用下面的模型专用加载器
 
 ```text
 ExpertStore: 全部专家 FP8 权重 + scale（RAM）
-  ├── populate: 逐个展开常驻 ID → 上传 FP32 GPU 槽位
-  └── dispatch 未命中: 展开当前 ID → CPU FP32 SwiGLU → 上传输出
+  ├── populate: 原样上传常驻 ID 的 FP8 权重 + FP32 scale → GPU 槽位
+  └── dispatch 未命中: CPU 点积内部解码 FP8 → FP32 SwiGLU → 上传输出
 ```
 
-`weights(id)` 只返回 FP32 store 的直接视图。FP8 使用
-`prepare_weights(id, ExpertWeightWorkspace&)`：工作区按需分配，反复覆写，
-返回的三个 FP32 视图只在下次复用工作区前有效。它也接受 FP32 store，此时直接
-返回原始参数，不分配工作区。准备权重不会修改 RAM 中的原始字节或 scale。
+CPU 未命中专家调用 `FP8Expert::forward_into(input, output)`，由
+`kernels::cpu::expert_forward()` 直接读取 FP8 权重和 FP32 scale。
+点积逐行、逐 128 列块计算；每个块读取一次 scale，用共享的 256 项 FP32
+查表解码 FP8 值，立即做乘加，不创建完整 FP32 权重矩阵。查表占 1 KiB，
+输入、SiLU、累加与输出保持 FP32，CPU 路径不额外量化激活。
 
-每个 `ExpertExecutor` 在第一次 CPU miss 时分配一个 FP32 专家工作区，后续
-miss、不同 expert ID、不同 token 和不同 CUDA stream 都复用它。只运行 GPU
-hits 时不分配；`cpu_weight_workspace_bytes()` 可查看该大小。它不随 K 或 E
-增长，计算完成后保留到 executor 析构。CPU 反量化也在调用线程上执行，
-executor 先提交 GPU hits，再展开并计算 CPU misses。
+每次 CPU 专家调用只创建两个长度为 I 的 FP32 gate/up 向量，gate 向量原地
+保存 SwiGLU 结果，共 `2*I*sizeof(float)` 字节；它们在调用结束时释放。
+executor 先提交 GPU hits，再由调用线程直接计算 CPU misses。
 
-缓存初始化只展开驻留名单，复用一个临时 CPU 专家工作区；每个专家的三次 H2D
-完成后才展开下一个，防止异步上传读取被覆写的权重。工作区在初始化返回时释放。
-GPU 槽位保持 FP32，改变 RAM 权重或 scale 后需显式再次 populate。
+缓存初始化只上传驻留名单，直接复制三个 FP8 权重和三个 FP32 scale，不申请
+CPU 权重展开缓冲区。全部上传完成后才发布缓存映射。改变 RAM 权重或 scale
+后需显式再次 populate。
 
-令 `Sr=ceil(I/128), Sc=ceil(H/128)`，RAM 权重字节数为
-`E*(3*H*I + 3*Sr*Sc*sizeof(float))`，GPU routed 权重字节数为
-`slots*3*H*I*sizeof(float)`，单个展开工作区为 `3*H*I*sizeof(float)`。
-三者分开统计，不包含 Router、共享分支和激活。
+GPU FP8 专家调用 `kernels::cuda::linear_fp8()`：按 128 个输入列动态计算
+amax，使用 `max(amax/448, FLT_MIN)` 作为 scale（全零块用 1），将激活
+量化成 E4M3FN。当前 MoE 每次只传一个 token，多个 token 的 Linear 调用
+在同一输入列块内共享 scale。cuBLASLt 以 FP8 权重和 FP8 激活执行原生
+Tensor Core GEMM，使用 FP32 累加与输出，关闭 fast accumulation。
+
+RTX 5060 Ti（compute capability 12.0）不能直接使用 cuBLASLt 的
+`BLK128x128_32F` scale 模式；按 checkpoint 的 `128x128` 权重块逐块
+调用 tensorwide-scaled FP8 GEMM，以 `beta=0/1` 累加各输入列块。
+权重不重新量化，也不展开成 FP32 矩阵。CUDA 只负责激活量化与 padding，
+矩阵乘法由 cuBLASLt 完成。支持范围见
+[cuBLAS 13.3 scaling modes](https://docs.nvidia.com/cuda/archive/13.3.0/cublas/index.html#scaling-mode-support-overview)。
+
+权重维度在 GPU 上补零到 128 的倍数，token 数补到 16 的倍数；35B 专家
+的 `H=2048,I=512` 不需要权重 padding。executor 复用一个 FP8 激活缓冲、
+激活 scale、FP32 输出暂存区和 1 MiB cuBLASLt workspace。gate/up/activated
+及最终输出仍为 FP32。CPU 未命中专家仍以 FP32 激活计算，因此 GPU 路径
+增加了激活量化误差，不再要求与 CPU 路径逐位一致。未测量整模型加速。
+
+令 `Sr=ceil(I/128), Sc=ceil(H/128), Ip=128*Sr, Hp=128*Sc`，RAM 权重字节数为
+`E*(3*H*I + 3*Sr*Sc*sizeof(float))`，GPU routed 权重和 scale 字节数为
+`slots*(3*Hp*Ip + 3*Sr*Sc*sizeof(float))`。两者只统计权重和 scale，
+不包含 Router、共享分支和激活。CPU 计算不保留 FP32 权重工作区。
 按 `H=2048,I=512,E=256` 计算，一层 RAM routed 参数约 768 MiB（另加 scale），
-每个展开工作区 12 MiB；没有把全部 routed 专家永久展开成 FP32。
+每个 GPU FP8 专家占 3 MiB + 768 字节 scale。CPU 点积内部解码省去
+原来的 12 MiB 权重展开工作区，两个临时激活向量共 4 KiB。
+40 层各缓存两个专家共占 240 MiB + 60 KiB scale，不含激活工作区。
 
 ### Qwen3.5 文本模型与加载
 
@@ -346,8 +368,10 @@ forward 需要 CUDA 设备 0。所有参数需完整加载后才能执行。
 
 模型加载器直接读取 safetensors 分片，按实际 dtype 转换。Routed FP8 字节原样
 复制到 RAM，BF16/F32 scale 转成 FP32；其他 BF16/F32 参数转成 FP32，非专家
-FP8 矩阵乘对应的 `128x128` scale 后展开到模型设备。计算、激活、GPU 常驻专家
-均使用 FP32，没有执行 checkpoint 的动态 FP8 激活量化。
+FP8 矩阵乘对应的 `128x128` scale 后展开到模型设备。GPU routed 专家复制
+FP8 权重和 FP32 scale，输入临时动态量化为 FP8，输出和累加保持 FP32。
+动态 FP8 激活量化目前只用于 GPU routed 专家，非专家模块与 CPU 未命中
+专家保持 FP32 计算。
 
 加载先验证全部所需文本 tensor 的名称、shape、dtype 和 scale 网格，再修改参数。
 元数据错误保留原模型；开始复制后若失败，该模型不能再执行，需重新成功加载。
@@ -507,7 +531,7 @@ misses。CPU 输出上传到原始排名对应的行；一个 stream 保证 GPU 
 combine 的顺序。重叠发生在同一个 token 内，token 之间仍逐个执行。`forward()`
 完成后才返回，同一个对象的调用仍需串行，完成后可以改用另一个 stream。
 
-`SwiGLUMLP::forward_into()` 使用预先分配的 gate/up/activated 工作区，直接
+`FP8Expert::forward_into()` 使用预先分配的 gate/up/activated 工作区，直接
 写入输出行。所有 GPU 专家共用这三个缓冲区，依靠同一 stream 排序；提交 GPU
 专家时不会分配或释放 CUDA Tensor。CPU 输入与输出暂存区也会复用，输出区
 按需要增长。返回的输出拥有独立存储，后续调用不会覆盖先前结果。
@@ -523,6 +547,21 @@ CPU 计算结束后上传，因此暂存区使用普通 RAM。CPU 专家在调�
 MoE 对照实现已移除。
 
 ## 本次 Qwen3.5 验证
+
+CPU 点积内部解码在 Ryzen 7 9700X 上验证：256 种 FP8 编码与 CUDA SDK
+转换一致，24 次专家计算覆盖非整块尺寸、零输入及官方 35B 的一个真实专家，
+与旧的先展开再计算路径逐位一致（最大绝对误差 0）。RTX 5060 Ti 上空、
+混合、全部 GPU 驻留的 9 次 executor 和 9 次带共享专家的 MoE 调用与修改前
+逐位一致，CUDA memcheck 为 0 个错误。
+
+原生 GPU FP8 GEMM 在 RTX 5060 Ti、CUDA 13.3 上验证：覆盖 256 种 FP8
+编码、11 组矩阵尺寸（含 padding、零输入和空 batch），并加载官方 35B 第 0 层
+的一个真实专家。对照独立的 CPU 动态激活量化参考，Linear 最大绝对误差为
+`1.91e-6`，真实专家为 `1.75e-10`；CUDA memcheck 为 0 个错误。另检查了
+空、混合、全部 GPU 驻留名单下的 9 次 executor 与 9 次带共享专家的 MoE
+调用，GPU 分支使用量化参考，CPU 分支使用 FP32 参考。未验证完整 35B 生成。
+
+下面记录的是接入原生 GPU FP8 GEMM 之前的验证。
 
 验证运行在 RTX 5060 Ti、CUDA 13.3，数值参考使用 Transformers 5.15.1 的
 官方 Qwen3.5 MoE FP32 实现，并读取相同的 BF16/FP8 权重后展开。临时验证程序

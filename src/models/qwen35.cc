@@ -153,7 +153,6 @@ MoEConfig qwen35_moe_config(const ModelConfig& config) {
       config.num_experts,
       config.num_experts_per_tok,
       config.shared_expert_intermediate_size,
-      DataType::Float8E4M3FN,
   };
 }
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 
@@ -8,6 +9,7 @@
 namespace nanovllm::kernels::cpu {
 
 [[nodiscard]] float fp8_e4m3fn_to_float(std::uint8_t bits);
+[[nodiscard]] const std::array<float, 256>& fp8_e4m3fn_table();
 
 void dequantize_fp8(ConstTensorView weight, ConstTensorView scale_inv,
                     TensorView output, std::size_t block_rows = 128,

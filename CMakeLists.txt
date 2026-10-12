@@ -93,6 +93,7 @@ target_link_libraries(
   PRIVATE
   CUDA::cudart
   CUDA::cublas
+  CUDA::cublasLt
   nlohmann_json::nlohmann_json
   spdlog::spdlog
   tokenizers_cpp

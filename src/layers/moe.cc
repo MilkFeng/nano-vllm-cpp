@@ -10,7 +10,8 @@
 #include <vector>
 
 #include "common/cuda_utils.hh"
-#include "kernels/cpu/fp8.hh"
+#include "kernels/cpu/expert.hh"
+#include "kernels/cuda/fp8.hh"
 #include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
@@ -23,109 +24,91 @@ std::size_t scale_dimension(std::size_t dimension) {
          + (dimension % kExpertFP8BlockSize != 0);
 }
 
-class FP8Expert final : public Module {
- public:
-  FP8Expert(std::size_t hidden_size, std::size_t intermediate_size)
-      : gate_(hidden_size, intermediate_size, false, DataType::Float8E4M3FN,
-              Device::cpu()),
-        up_(hidden_size, intermediate_size, false, DataType::Float8E4M3FN,
-            Device::cpu()),
-        down_(intermediate_size, hidden_size, false, DataType::Float8E4M3FN,
-              Device::cpu()),
-        gate_scale_(Tensor::empty(
-            {scale_dimension(intermediate_size), scale_dimension(hidden_size)},
-            DataType::Float32)),
-        up_scale_(Tensor::empty(
-            {scale_dimension(intermediate_size), scale_dimension(hidden_size)},
-            DataType::Float32)),
-        down_scale_(Tensor::empty(
-            {scale_dimension(hidden_size), scale_dimension(intermediate_size)},
-            DataType::Float32)) {
-    gate_.register_parameter("weight_scale_inv", gate_scale_);
-    up_.register_parameter("weight_scale_inv", up_scale_);
-    down_.register_parameter("weight_scale_inv", down_scale_);
-
-    register_module("gate_proj", gate_);
-    register_module("up_proj", up_);
-    register_module("down_proj", down_);
-  }
-
- private:
-  Linear gate_, up_, down_;
-  Parameter gate_scale_, up_scale_, down_scale_;
-};
+std::size_t expert_dimension(std::size_t dimension, Device device) {
+  return device.type == DeviceType::Cuda
+             ? scale_dimension(dimension) * kExpertFP8BlockSize
+             : dimension;
+}
 
 } // namespace
 
-std::size_t ExpertWeightWorkspace::size_bytes() const {
-  return gate.size_bytes() + up.size_bytes() + down.size_bytes();
+FP8ExpertWorkspace::FP8ExpertWorkspace(std::size_t hidden_size,
+                                       std::size_t intermediate_size)
+    : gate(Tensor::empty({1, intermediate_size}, DataType::Float32,
+                         Device::cuda(0))),
+      up(Tensor::empty({1, intermediate_size}, DataType::Float32,
+                       Device::cuda(0))),
+      activated(Tensor::empty({1, intermediate_size}, DataType::Float32,
+                              Device::cuda(0))),
+      linear(1, std::max(hidden_size, intermediate_size)) {}
+
+FP8Expert::FP8Expert(std::size_t hidden_size, std::size_t intermediate_size,
+                     Device device)
+    : gate_(expert_dimension(hidden_size, device),
+            expert_dimension(intermediate_size, device), false,
+            DataType::Float8E4M3FN, device),
+      up_(expert_dimension(hidden_size, device),
+          expert_dimension(intermediate_size, device), false,
+          DataType::Float8E4M3FN, device),
+      down_(expert_dimension(intermediate_size, device),
+            expert_dimension(hidden_size, device), false,
+            DataType::Float8E4M3FN, device),
+      gate_scale_(Tensor::empty(
+          {scale_dimension(intermediate_size), scale_dimension(hidden_size)},
+          DataType::Float32, device)),
+      up_scale_(Tensor::empty(
+          {scale_dimension(intermediate_size), scale_dimension(hidden_size)},
+          DataType::Float32, device)),
+      down_scale_(Tensor::empty(
+          {scale_dimension(hidden_size), scale_dimension(intermediate_size)},
+          DataType::Float32, device)) {
+  gate_.register_parameter("weight_scale_inv", gate_scale_);
+  up_.register_parameter("weight_scale_inv", up_scale_);
+  down_.register_parameter("weight_scale_inv", down_scale_);
+
+  register_module("gate_proj", gate_);
+  register_module("up_proj", up_);
+  register_module("down_proj", down_);
+}
+
+void FP8Expert::forward_into(ConstTensorView input, TensorView output) const {
+  kernels::cpu::expert_forward(
+      input,
+      {gate_.weight().view(), up_.weight().view(), down_.weight().view(),
+       gate_scale_.view(), up_scale_.view(), down_scale_.view()},
+      output);
+}
+
+void FP8Expert::forward_into(ConstTensorView input, TensorView output,
+                             FP8ExpertWorkspace& workspace,
+                             cudaStream_t stream) const {
+  kernels::cuda::linear_fp8(input, gate_.weight().view(), gate_scale_.view(),
+                            workspace.gate.view(), workspace.linear, stream);
+  kernels::cuda::linear_fp8(input, up_.weight().view(), up_scale_.view(),
+                            workspace.up.view(), workspace.linear, stream);
+  kernels::cuda::silu_and_mul(workspace.gate.view().as_const(),
+                              workspace.up.view().as_const(),
+                              workspace.activated.view(), stream);
+  kernels::cuda::linear_fp8(workspace.activated.view().as_const(),
+                            down_.weight().view(), down_scale_.view(), output,
+                            workspace.linear, stream);
 }
 
 ExpertStore::ExpertStore(std::size_t hidden_size, std::size_t intermediate_size,
-                         std::size_t num_experts, DataType dtype)
+                         std::size_t num_experts)
     : hidden_size_(hidden_size),
-      intermediate_size_(intermediate_size),
-      dtype_(dtype) {
+      intermediate_size_(intermediate_size) {
   experts_.reserve(num_experts);
   for (std::size_t id = 0; id < num_experts; ++id) {
-    std::unique_ptr<Module> expert;
-    if (dtype == DataType::Float32) {
-      expert = std::make_unique<SwiGLUMLP>(hidden_size, intermediate_size,
-                                           DataType::Float32, Device::cpu());
-    } else {
-      expert = std::make_unique<FP8Expert>(hidden_size, intermediate_size);
-    }
+    auto expert = std::make_unique<FP8Expert>(hidden_size, intermediate_size);
 
     register_module(std::to_string(id), *expert);
     experts_.push_back(std::move(expert));
   }
 }
 
-kernels::cpu::ExpertWeights ExpertStore::weights(std::size_t expert_id) const {
-  if (dtype_ != DataType::Float32) {
-    throw std::logic_error(
-        "FP8 experts require prepare_weights with a workspace");
-  }
-  const auto& expert = std::as_const(*experts_[expert_id]);
-  return {
-      expert.parameter("gate_proj.weight").view(),
-      expert.parameter("up_proj.weight").view(),
-      expert.parameter("down_proj.weight").view(),
-  };
-}
-
-kernels::cpu::ExpertWeights ExpertStore::prepare_weights(
-    std::size_t expert_id, ExpertWeightWorkspace& workspace) const {
-  if (dtype_ == DataType::Float32) {
-    return weights(expert_id);
-  }
-
-  const auto& expert = std::as_const(*experts_[expert_id]);
-
-  const auto expand = [&](const char* projection, Tensor& destination) {
-    const auto name = std::string(projection);
-    const auto weight = expert.parameter(name + ".weight").view();
-    const auto scale = expert.parameter(name + ".weight_scale_inv").view();
-
-    if (!same_shape(destination.view(), weight)) {
-      destination = Tensor::empty(
-          {weight.shape().begin(), weight.shape().end()}, DataType::Float32);
-    }
-
-    kernels::cpu::dequantize_fp8(weight, scale, destination.view(),
-                                 kExpertFP8BlockSize, kExpertFP8BlockSize);
-
-    return destination.view().as_const();
-  };
-  return {
-      expand("gate_proj", workspace.gate),
-      expand("up_proj", workspace.up),
-      expand("down_proj", workspace.down),
-  };
-}
-
-DataType ExpertStore::dtype() const noexcept {
-  return dtype_;
+const FP8Expert& ExpertStore::expert_at(std::size_t expert_id) const {
+  return *experts_.at(expert_id);
 }
 
 std::size_t ExpertStore::hidden_size() const noexcept {
@@ -153,9 +136,8 @@ ExpertCache::ExpertCache(const ExpertStore& source,
       expert_to_slot_(source.num_experts(), -1) {
   slots_.reserve(resident_ids_.size());
   for (std::size_t slot = 0; slot < resident_ids_.size(); ++slot) {
-    slots_.push_back(std::make_unique<SwiGLUMLP>(
-        source.hidden_size(), source.intermediate_size(), DataType::Float32,
-        Device::cuda(0)));
+    slots_.push_back(std::make_unique<FP8Expert>(
+        source.hidden_size(), source.intermediate_size(), Device::cuda(0)));
   }
 
   // zero slots means all selected experts run on CPU
@@ -169,27 +151,30 @@ void ExpertCache::invalidate() noexcept {
 
 void ExpertCache::populate(cudaStream_t stream) {
   invalidate();
-  ExpertWeightWorkspace workspace;
   try {
     for (std::size_t slot = 0; slot < slots_.size(); ++slot) {
-      const auto weights =
-          source_.prepare_weights(resident_ids_[slot], workspace);
-
-      const auto copy = [&](const char* name, ConstTensorView source) {
-        auto destination = slots_[slot]->parameter(name).view();
-        check_cuda(cudaMemcpyAsync(destination.data(), source.data(),
-                                   source.size_bytes(), cudaMemcpyHostToDevice,
-                                   stream),
-                   "upload fixed expert cache");
-      };
-
-      copy("gate_proj.weight", weights.gate);
-      copy("up_proj.weight", weights.up);
-      copy("down_proj.weight", weights.down);
-
-      if (source_.dtype() == DataType::Float8E4M3FN) {
-        check_cuda(cudaStreamSynchronize(stream),
-                   "complete FP8 expert upload before workspace reuse");
+      const auto& expert = source_.expert_at(resident_ids_[slot]);
+      for (const auto& [name, parameter] : expert.named_parameters()) {
+        const auto source = parameter->view();
+        const auto destination = slots_[slot]->parameter(name).view();
+        assert(same_dtype(source, destination));
+        if (source.dtype() == DataType::Float8E4M3FN
+            && !same_shape(source, destination)) {
+          check_cuda(cudaMemsetAsync(destination.data(), 0,
+                                     destination.size_bytes(), stream),
+                     "zero FP8 expert padding");
+          check_cuda(cudaMemcpy2DAsync(
+                         destination.data(), destination.shape()[1],
+                         source.data(), source.shape()[1], source.shape()[1],
+                         source.shape()[0], cudaMemcpyHostToDevice, stream),
+                     "upload padded FP8 expert weight");
+        } else {
+          assert(same_shape(source, destination));
+          check_cuda(cudaMemcpyAsync(destination.data(), source.data(),
+                                     source.size_bytes(),
+                                     cudaMemcpyHostToDevice, stream),
+                     "upload fixed expert cache");
+        }
       }
     }
     check_cuda(cudaStreamSynchronize(stream), "complete expert cache uploads");
@@ -208,11 +193,11 @@ int ExpertCache::slot_of(std::size_t expert_id) const {
   return expert_to_slot_[expert_id];
 }
 
-const SwiGLUMLP& ExpertCache::expert_at_slot(std::size_t slot) const {
+const FP8Expert& ExpertCache::expert_at_slot(std::size_t slot) const {
   if (!ready_) {
     throw std::logic_error("populate expert cache before execution");
   }
-  return *slots_[slot];
+  return *slots_.at(slot);
 }
 
 bool ExpertCache::ready() const noexcept {
@@ -252,13 +237,8 @@ ExpertExecutor::ExpertExecutor(const ExpertStore& store,
   }
 
   if (cache_.num_slots() != 0) {
-    // One workspace serves every GPU hit: one stream orders all reads/writes.
-    const auto shape = std::vector<std::size_t>{1, store_.intermediate_size()};
-    gpu_workspace_ = {
-        Tensor::empty(shape, DataType::Float32, Device::cuda(0)),
-        Tensor::empty(shape, DataType::Float32, Device::cuda(0)),
-        Tensor::empty(shape, DataType::Float32, Device::cuda(0)),
-    };
+    workspace_ =
+        FP8ExpertWorkspace(store_.hidden_size(), store_.intermediate_size());
   }
 }
 
@@ -315,15 +295,13 @@ ExpertExecutionOutput ExpertExecutor::forward(
     for (const auto& task : hits) {
       auto row = result.expert_outputs.slice(0, task.rank, 1);
       cache_.expert_at_slot(task.slot).forward_into(input, row.view(),
-                                                    gpu_workspace_, stream);
+                                                    workspace_, stream);
     }
 
     for (const auto& task : misses) {
       auto row = host_parts_.slice(0, task.rank, 1);
-      kernels::cpu::expert_forward(
-          host_input_.view().as_const(),
-          store_.prepare_weights(task.expert_id, cpu_weight_workspace_),
-          row.view());
+      store_.expert_at(task.expert_id)
+          .forward_into(host_input_.view().as_const(), row.view());
     }
 
     for (const auto& task : misses) {
@@ -344,17 +322,13 @@ ExpertExecutionOutput ExpertExecutor::forward(
   return result;
 }
 
-std::size_t ExpertExecutor::cpu_weight_workspace_bytes() const {
-  return cpu_weight_workspace_.size_bytes();
-}
-
 MoE::MoE(MoEConfig config, Device device,
          std::optional<std::vector<std::int32_t>> gpu_expert_ids)
     : config_(config),
       gate_(config_.hidden_size, config_.num_experts, false, DataType::Float32,
             device),
       experts_(config_.hidden_size, config_.intermediate_size,
-               config_.num_experts, config_.expert_dtype) {
+               config_.num_experts) {
   register_module("gate", gate_);
   register_module("experts", experts_);
 

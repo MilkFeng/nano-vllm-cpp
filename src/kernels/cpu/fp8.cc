@@ -37,6 +37,17 @@ float fp8_e4m3fn_to_float(std::uint8_t bits) {
   return (bits & 0x80) != 0 ? -value : value;
 }
 
+const std::array<float, 256>& fp8_e4m3fn_table() {
+  static const auto values = [] {
+    std::array<float, 256> table{};
+    for (std::size_t i = 0; i < table.size(); ++i) {
+      table[i] = fp8_e4m3fn_to_float(static_cast<std::uint8_t>(i));
+    }
+    return table;
+  }();
+  return values;
+}
+
 void dequantize_fp8(ConstTensorView weight, ConstTensorView scale_inv,
                     TensorView output, std::size_t block_rows,
                     std::size_t block_columns) {
@@ -54,13 +65,7 @@ void dequantize_fp8(ConstTensorView weight, ConstTensorView scale_inv,
   const auto scale_columns =
       columns / block_columns + (columns % block_columns != 0);
 
-  static const auto values = [] {
-    std::array<float, 256> table{};
-    for (std::size_t i = 0; i < table.size(); ++i) {
-      table[i] = fp8_e4m3fn_to_float(static_cast<std::uint8_t>(i));
-    }
-    return table;
-  }();
+  const auto& values = fp8_e4m3fn_table();
 
   const auto* weights = weight.data<std::uint8_t>();
   const auto* scales = scale_inv.data<float>();

@@ -8,6 +8,9 @@ struct ExpertWeights {
   ConstTensorView gate;
   ConstTensorView up;
   ConstTensorView down;
+  ConstTensorView gate_scale;
+  ConstTensorView up_scale;
+  ConstTensorView down_scale;
 };
 
 void expert_forward(ConstTensorView input, const ExpertWeights& weights,
