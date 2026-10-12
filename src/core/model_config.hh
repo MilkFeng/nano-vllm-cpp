@@ -34,6 +34,9 @@ enum class HiddenAct { GeLU, SiLU };
 VLLM_DEFINE_NLOHMANN_JSON(HiddenAct)
 
 enum class ModelArchitecture { Qwen3, Qwen35Moe };
+
+VLLM_DEFINE_NLOHMANN_JSON(ModelArchitecture)
+
 enum class AttentionType { Full, Linear };
 
 VLLM_DEFINE_NLOHMANN_JSON(AttentionType)
@@ -115,5 +118,6 @@ struct ModelConfig {
     return static_cast<std::size_t>(head_dim * partial_rotary_factor);
   }
 };
+
 VLLM_DEFINE_NLOHMANN_JSON(ModelConfig)
 } // namespace nanovllm

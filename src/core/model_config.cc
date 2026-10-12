@@ -65,6 +65,11 @@ VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(RoPEScalingType,
 VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(HiddenAct, {{HiddenAct::GeLU, "gelu"},
                                              {HiddenAct::SiLU, "silu"}})
 
+VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(ModelArchitecture,
+                                 {{ModelArchitecture::Qwen3, "Qwen 3"},
+                                  {ModelArchitecture::Qwen35Moe,
+                                   "Qwen 3.5 Moe"}})
+
 VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(AttentionType,
                                  {{AttentionType::Full, "full_attention"},
                                   {AttentionType::Linear, "linear_attention"}})
@@ -359,13 +364,14 @@ void ModelConfig::assert_valid() const {
 }
 
 ModelConfig ModelConfig::read_from_file(const std::filesystem::path& path) {
-  const auto filename =
-      std::filesystem::is_directory(path) ? path / "config.json" : path;
-  std::ifstream file(filename);
-  if (!file)
+  std::ifstream file(path);
+
+  if (!file) {
     throw std::runtime_error(
-        std::format("failed to open model config '{}'", filename.string()));
+        std::format("failed to open model config '{}'", path.string()));
+  }
   return from_json(nlohmann::json::parse(file));
 }
+
 VLLM_IMPL_NLOHMANN_JSON(ModelConfig)
 } // namespace nanovllm

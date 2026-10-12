@@ -1,4 +1,6 @@
 #include <cmath>
+#include <format>
+#include <magic_enum/magic_enum.hpp>
 #include <stdexcept>
 
 #include "core/model_config.hh"
@@ -23,35 +25,6 @@ std::shared_ptr<Logger> null_logger() {
 
 } // namespace
 
-class LLMPath {
- public:
-  LLMPath(const std::filesystem::path& model_path)
-      : model_path_(model_path) {}
-
-  std::filesystem::path model_path() const { return model_path_; }
-
-  std::filesystem::path model_config_path() const {
-    return model_path_ / kModelConfigPath;
-  }
-
-  std::filesystem::path tokenizer_config_path() const {
-    return model_path_ / kTokenizerConfigPath;
-  }
-
-  std::filesystem::path tokenizer_path() const {
-    return model_path_ / kTokenizerPath;
-  }
-
- private:
-  std::filesystem::path model_path_;
-
-  constexpr static std::string_view kModelConfigPath = "config.json";
-
-  constexpr static std::string_view kTokenizerConfigPath =
-      "tokenizer_config.json";
-  constexpr static std::string_view kTokenizerPath = "tokenizer.json";
-};
-
 class LLMEngine::Impl {
  public:
   Impl(const std::filesystem::path& model_path, EngineParams params,
@@ -59,29 +32,24 @@ class LLMEngine::Impl {
       : model_path_(model_path),
         params_(params),
         logger_(logger ? std::move(logger) : null_logger()),
-        model_config_(
-            ModelConfig::read_from_file(model_path_.model_config_path())),
-        tokenizer_(model_path_.tokenizer_path(),
-                   model_path_.tokenizer_config_path()),
-        model_runner_(params, model_config_, model_path_.model_path()),
+        model_config_(ModelConfig::read_from_file(model_path_ / "config.json")),
+        tokenizer_(logger_, model_path_ / "tokenizer.json",
+                   model_path_ / "tokenizer_config.json"),
+        model_runner_(logger_, params, model_config_, model_path_),
         scheduler_(model_runner_.num_blocks(), params.kvcache_block_size,
                    params.max_num_seqs, params.max_num_batched_tokens,
                    tokenizer_.eos_token_id(), params.max_model_len,
                    model_config_.architecture == ModelArchitecture::Qwen35Moe) {
-    const bool hybrid =
-        model_config_.architecture == ModelArchitecture::Qwen35Moe;
-    logger_->info(std::string("Loaded ") + (hybrid ? "Qwen3.5 MoE" : "Qwen3")
-                  + " with " + std::to_string(model_runner_.num_blocks())
-                  + " KV cache blocks ("
-                  + std::to_string(model_runner_.kvcache_size_bytes())
-                  + " bytes for K and V)");
-    if (hybrid) {
-      logger_->info(
-          std::to_string(params_.max_num_seqs) + " recurrent state slots ("
-          + std::to_string(model_runner_.state_cache_size_bytes())
-          + " bytes for conv and recurrent state); prefix cache disabled; "
-          + std::to_string(params_.gpu_expert_ids.size())
-          + " GPU routed experts per layer");
+    logger_->info(std::format(
+        "Loaded {}", magic_enum::enum_name(model_config_.architecture)));
+
+    if (model_config_.architecture == ModelArchitecture::Qwen35Moe) {
+      logger_->info(std::format(
+          "{} recurrent state slots ({} bytes for conv and "
+          "recurrent state); "
+          "prefix cache disabled; {} GPU routed experts per layer",
+          params_.max_num_seqs, model_runner_.state_cache_size_bytes(),
+          params_.gpu_expert_ids.size()));
     }
   }
 
@@ -90,7 +58,6 @@ class LLMEngine::Impl {
   Impl(const Impl&) = delete;
   Impl& operator=(const Impl&) = delete;
 
-  // LLMEngine moves the owning unique_ptr; the Impl object stays in place.
   Impl(Impl&&) = delete;
   Impl& operator=(Impl&&) = delete;
 
@@ -131,8 +98,10 @@ class LLMEngine::Impl {
       std::vector<GenerationOutput> result;
       for (const auto id : request_ids) {
         const auto tokens = scheduler_.sequence(id).generated_token_ids();
-        result.push_back(
-            {tokenizer_.decode(tokens), {tokens.begin(), tokens.end()}});
+        result.push_back({
+            tokenizer_.decode(tokens),
+            {tokens.begin(), tokens.end()},
+        });
       }
       scheduler_.clear();
       return result;
@@ -143,7 +112,7 @@ class LLMEngine::Impl {
   }
 
  private:
-  LLMPath model_path_;
+  std::filesystem::path model_path_;
   EngineParams params_;
 
   std::shared_ptr<Logger> logger_;

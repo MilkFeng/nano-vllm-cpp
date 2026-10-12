@@ -58,6 +58,7 @@ class TokenizerBackend {
 
   TokenizerBackend(const TokenizerBackend&) = delete;
   TokenizerBackend& operator=(const TokenizerBackend&) = delete;
+
   TokenizerBackend(TokenizerBackend&&) = delete;
   TokenizerBackend& operator=(TokenizerBackend&&) = delete;
 
@@ -90,7 +91,7 @@ class TokenizerBackend {
       if (token_id < 0) {
         throw std::invalid_argument("token ID must be non-negative");
       }
-      unsigned_token_ids.push_back(static_cast<std::uint32_t>(token_id));
+      unsigned_token_ids.push_back(token_id);
     }
 
     std::lock_guard lock(mutex_);
@@ -124,14 +125,14 @@ class TokenizerBackend {
       const std::string& source, const nlohmann::ordered_json& values) const {
     std::lock_guard lock(mutex_);
     if (!chat_template_ast_) {
-      // Match Transformers' Jinja whitespace settings. Compile lazily so raw
-      // tokenization still works when a checkpoint has no usable chat template.
       chat_template_ast_ =
-          minja::Parser::parse(source, {.trim_blocks = true,
-                                        .lstrip_blocks = true,
-                                        .keep_trailing_newline = false});
+          minja::Parser::parse(source, {
+                                           .trim_blocks = true,
+                                           .lstrip_blocks = true,
+                                           .keep_trailing_newline = false,
+                                       });
     }
-    // Template variables and namespace state belong to a single render.
+
     auto context = minja::Context::make(minja::Value(values));
     return chat_template_ast_->render(context);
   }
@@ -191,9 +192,11 @@ std::optional<std::int32_t> resolve_token_id(
 
 } // namespace
 
-Tokenizer::Tokenizer(const std::filesystem::path& tokenizer_path,
+Tokenizer::Tokenizer(std::shared_ptr<Logger> logger,
+                     const std::filesystem::path& tokenizer_path,
                      const std::filesystem::path& tokenizer_config_path)
-    : backend_(std::make_unique<TokenizerBackend>(tokenizer_path)),
+    : logger_(logger),
+      backend_(std::make_unique<TokenizerBackend>(tokenizer_path)),
       eos_token_id_(-1) {
   std::ifstream file(tokenizer_config_path);
   nlohmann::json config;
@@ -202,12 +205,14 @@ Tokenizer::Tokenizer(const std::filesystem::path& tokenizer_path,
   const auto eos = read_token_string(config, "eos_token");
   const auto bos = read_token_string(config, "bos_token");
   const auto pad = read_token_string(config, "pad_token");
+
   eos_token_id_ = resolve_token_id(eos, "eos_token", *backend_).value();
   bos_token_id_ = resolve_token_id(bos, "bos_token", *backend_);
   pad_token_id_ = resolve_token_id(pad, "pad_token", *backend_);
   eos_token_ = eos;
   bos_token_ = bos;
   pad_token_ = pad;
+
   const auto chat_template = config.find("chat_template");
   if (chat_template != config.end() && !chat_template->is_null()) {
     if (!chat_template->is_string()) {
@@ -217,9 +222,12 @@ Tokenizer::Tokenizer(const std::filesystem::path& tokenizer_path,
     }
     chat_template_ = chat_template->get<std::string>();
   }
+
+  logger_->info("Tokenizer initialized");
 }
 
 Tokenizer::~Tokenizer() = default;
+
 Tokenizer::Tokenizer(Tokenizer&&) noexcept = default;
 Tokenizer& Tokenizer::operator=(Tokenizer&&) noexcept = default;
 

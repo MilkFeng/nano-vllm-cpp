@@ -17,7 +17,8 @@ class TokenizerBackend;
 
 class Tokenizer {
  public:
-  Tokenizer(const std::filesystem::path& tokenizer_path,
+  Tokenizer(std::shared_ptr<Logger> logger,
+            const std::filesystem::path& tokenizer_path,
             const std::filesystem::path& tokenizer_config_path);
   ~Tokenizer();
 
@@ -42,6 +43,7 @@ class Tokenizer {
   [[nodiscard]] std::int32_t eos_token_id() const noexcept;
 
  private:
+  std::shared_ptr<Logger> logger_;
   std::unique_ptr<TokenizerBackend> backend_;
 
   std::int32_t eos_token_id_;

@@ -1,6 +1,5 @@
 #include "core/tensor_layout.hh"
 
-#include <limits>
 #include <stdexcept>
 
 namespace nanovllm {
@@ -106,12 +105,6 @@ bool TensorLayout::is_contiguous() const noexcept {
   for (std::size_t i = shape_.size(); i > 0; --i) {
     const auto dimension = shape_[i - 1];
     if (dimension != 1 && strides_[i - 1] != expected_stride) {
-      return false;
-    }
-
-    if (dimension != 0
-        && expected_stride
-               > std::numeric_limits<std::size_t>::max() / dimension) {
       return false;
     }
     expected_stride *= dimension;

@@ -15,9 +15,11 @@
 
 namespace nanovllm {
 
-ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
+ModelRunner::ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
+                         ModelConfig config,
                          const std::filesystem::path& checkpoint)
-    : params_(params),
+    : logger_(logger),
+      params_(params),
       config_(std::move(config)),
       num_blocks_(params.num_kvcache_blocks) {
   if (params_.max_num_seqs == 0 || params_.max_num_batched_tokens == 0
@@ -27,28 +29,24 @@ ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
     throw std::invalid_argument(
         "invalid engine limits or KV cache block count");
   }
+
   const auto int32_max = std::size_t(std::numeric_limits<std::int32_t>::max());
   if (params_.max_num_seqs > int32_max
       || params_.max_num_batched_tokens > int32_max
-      || params_.max_model_len > int32_max)
+      || params_.max_model_len > int32_max) {
     throw std::invalid_argument("engine limits exceed the Int32 index range");
+  }
+
   if (config_.architecture == ModelArchitecture::Qwen3
-      && !params_.gpu_expert_ids.empty())
+      && !params_.gpu_expert_ids.empty()) {
     throw std::invalid_argument("gpu_expert_ids requires a Qwen3.5 MoE model");
+  }
+
   std::unordered_set<std::int32_t> expert_ids;
   for (const auto id : params_.gpu_expert_ids) {
-    if (id < 0 || std::size_t(id) >= config_.num_experts
-        || !expert_ids.insert(id).second)
-      throw std::invalid_argument(
-          "GPU expert IDs must be unique and inside the model expert range");
+    expert_ids.insert(id);
   }
-  const auto index_limit =
-      static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())
-      / params_.kvcache_block_size;
-  if (num_blocks_ > index_limit) {
-    throw std::invalid_argument(
-        "KV cache token capacity exceeds the Int32 slot index range");
-  }
+
   const auto per_sequence =
       (params_.max_model_len - 1) / params_.kvcache_block_size + 1;
   if (num_blocks_ < per_sequence) {
@@ -68,8 +66,6 @@ ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
       model_ = std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda(0));
     }
     model_->load_ckpt(checkpoint);
-    // Weight uploads use the default stream; publish them before inference on
-    // our nonblocking stream, which does not implicitly wait for that stream.
     check_cuda(cudaStreamSynchronize(nullptr), "complete model weight uploads");
 
     if (config_.architecture == ModelArchitecture::Qwen35Moe) {
@@ -80,8 +76,10 @@ ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
           *hybrid_cache_);
     } else {
       const std::vector<std::size_t> shape{
-          config_.num_hidden_layers, num_blocks_, params_.kvcache_block_size,
-          config_.num_key_value_heads, config_.head_dim};
+          config_.num_hidden_layers,  num_blocks_,
+          params_.kvcache_block_size, config_.num_key_value_heads,
+          config_.head_dim,
+      };
       key_cache_ = Tensor::empty(shape, model_->dtype(), model_->device());
       value_cache_ = Tensor::empty(shape, model_->dtype(), model_->device());
       const std::array layer_shape{num_blocks_, params_.kvcache_block_size,
@@ -99,6 +97,10 @@ ModelRunner::ModelRunner(EngineParams params, ModelConfig config,
     stream_ = nullptr;
     throw;
   }
+
+  logger_->info(std::format(
+      "Model Runner initialized with {} KV cache blocks ({} bytes for K and V)",
+      params_.kvcache_block_size, kvcache_size_bytes()));
 }
 
 ModelRunner::~ModelRunner() {
@@ -243,8 +245,6 @@ std::vector<std::int32_t> ModelRunner::run(
   context.state_indices = state_indices.view().as_const();
   context.stream = stream_;
 
-  // New requests and preempted requests start from token zero. Slot contents
-  // may belong to an older owner; queue the reset before this forward.
   if (hybrid_cache_ && prefill) {
     for (const auto* seq : seqs) {
       if (seq->num_cached_tokens == 0)

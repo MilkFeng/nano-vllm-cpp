@@ -35,10 +35,10 @@ class Scheduler {
                               const SamplingParams& sampling_params);
 
   [[nodiscard]] Scheduled schedule();
+
   void postprocess(const Scheduled& scheduled,
                    std::span<const std::int32_t> token_ids);
-  // Release requests and state slots. Completed KV blocks are retained only
-  // when recurrent state is disabled; KV alone cannot restore linear state.
+
   void clear();
 
   [[nodiscard]] const Sequence& sequence(std::size_t seq_id) const {

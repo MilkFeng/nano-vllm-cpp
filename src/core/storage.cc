@@ -15,11 +15,15 @@ Storage::Storage(std::size_t size_bytes, Device device)
 
   switch (device_.type) {
     case DeviceType::Cpu:
-      if (size_bytes_ != 0) data_ = ::operator new(size_bytes_);
+      if (size_bytes_ != 0) {
+        data_ = ::operator new(size_bytes_);
+      }
       return;
 
     case DeviceType::Cuda: {
-      if (size_bytes_ == 0) return;
+      if (size_bytes_ == 0) {
+        return;
+      }
 
       CudaDeviceGuard guard(device_.index);
       const auto operation =

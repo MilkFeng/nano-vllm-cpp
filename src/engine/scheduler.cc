@@ -58,7 +58,7 @@ Scheduled Scheduler::schedule() {
   std::vector<std::size_t> scheduled_seqs;
   std::size_t num_batched_tokens = 0;
 
-  // Prefill
+  // prefill
   while (!waitings_.empty() && scheduled_seqs.size() < max_num_seqs_
          && num_batched_tokens < max_num_batched_tokens_) {
     const auto seq_id = waitings_.front();
@@ -69,13 +69,10 @@ Scheduled Scheduler::schedule() {
     BlockAllocation alloc;
 
     if (seq.block_ids.empty()) {
-      // Live states, including unfinished chunked prefills, share this pool.
-      // Leave new requests waiting until a running sequence frees a slot.
-      if (use_recurrent_state_ && free_state_slots_.empty()) break;
-      if (seq.num_blocks() > num_blocks_) {
-        throw std::runtime_error("sequence exceeds KV cache capacity");
+      if (use_recurrent_state_ && free_state_slots_.empty()) {
+        break;
       }
-      // This sequence needs to be allocated blocks
+
       alloc = block_manager_.predict_prefill_allocation(seq);
 
       if (!block_manager_.can_allocate(alloc)) {
@@ -83,23 +80,23 @@ Scheduled Scheduler::schedule() {
           throw std::runtime_error(
               "no KV cache capacity available for prefill");
         }
-        // Cannot allocate blocks for this sequence
-        // Skip prefill, schedule decode for other sequences
+        // cannot allocate blocks for this sequence
+        // skip prefill, schedule decode for other sequences
         break;
       } else {
-        // Can allocate blocks for this sequence
+        // can allocate blocks for this sequence
         num_tokens = seq.num_tokens() - alloc.num_reused_blocks * block_size_;
       }
     } else {
-      // This sequence is already allocated blocks, but prefill is not finished
+      // sequence is already allocated blocks, but prefill is not finished
       num_tokens = seq.num_tokens() - seq.num_cached_tokens;
     }
 
     const auto remaining_tokens = max_num_batched_tokens_ - num_batched_tokens;
 
     if (num_tokens > remaining_tokens && scheduled_seqs.size()) {
-      // Only allow chunked prefill for the first sequence
-      // Starting with the second sequence, it must be fully prefilled at once
+      // only allow chunked prefill for the first sequence
+      // starting with the second sequence, it must be fully prefilled at once
       break;
     }
 
@@ -111,7 +108,6 @@ Scheduled Scheduler::schedule() {
     seq.num_scheduled_tokens = std::min(num_tokens, remaining_tokens);
     num_batched_tokens += seq.num_scheduled_tokens;
 
-    // If the sequence is fully cached, move it to running
     if (seq.num_cached_tokens + seq.num_scheduled_tokens == seq.num_tokens()) {
       seq.status = SequenceStatus::Running;
       runnings_.push_back(seq_id);
@@ -126,7 +122,7 @@ Scheduled Scheduler::schedule() {
     return *pending_;
   }
 
-  // Decode
+  // decode
   while (!runnings_.empty()
          && scheduled_seqs.size()
                 < std::min(max_num_seqs_, max_num_batched_tokens_)) {
@@ -158,8 +154,6 @@ Scheduled Scheduler::schedule() {
     runnings_.push_front(*it);
   }
 
-  // A sequence preempted itself after exhausting the final block. Its released
-  // blocks can now be reused for prefill; do not leave the engine spinning.
   if (scheduled_seqs.empty() && !waitings_.empty()) {
     return schedule();
   }
@@ -177,13 +171,17 @@ void Scheduler::postprocess(const Scheduled& scheduled,
   if (scheduled.seq_ids.size() != token_ids.size()) {
     throw std::invalid_argument("model returned the wrong number of tokens");
   }
-  if (scheduled.seq_ids.empty() && !pending_) return;
+
+  if (scheduled.seq_ids.empty() && !pending_) {
+    return;
+  }
+
   if (!pending_ || pending_->prefill != scheduled.prefill
       || pending_->seq_ids != scheduled.seq_ids) {
     throw std::invalid_argument(
         "postprocess batch does not match the scheduled batch");
   }
-  // Validate the entire response before publishing hashes or changing tokens.
+
   for (std::size_t i = 0; i < token_ids.size(); ++i) {
     const auto& seq = sequences_.at(scheduled.seq_ids[i]);
     if (token_ids[i] < 0 || seq.num_scheduled_tokens == 0
@@ -199,8 +197,13 @@ void Scheduler::postprocess(const Scheduled& scheduled,
     block_manager_.hash_completed_blocks(seq);
     seq.num_cached_tokens += seq.num_scheduled_tokens;
     seq.num_scheduled_tokens = 0;
-    if (scheduled.prefill && seq.num_cached_tokens < seq.num_tokens()) continue;
+
+    if (scheduled.prefill && seq.num_cached_tokens < seq.num_tokens()) {
+      continue;
+    }
+
     seq.append_token(token_ids[i]);
+
     if ((!seq.sampling_params.ignore_eos && token_ids[i] == eos_token_id_)
         || seq.num_generated_tokens() >= seq.sampling_params.max_tokens
         || seq.num_tokens() >= max_model_len_) {
@@ -210,6 +213,7 @@ void Scheduler::postprocess(const Scheduled& scheduled,
       std::erase(runnings_, seq.id);
     }
   }
+
   pending_.reset();
 }
 
@@ -252,14 +256,18 @@ void Scheduler::preempt(std::size_t seq_id) {
   waitings_.push_front(seq_id);
 }
 void Scheduler::allocate_state_slot(Sequence& seq) {
-  if (!use_recurrent_state_) return;
+  if (!use_recurrent_state_) {
+    return;
+  }
   assert(!seq.state_slot && !free_state_slots_.empty());
   seq.state_slot = free_state_slots_.front();
   free_state_slots_.pop_front();
 }
 
 void Scheduler::release_state_slot(Sequence& seq) {
-  if (!seq.state_slot) return;
+  if (!seq.state_slot) {
+    return;
+  }
   free_state_slots_.push_back(*seq.state_slot);
   seq.state_slot.reset();
 }

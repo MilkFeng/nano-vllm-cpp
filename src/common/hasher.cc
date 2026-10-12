@@ -34,8 +34,8 @@ Hasher::Hasher()
 Hasher::~Hasher() = default;
 
 void Hasher::update(std::uint64_t value) {
-  // Hash integers in little-endian byte order on every host.
-  std::array<std::uint8_t, sizeof(value)> bytes{};
+  // hash integers in little-endian byte order on every host.
+  std::array<std::uint8_t, sizeof(value)> bytes = {};
   for (auto& byte : bytes) {
     byte = static_cast<std::uint8_t>(value);
     value >>= 8;

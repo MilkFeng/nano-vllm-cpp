@@ -13,6 +13,7 @@ namespace nanovllm {
 class Tensor {
  public:
   Tensor() = default;
+  ~Tensor() = default;
 
   [[nodiscard]] static Tensor empty(std::vector<std::size_t> shape,
                                     DataType dtype,

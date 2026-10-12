@@ -10,7 +10,6 @@ namespace nanovllm {
 
 class TensorLayout {
  public:
-  // A default layout represents an empty one-dimensional tensor.
   TensorLayout();
 
   explicit TensorLayout(std::vector<std::size_t> shape);

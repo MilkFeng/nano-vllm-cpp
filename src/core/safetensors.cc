@@ -9,7 +9,6 @@
 #include <cerrno>
 #include <cstdint>
 #include <format>
-#include <limits>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 #include <string_view>
@@ -28,19 +27,12 @@ VLLM_IMPL_NLOHMANN_JSON_FOR_ENUM(DataType,
 std::size_t TensorInfo::element_count() const {
   std::size_t count = 1;
   for (const auto dimension : shape) {
-    if (dimension != 0
-        && count > std::numeric_limits<std::size_t>::max() / dimension) {
-      throw std::overflow_error("tensor element count is too large");
-    }
     count *= dimension;
   }
   return count;
 }
 
 std::uint64_t TensorInfo::byte_size() const {
-  if (data_end < data_begin) {
-    throw std::logic_error("tensor data range is invalid");
-  }
   return data_end - data_begin;
 }
 
@@ -76,44 +68,13 @@ nlohmann::json TensorMap::to_json() const {
 TensorMap TensorMap::from_json(const nlohmann::json& j) {
   TensorMap tensor_map;
   for (const auto& [name, value] : j.items()) {
-    // Skip metadata
-    if (name == "__metadata__") continue;
+    // skip metadata
+    if (name == "__metadata__") {
+      continue;
+    }
+
     const auto tensor = value.get<TensorInfo>();
-
-    // Validate data range
-    if (tensor.data_end < tensor.data_begin) {
-      throw std::runtime_error(
-          std::format("tensor '{}' has an invalid data range", name));
-    }
-
-    // Validate byte size
-    const auto element_count = tensor.element_count();
-    const auto element_size = data_type_size(tensor.dtype);
-    if (element_count
-        > std::numeric_limits<std::size_t>::max() / element_size) {
-      throw std::runtime_error(
-          std::format("tensor '{}' byte size is too large", name));
-    }
-    const auto expected_size = element_count * element_size;
-    if (tensor.byte_size() != expected_size) {
-      throw std::runtime_error(
-          std::format("tensor '{}' byte size does not match its shape", name));
-    }
-
     tensor_map.tensors.emplace(name, tensor);
-  }
-
-  // Validate all tensor offsets do not overlap
-  for (const auto& [name1, tensor1] : tensor_map.tensors) {
-    for (const auto& [name2, tensor2] : tensor_map.tensors) {
-      if (name1 == name2) continue;
-
-      if (tensor1.data_end > tensor2.data_begin
-          && tensor2.data_end > tensor1.data_begin) {
-        throw std::runtime_error(
-            std::format("tensor '{}' and '{}' overlap", name1, name2));
-      }
-    }
   }
 
   return tensor_map;
@@ -124,9 +85,7 @@ VLLM_IMPL_NLOHMANN_JSON(TensorMap)
 namespace {
 
 constexpr std::size_t kHeaderLengthSize = sizeof(std::uint64_t);
-constexpr std::uint64_t kMaxHeaderSize = 100'000'000;
 
-// Read a 64-bit unsigned integer in little-endian format
 std::uint64_t decode_u64_le(const std::byte* bytes) noexcept {
   std::uint64_t result = 0;
   for (std::size_t i = 0; i < kHeaderLengthSize; ++i) {
@@ -153,10 +112,8 @@ Safetensors::Safetensors(const std::filesystem::path& path)
           errno, std::generic_category(),
           std::format("failed to stat Safetensors file '{}'", path.string()));
     }
-    if (file_stat.st_size < static_cast<off_t>(kHeaderLengthSize)) {
-      throw std::runtime_error("file is too small to contain a header length");
-    }
-    file_size_ = static_cast<std::size_t>(file_stat.st_size);
+
+    file_size_ = file_stat.st_size;
 
     void* const mapping =
         ::mmap(nullptr, file_size_, PROT_READ, MAP_PRIVATE, fd_, 0);
@@ -168,14 +125,7 @@ Safetensors::Safetensors(const std::filesystem::path& path)
     mapping_ = static_cast<std::byte*>(mapping);
 
     const auto header_size = decode_u64_le(mapping_);
-    if (header_size > kMaxHeaderSize) {
-      throw std::runtime_error("header exceeds the 100 MB size limit");
-    }
-    if (header_size > file_size_ - kHeaderLengthSize) {
-      throw std::runtime_error("header extends past the end of the file");
-    }
-
-    data_offset_ = kHeaderLengthSize + static_cast<std::size_t>(header_size);
+    data_offset_ = kHeaderLengthSize + header_size;
     data_size_ = file_size_ - data_offset_;
 
     const char* const header_begin =
@@ -183,15 +133,7 @@ Safetensors::Safetensors(const std::filesystem::path& path)
     const auto header =
         nlohmann::json::parse(header_begin, header_begin + header_size);
     tensor_map_ = header.get<TensorMap>();
-
-    for (const auto& [name, tensor] : tensor_map_.tensors) {
-      if (tensor.data_end > data_size_) {
-        throw std::runtime_error(
-            std::format("tensor '{}' is out of bounds", name));
-      }
-    }
   } catch (...) {
-    // A failed constructor does not run the destructor.
     close();
     throw;
   }
@@ -265,8 +207,8 @@ std::span<const std::byte> Safetensors::raw_data(const TensorInfo& info) const {
   assert(info.data_end >= info.data_begin);
   assert(info.data_end <= data_size_);
 
-  const auto begin = static_cast<std::size_t>(info.data_begin);
-  const auto size = static_cast<std::size_t>(info.data_end - info.data_begin);
+  const std::size_t begin = info.data_begin;
+  const std::size_t size = info.data_end - info.data_begin;
   return {mapping_ + data_offset_ + begin, size};
 }
 

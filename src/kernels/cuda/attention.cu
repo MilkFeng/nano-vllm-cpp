@@ -142,7 +142,8 @@ __global__ void attention_kernel(const T* __restrict__ query,
       } else {
         assert(key_end <= shape.kv_tokens);
       }
-      const auto limit = key_length - query_length + token - query_begin + 1;
+      const auto limit = key_length - query_length
+                         + static_cast<std::int64_t>(token) - query_begin + 1;
       visible = limit < 0 ? 0 : (limit < key_length ? limit : key_length);
     }
 

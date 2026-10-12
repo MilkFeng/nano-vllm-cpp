@@ -1,5 +1,6 @@
 #include "engine/block_manager.hh"
 
+#include <cassert>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -23,6 +24,7 @@ BlockManager::BlockManager(std::size_t num_blocks, std::size_t block_size,
     throw std::invalid_argument(
         "KV cache must have positive block count and size");
   }
+
   for (std::size_t i = 0; i < num_blocks; ++i) {
     blocks_[i].id = i;
     free_block_ids_.push_back(i);
@@ -43,7 +45,9 @@ BlockAllocation BlockManager::predict_prefill_allocation(
       .num_allocate_blocks = seq.num_blocks(),
   };
 
-  if (!enable_prefix_cache_) return allocation;
+  if (!enable_prefix_cache_) {
+    return allocation;
+  }
 
   for (std::size_t i = 0; i + 1 < seq.num_blocks(); ++i) {
     const auto token_ids = seq.block_token_ids(i);
@@ -62,7 +66,7 @@ BlockAllocation BlockManager::predict_prefill_allocation(
     ++allocation.num_reused_blocks;
     --allocation.num_new_blocks;
 
-    // If the block is already used, we don't need to allocate it again.
+    // the block is already used
     if (used_block_ids_.contains(block_id)) {
       --allocation.num_allocate_blocks;
     }
@@ -72,13 +76,10 @@ BlockAllocation BlockManager::predict_prefill_allocation(
 }
 
 void BlockManager::prefill_allocate(Sequence& seq, BlockAllocation allocation) {
-  const auto predicted = predict_prefill_allocation(seq);
-  if (!seq.block_ids.empty() || !can_allocate(allocation)
-      || allocation.num_reused_blocks != predicted.num_reused_blocks
-      || allocation.num_new_blocks != predicted.num_new_blocks
-      || allocation.num_allocate_blocks != predicted.num_allocate_blocks) {
+  if (!seq.block_ids.empty() || !can_allocate(allocation)) {
     throw std::logic_error("invalid or unavailable prefill block allocation");
   }
+
   std::optional<std::uint64_t> hash = std::nullopt;
   for (std::size_t i = 0; i < allocation.num_reused_blocks; ++i) {
     const auto token_ids = seq.block_token_ids(i);
@@ -90,7 +91,7 @@ void BlockManager::prefill_allocate(Sequence& seq, BlockAllocation allocation) {
     if (used_block_ids_.contains(block_id)) {
       ++block.ref_count;
     } else {
-      // If the block is not used, reallocate it from the free block pool.
+      // if the block is not used, reallocate it from the free block pool
       allocate_block(block_id);
     }
 
@@ -121,13 +122,10 @@ BlockAllocation BlockManager::predict_decode_allocation(
 }
 
 void BlockManager::decode_allocate(Sequence& seq, BlockAllocation allocation) {
-  const auto predicted = predict_decode_allocation(seq);
-  if (!can_allocate(allocation)
-      || allocation.num_reused_blocks != predicted.num_reused_blocks
-      || allocation.num_new_blocks != predicted.num_new_blocks
-      || allocation.num_allocate_blocks != predicted.num_allocate_blocks) {
+  if (!can_allocate(allocation)) {
     throw std::logic_error("invalid or unavailable decode block allocation");
   }
+
   for (std::size_t i = 0; i < allocation.num_allocate_blocks; ++i) {
     const auto block_id = allocate_block();
     seq.block_ids.push_back(block_id);
@@ -148,7 +146,10 @@ void BlockManager::deallocate(Sequence& seq) {
 }
 
 void BlockManager::hash_completed_blocks(const Sequence& seq) {
-  if (!enable_prefix_cache_) return;
+  if (!enable_prefix_cache_) {
+    return;
+  }
+
   const auto begin = seq.num_cached_tokens / block_size_;
   const auto end =
       (seq.num_cached_tokens + seq.num_scheduled_tokens) / block_size_;
@@ -161,9 +162,7 @@ void BlockManager::hash_completed_blocks(const Sequence& seq) {
 
   if (begin != 0) {
     hash = blocks_.at(seq.block_ids.at(begin - 1)).hash;
-    if (!hash) {
-      throw std::logic_error("computed KV prefix is missing its hash");
-    }
+    assert(hash);
   }
   for (auto index = begin; index < end; ++index) {
     auto& block = blocks_.at(seq.block_ids.at(index));
@@ -189,7 +188,9 @@ std::uint64_t BlockManager::compute_hash(
 }
 
 std::size_t BlockManager::allocate_block() {
-  if (free_block_ids_.empty()) throw std::runtime_error("KV cache is full");
+  if (free_block_ids_.empty()) {
+    throw std::runtime_error("KV cache is full");
+  }
   const auto block_id = free_block_ids_.front();
   free_block_ids_.pop_front();
 
@@ -224,6 +225,7 @@ void BlockManager::deallocate_block(std::size_t block_id) {
   if (block.ref_count == 0 || !used_block_ids_.contains(block_id)) {
     throw std::logic_error("cannot release an unreferenced KV block");
   }
+
   --block.ref_count;
   if (block.ref_count == 0) {
     used_block_ids_.erase(block_id);

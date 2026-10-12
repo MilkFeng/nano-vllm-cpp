@@ -14,7 +14,6 @@ class BasicTensorView {
  public:
   template <typename T>
   using TypedDataPointer = std::conditional_t<IsConst, const T*, T*>;
-
   using DataPointer = TypedDataPointer<void>;
 
   BasicTensorView() = default;

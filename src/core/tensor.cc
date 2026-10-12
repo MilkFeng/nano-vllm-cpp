@@ -4,7 +4,9 @@ namespace nanovllm {
 
 namespace {
 std::size_t layout_span_size_bytes(const TensorLayout& layout, DataType dtype) {
-  if (layout.numel() == 0) return 0;
+  if (layout.numel() == 0) {
+    return 0;
+  }
 
   std::size_t maximum_offset = 0;
   for (std::size_t i = 0; i < layout.rank(); ++i) {
@@ -58,12 +60,16 @@ Tensor Tensor::empty(std::vector<std::size_t> shape, DataType dtype,
 }
 
 void* Tensor::data() noexcept {
-  if (!storage_) return nullptr;
+  if (!storage_) {
+    return nullptr;
+  }
   return static_cast<std::byte*>(storage_->data()) + byte_offset_;
 }
 
 const void* Tensor::data() const noexcept {
-  if (!storage_) return nullptr;
+  if (!storage_) {
+    return nullptr;
+  }
   return static_cast<const std::byte*>(storage_->data()) + byte_offset_;
 }
 

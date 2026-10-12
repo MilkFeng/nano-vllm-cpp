@@ -24,7 +24,6 @@ inline void check_blas(cublasStatus_t status, std::string_view operation) {
   }
 }
 
-// Select a CUDA device for this scope, restoring the previous device on exit.
 class CudaDeviceGuard {
  public:
   explicit CudaDeviceGuard(int index) {

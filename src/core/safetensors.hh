@@ -21,7 +21,6 @@ struct TensorInfo {
   DataType dtype = DataType::Float32;
   std::vector<std::size_t> shape;
 
-  // Offsets are relative to the beginning of the Safetensors data section.
   std::uint64_t data_begin = 0;
   std::uint64_t data_end = 0;
 

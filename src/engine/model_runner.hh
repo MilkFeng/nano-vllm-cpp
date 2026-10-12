@@ -17,8 +17,8 @@ class Qwen35Cache;
 
 class ModelRunner {
  public:
-  ModelRunner(EngineParams params, ModelConfig config,
-              const std::filesystem::path& checkpoint);
+  ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
+              ModelConfig config, const std::filesystem::path& checkpoint);
   ~ModelRunner();
 
   ModelRunner(const ModelRunner&) = delete;
@@ -36,6 +36,7 @@ class ModelRunner {
       std::span<const Sequence* const> seqs, bool prefill);
 
  private:
+  std::shared_ptr<Logger> logger_;
   EngineParams params_;
   ModelConfig config_;
 
