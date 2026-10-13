@@ -6,8 +6,8 @@
 #include <cstdint>
 
 #include "common/cuda_utils.hh"
-#include "kernels/cuda/attention.hh"
 #include "kernels/cuda/common.cuh"
+#include "kernels/cuda/kernels.hh"
 #include "kernels/cuda/reduce.cuh"
 
 namespace nanovllm::kernels::cuda {

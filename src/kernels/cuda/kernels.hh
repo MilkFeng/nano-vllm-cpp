@@ -117,7 +117,10 @@ void rms_norm(ConstTensorView input, ConstTensorView weight, TensorView output,
 // output:          [tokens, hidden_size]
 //
 // residual_output = input + residual
-// output = RMSNorm(residual_output) * weight
+// if zero-centered:
+//   output = RMSNorm(residual_output) * (1 + weight)
+// else:
+//   output = RMSNorm(residual_output) * weight
 void fused_add_rms_norm(ConstTensorView input, ConstTensorView residual,
                         ConstTensorView weight, TensorView output,
                         TensorView residual_output, float epsilon,
@@ -125,7 +128,7 @@ void fused_add_rms_norm(ConstTensorView input, ConstTensorView residual,
                         bool zero_centered = false);
 
 // input:  [tokens, hidden_size]
-// gate:   [hidden_size]
+// gate:   [hidden_size, hidden_size]
 // weight: [hidden_size]
 // output: [tokens, hidden_size]
 //
@@ -148,9 +151,33 @@ void silu_and_mul(ConstTensorView gate, ConstTensorView up, TensorView output,
 void embedding(ConstTensorView input_ids, ConstTensorView weight,
                TensorView output, cudaStream_t stream = nullptr);
 
+// cos_sin_cache: [max_positions, rotary_dim]
+//                ([cos(0, 0), ..., cos(0, rotary_dim/2−1),
+//                  sin(0, 0), ..., sin(0, rotary_dim/2−1)], ...)
+//
+// phi(position, i) = position * theta^(-2i/rotary_dim)
 void build_rope_cache(TensorView cos_sin_cache, float theta,
                       cudaStream_t stream = nullptr);
 
+// apply rotary embedding for query/key
+//
+// positions:     [tokens]
+// query:         [tokens, query_heads, head_dim]
+// key            [tokens, key_heads, head_dim]
+// cos_sin_cache: [max_positions, rotary_dim]
+//
+// def rotate(x, positions, cache):
+//   H = cache.shape[1] // 2
+//   for t in range(tokens):
+//     p = positions[t]
+//     for h in range(x.shape[1]):
+//       for i in range(H):
+//         a = float(x[t, h, i]), b = float(x[t, h, i + H])
+//         c = cache[p, i],       s = cache[p, i + H]
+//         x[t, h, i]     = a * c - b * s
+//         x[t, h, i + H] = b * c + a * s
+// rotate(query, positions, cache)
+// rotate(key, positions, cache)
 void apply_rotary_embedding(ConstTensorView positions, TensorView query,
                             TensorView key, ConstTensorView cos_sin_cache,
                             cudaStream_t stream = nullptr);
@@ -163,19 +190,49 @@ void split_attention_gate(ConstTensorView packed, TensorView query,
 
 // gate/output: [tokens, heads, head_dim]
 //
-// output = Sigmoid(gate)
+// output *= Sigmoid(gate)
 void apply_sigmoid_gate(TensorView output, ConstTensorView gate,
                         cudaStream_t stream = nullptr);
 
-constexpr std::size_t kMaxMoEExperts = 1024;
-
+// logits:         [tokens, experts]
+// expert_ids:     [tokens, topk]
+// expert_weights: [tokens, topk]
+//
+// logits of a token -> Softmax -> TopK -> norm -> experts and weights
 void moe_route(ConstTensorView logits, TensorView expert_ids,
                TensorView expert_weights, cudaStream_t stream = nullptr);
 
+// expert_outputs: [tokens * topk, hidden_size]
+// expert_weights: [tokens, topk]
+// output:         [tokens, hidden_size]
+//
+// output[tok][i] = sum(
+//   expert_weights[tok][j] * expert_outputs[tok * topk + j][i])
 void moe_combine(ConstTensorView expert_outputs, ConstTensorView expert_weights,
                  TensorView output, cudaStream_t stream = nullptr);
 
+// shared_output: [tokens, hidden_size]
+// gate_logits:   [tokens, 1]
+// output:        [tokens, hidden_size]
+//
+// output[tok][i] += Sigmoid(gate_logits[tok]) * shared_output[tok][i]
 void moe_add_shared(ConstTensorView shared_output, ConstTensorView gate_logits,
                     TensorView output, cudaStream_t stream = nullptr);
+
+void store_kvcache(ConstTensorView key, ConstTensorView value,
+                   TensorView key_cache, TensorView value_cache,
+                   ConstTensorView slot_mapping, cudaStream_t stream = nullptr);
+
+void prefill_attention(ConstTensorView query, ConstTensorView key,
+                       ConstTensorView value, ConstTensorView cu_seqlens_q,
+                       ConstTensorView cu_seqlens_k,
+                       ConstTensorView block_tables, TensorView output,
+                       float scale, cudaStream_t stream = nullptr);
+
+void paged_attention_decode(ConstTensorView query, ConstTensorView key_cache,
+                            ConstTensorView value_cache,
+                            ConstTensorView context_lens,
+                            ConstTensorView block_tables, TensorView output,
+                            float scale, cudaStream_t stream = nullptr);
 
 } // namespace nanovllm::kernels::cuda

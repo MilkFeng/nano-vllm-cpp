@@ -17,7 +17,6 @@
 #include "core/checkpoint.hh"
 #include "core/device.hh"
 #include "kernels/cpu/fp8_dequant.hh"
-#include "kernels/cuda/attention.hh"
 #include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {

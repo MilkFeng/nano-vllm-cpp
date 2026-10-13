@@ -38,9 +38,11 @@ __global__ void sample_kernel(const T* __restrict__ logits,
                               std::uint64_t seed, std::uint64_t step) {
   __shared__ float scores[kThreads];
   __shared__ int indices[kThreads];
+
   for (std::size_t row = blockIdx.x; row < batch; row += gridDim.x) {
     const float temperature = temperatures[row];
     assert(isfinite(temperature) && temperature >= 0.0f);
+
     float best = -CUDART_INF_F;
     int best_index = INT_MAX;
     for (std::size_t col = threadIdx.x; col < vocab; col += blockDim.x) {
@@ -108,6 +110,7 @@ void sample(ConstTensorView logits, ConstTensorView temperatures,
   detail::assert_tensor(logits);
   detail::assert_tensor(temperatures);
   detail::assert_tensor(output);
+
   assert(temperatures.dtype() == DataType::Float32);
   assert(output.dtype() == DataType::Int32);
   assert(logits.rank() == 2 && temperatures.rank() == 1 && output.rank() == 1);
