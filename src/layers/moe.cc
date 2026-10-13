@@ -262,19 +262,27 @@ ExpertExecutionOutput ExpertExecutor::forward(
     std::size_t expert_id;
     int slot;
   };
+
   std::vector<Task> hits, misses;
   hits.reserve(expert_ids.size());
   misses.reserve(expert_ids.size());
+
   for (std::size_t rank = 0; rank < expert_ids.size(); ++rank) {
     const auto id = static_cast<std::size_t>(expert_ids[rank]);
     const auto slot = cache_.slot_of(id);
-    (slot >= 0 ? hits : misses).push_back({rank, id, slot});
+    const Task task = {rank, id, slot};
+    if (slot >= 0) {
+      hits.emplace_back(task);
+    } else {
+      misses.emplace_back(task);
+    }
   }
 
   ExpertExecutionOutput result{
       Tensor::empty({expert_ids.size(), store_.hidden_size()},
                     DataType::Float32, Device::cuda(0)),
       hits.size(), misses.size()};
+
   if (!misses.empty()) {
     if (host_input_.numel() == 0) {
       host_input_ = Tensor::empty({1, store_.hidden_size()}, DataType::Float32);
@@ -284,6 +292,7 @@ ExpertExecutionOutput ExpertExecutor::forward(
                                   DataType::Float32);
     }
   }
+
   std::vector<std::future<void>> cpu_tasks;
   cpu_tasks.reserve(misses.size());
   try {
@@ -296,7 +305,6 @@ ExpertExecutionOutput ExpertExecutor::forward(
                  "complete overlapping input download");
     }
 
-    // Start CPU work before spending host time submitting the GPU GEMMs.
     for (const auto& task : misses) {
       const auto* expert = &store_.expert_at(task.expert_id);
       const auto x = host_input_.view().as_const();
@@ -318,6 +326,7 @@ ExpertExecutionOutput ExpertExecutor::forward(
     for (const auto& task : misses) {
       auto source = host_parts_.slice(0, task.rank, 1);
       auto destination = result.expert_outputs.slice(0, task.rank, 1);
+
       check_cuda(cudaMemcpyAsync(destination.data(), source.data(),
                                  destination.size_bytes(),
                                  cudaMemcpyHostToDevice, stream),
@@ -327,13 +336,15 @@ ExpertExecutionOutput ExpertExecutor::forward(
     check_cuda(cudaStreamSynchronize(stream),
                "complete overlapping expert dispatch");
   } catch (...) {
-    // Neither CPU nor GPU may retain views of buffers after forward exits.
     for (auto& task : cpu_tasks) {
-      if (task.valid()) task.wait();
+      if (task.valid()) {
+        task.wait();
+      }
     }
     cudaStreamSynchronize(stream);
     throw;
   }
+
   return result;
 }
 
@@ -351,12 +362,14 @@ MoE::MoE(MoEConfig config, ThreadPool& cpu_pool, Device device,
     shared_expert_ = std::make_unique<SwiGLUMLP>(
         config_.hidden_size, config_.shared_expert_intermediate_size,
         DataType::Float32, device);
+
     shared_expert_gate_ = std::make_unique<Linear>(
         config_.hidden_size, 1, false, DataType::Float32, device);
 
     register_module("shared_expert", *shared_expert_);
     register_module("shared_expert_gate", *shared_expert_gate_);
   }
+
   if (device == Device::cpu()) {
     if (gpu_expert_ids.has_value()) {
       throw std::invalid_argument(
@@ -364,10 +377,12 @@ MoE::MoE(MoEConfig config, ThreadPool& cpu_pool, Device device,
     }
     return;
   }
+
   if (!gpu_expert_ids) {
     gpu_expert_ids.emplace(config_.num_experts);
     std::iota(gpu_expert_ids->begin(), gpu_expert_ids->end(), 0);
   }
+
   cache_ = std::make_unique<ExpertCache>(experts_, std::move(*gpu_expert_ids));
   executor_ = std::make_unique<ExpertExecutor>(experts_, *cache_, cpu_pool);
 }
@@ -460,9 +475,11 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
 const MoEConfig& MoE::config() const noexcept {
   return config_;
 }
+
 const ExpertStore& MoE::expert_store() const noexcept {
   return experts_;
 }
+
 const ExpertCache& MoE::expert_cache() const {
   if (!cache_) throw std::logic_error("CPU MoE has no CUDA expert cache");
   return *cache_;

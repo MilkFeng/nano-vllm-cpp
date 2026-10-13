@@ -11,7 +11,6 @@
 
 namespace nanovllm {
 
-// Workers persist across submissions. Destruction drains all queued work.
 class ThreadPool final {
  public:
   explicit ThreadPool(std::size_t num_threads);
@@ -20,7 +19,6 @@ class ThreadPool final {
   ThreadPool(const ThreadPool&) = delete;
   ThreadPool& operator=(const ThreadPool&) = delete;
 
-  // The future carries exceptions raised by the task.
   [[nodiscard]] std::future<void> submit(std::function<void()> task);
 
  private:

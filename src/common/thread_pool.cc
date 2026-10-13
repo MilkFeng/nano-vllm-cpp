@@ -39,7 +39,7 @@ std::future<void> ThreadPool::submit(std::function<void()> task) {
 }
 
 void ThreadPool::run() {
-  for (;;) {
+  while (true) {
     std::packaged_task<void()> task;
     {
       std::unique_lock lock(mutex_);
