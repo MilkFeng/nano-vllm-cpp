@@ -15,6 +15,7 @@ void assert_norm(const ConstTensorView& input, const ConstTensorView& weight,
   detail::assert_tensor(input);
   detail::assert_tensor(weight);
   detail::assert_tensor(output);
+
   assert(input.rank() >= 1 && input.rank() <= 3 && input.shape().back() > 0);
   assert(weight.rank() == 1 && weight.shape()[0] == input.shape().back());
   assert(same_shape(input, output));
@@ -28,7 +29,6 @@ __device__ float input_value(const T* input, const T* residual, std::size_t n) {
   float value = detail::to_float(input[n]);
   if constexpr (Fused) {
     value += detail::to_float(residual[n]);
-    // Qwen3.5 normalizes the residual sum after rounding to its tensor dtype.
     if constexpr (ZeroCentered) {
       value = detail::to_float(detail::from_float<T>(value));
     }
@@ -155,9 +155,14 @@ void gated_rms_norm(ConstTensorView input, ConstTensorView gate,
   assert(same_shape(input, gate));
   assert(same_device(input, gate));
   assert(same_dtype(input, gate));
-  if (input.numel() == 0) return;
+
+  if (input.numel() == 0) {
+    return;
+  }
+
   const auto width = input.shape().back();
   const auto rows = input.numel() / width;
+
   const auto blocks = static_cast<unsigned>(std::min<std::size_t>(rows, 65535));
   gated_norm_kernel<<<blocks, kThreads, 0, stream>>>(
       input.data<float>(), gate.data<float>(), weight.data<float>(),

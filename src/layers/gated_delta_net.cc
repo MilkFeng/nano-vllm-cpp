@@ -4,7 +4,7 @@
 #include <cassert>
 
 #include "common/cuda_utils.hh"
-#include "kernels/cuda/gated_delta_net.hh"
+#include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 

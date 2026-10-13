@@ -7,7 +7,7 @@
 #include "common/cuda_utils.hh"
 #include "core/device.hh"
 #include "core/forward_context.hh"
-#include "kernels/cuda/inference.hh"
+#include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 

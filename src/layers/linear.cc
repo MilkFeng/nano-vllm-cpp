@@ -4,7 +4,7 @@
 #include <optional>
 #include <utility>
 
-#include "kernels/cuda/inference.hh"
+#include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 

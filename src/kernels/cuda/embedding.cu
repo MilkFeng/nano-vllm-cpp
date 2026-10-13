@@ -33,12 +33,14 @@ void embedding(ConstTensorView input_ids, ConstTensorView weight,
   detail::assert_tensor(input_ids);
   detail::assert_tensor(weight);
   detail::assert_tensor(output);
+
   assert(input_ids.dtype() == DataType::Int32);
   assert(same_dtype(weight, output));
   assert(input_ids.rank() == 1 && weight.rank() == 2 && output.rank() == 2);
   assert(weight.shape()[0] > 0 && weight.shape()[1] > 0);
   assert(output.shape()[0] == input_ids.shape()[0]
          && output.shape()[1] == weight.shape()[1]);
+
   const std::size_t count = output.numel();
   if (count == 0) {
     return;

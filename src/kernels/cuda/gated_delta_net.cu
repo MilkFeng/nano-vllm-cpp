@@ -3,7 +3,7 @@
 
 #include "common/cuda_utils.hh"
 #include "kernels/cuda/common.cuh"
-#include "kernels/cuda/gated_delta_net.hh"
+#include "kernels/cuda/kernels.hh"
 #include "kernels/cuda/reduce.cuh"
 
 namespace nanovllm::kernels::cuda {
@@ -50,10 +50,11 @@ __global__ void conv_kernel(const float* input, const float* weight,
     const auto sequence = index / channels, channel = index % channels;
     const auto slot = ids ? ids[sequence] : std::int32_t(sequence);
     assert(slot >= 0 && slot < slots);
+
     const auto begin = cu ? cu[sequence] : std::int32_t(sequence);
     const auto end = cu ? cu[sequence + 1] : begin + 1;
     assert(begin >= 0 && end >= begin && end <= tokens);
-    // Avoid pointer arithmetic on a null zero-byte history when K=1.
+
     float* history =
         kernel > 1 ? state
                          + (static_cast<std::size_t>(slot) * channels + channel)
@@ -81,11 +82,14 @@ __global__ void delta_kernel(const float* qkv, const float* a, const float* b,
                              std::size_t key_dim, std::size_t value_dim) {
   const auto sequence = blockIdx.x / value_heads;
   const auto head = blockIdx.x % value_heads;
+
   const auto slot = ids ? ids[sequence] : std::int32_t(sequence);
   assert(slot >= 0 && std::size_t(slot) < slots);
+
   const auto begin = cu ? cu[sequence] : std::int32_t(sequence);
   const auto end = cu ? cu[sequence + 1] : begin + 1;
   assert(begin >= 0 && end >= begin && std::size_t(end) <= tokens);
+
   const auto key_head = head / (value_heads / key_heads);
   const auto key_size = key_heads * key_dim;
   const auto width = 2 * key_size + value_heads * value_dim;
@@ -107,6 +111,7 @@ __global__ void delta_kernel(const float* qkv, const float* a, const float* b,
       query[lane] = q * rsqrtf(q_sum + 1e-6f) * rsqrtf(key_dim);
       key[lane] = k * rsqrtf(k_sum + 1e-6f);
     }
+
     if (lane == 0) {
       const auto n = static_cast<std::size_t>(token) * value_heads + head;
       const float x = a[n] + dt_bias[head];
@@ -114,7 +119,9 @@ __global__ void delta_kernel(const float* qkv, const float* a, const float* b,
       decay = __expf(-__expf(A_log[head]) * softplus);
       beta = 1.0f / (1.0f + __expf(-b[n]));
     }
+
     __syncthreads();
+
     if (lane < value_dim) {
       float prediction = 0;
       for (std::size_t i = 0; i < key_dim; ++i) {
@@ -133,7 +140,6 @@ __global__ void delta_kernel(const float* qkv, const float* a, const float* b,
       output[(static_cast<std::size_t>(token) * value_heads + head) * value_dim
              + lane] = result;
     }
-    // All value columns finish reading shared Q/K before the next token.
     __syncthreads();
   }
 }
@@ -147,6 +153,7 @@ void causal_conv1d(ConstTensorView input, ConstTensorView weight,
   assert_float(weight);
   assert_float(state);
   assert_float(output);
+
   assert(input.rank() == 2 && weight.rank() == 3 && state.rank() == 3);
   assert(weight.shape()[0] == input.shape()[1] && weight.shape()[1] == 1
          && weight.shape()[2] > 0);
@@ -154,6 +161,7 @@ void causal_conv1d(ConstTensorView input, ConstTensorView weight,
          && state.shape()[2] == weight.shape()[2] - 1);
   assert(same_shape(input, output));
   assert(same_device(input, weight, state, output));
+
   const auto batch = assert_sequences(input.shape()[0], state.shape()[0],
                                       cu_seqlens, state_indices);
   const auto work = batch * input.shape()[1];
@@ -185,6 +193,7 @@ void gated_delta_rule(ConstTensorView qkv, ConstTensorView a, ConstTensorView b,
   assert_float(dt_bias);
   assert_float(state);
   assert_float(output);
+
   assert(qkv.rank() == 2 && a.rank() == 2 && state.rank() == 4
          && output.rank() == 3);
   const auto heads = state.shape()[1], kd = state.shape()[2],
@@ -199,6 +208,7 @@ void gated_delta_rule(ConstTensorView qkv, ConstTensorView a, ConstTensorView b,
   assert(output.shape()[0] == qkv.shape()[0] && output.shape()[1] == heads
          && output.shape()[2] == vd);
   assert(same_device(qkv, a, b, A_log, dt_bias, state, output));
+
   const auto batch = assert_sequences(qkv.shape()[0], state.shape()[0],
                                       cu_seqlens, state_indices);
   if (batch == 0) {

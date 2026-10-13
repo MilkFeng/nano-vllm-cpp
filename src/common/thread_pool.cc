@@ -44,7 +44,9 @@ void ThreadPool::run() {
     {
       std::unique_lock lock(mutex_);
       ready_.wait(lock, [this] { return stopping_ || !tasks_.empty(); });
-      if (tasks_.empty()) return;
+      if (tasks_.empty()) {
+        return;
+      }
       task = std::move(tasks_.front());
       tasks_.pop();
     }

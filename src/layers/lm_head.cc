@@ -3,7 +3,7 @@
 #include <cassert>
 #include <optional>
 
-#include "kernels/cuda/inference.hh"
+#include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 

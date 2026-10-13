@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "kernels/cuda/attention.hh"
-#include "kernels/cuda/inference.hh"
+#include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 namespace {

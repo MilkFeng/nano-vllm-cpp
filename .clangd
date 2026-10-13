@@ -3,8 +3,11 @@ CompileFlags:
   Add:
     - -isystem
     - /usr/local/cuda/include/cccl
+    - -mavx2
+    - -mfma
   Remove:
     - -forward-unknown-to-host-compiler
     - --generate-code=*
     - --display-error-number
     - --generate-line-info
+    - "-Xcompiler=*"
