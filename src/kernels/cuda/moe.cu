@@ -13,6 +13,8 @@ namespace nanovllm::kernels::cuda {
 namespace {
 
 constexpr unsigned kThreads = 256;
+constexpr std::size_t kMaxExperts = 1024;
+constexpr unsigned kExpertsPerThread = (kMaxExperts + kThreads - 1) / kThreads;
 
 __global__ void route_kernel(const float* __restrict__ logits,
                              std::int32_t* __restrict__ ids,
@@ -26,21 +28,32 @@ __global__ void route_kernel(const float* __restrict__ logits,
 
   extern __shared__ float storage[];
 
-  float* scores = storage;
-  float* probs = storage + experts;
+  float* probs = storage;
+  float scores[kExpertsPerThread];
+  auto local_best = detail::ArgMaxOp::identity();
 
   float maximum = -CUDART_INF_F;
-  for (std::size_t e = threadIdx.x; e < experts; e += blockDim.x) {
-    const float logist = logits[e];
-    scores[e] = logist;
-    maximum = fmaxf(maximum, logist);
+#pragma unroll
+  for (unsigned item = 0; item < kExpertsPerThread; ++item) {
+    const auto e = threadIdx.x + item * kThreads;
+    if (e < experts) {
+      const float logit = logits[e];
+      scores[item] = logit;
+      maximum = fmaxf(maximum, logit);
+      local_best =
+          detail::ArgMaxOp::apply(local_best, {logit, static_cast<int>(e)});
+    }
   }
   maximum = detail::block_max_reduce<float, kThreads>(maximum);
 
   float sum = 0.0f;
-  for (std::size_t e = threadIdx.x; e < experts; e += blockDim.x) {
-    probs[e] = __expf(scores[e] - maximum);
-    sum += probs[e];
+#pragma unroll
+  for (unsigned item = 0; item < kExpertsPerThread; ++item) {
+    const auto e = threadIdx.x + item * kThreads;
+    if (e < experts) {
+      probs[e] = __expf(scores[item] - maximum);
+      sum += probs[e];
+    }
   }
   sum = detail::block_sum_reduce<float, kThreads>(sum);
 
@@ -50,24 +63,35 @@ __global__ void route_kernel(const float* __restrict__ logits,
 
   __syncthreads();
 
-  if (threadIdx.x == 0) {
-    float selected_sum = 0.0f;
-    for (std::size_t rank = 0; rank < top_k; ++rank) {
-      std::size_t best = 0;
-      float best_score = -CUDART_INF_F;
+  float selected_sum = 0.0f;
+  unsigned selected_mask = 0;
+  for (std::size_t rank = 0; rank < top_k; ++rank) {
+    const auto best = detail::block_argmax_reduce<kThreads>(local_best);
+
+    if (threadIdx.x == 0) {
+      ids[rank] = best.index;
+      weights[rank] = probs[best.index];
+      selected_sum += weights[rank];
+    }
+
+    if (rank + 1 < top_k && best.index == local_best.index) {
+      const auto selected_item = (best.index - threadIdx.x) / kThreads;
+
+      selected_mask |= 1u << selected_item;
+      local_best = detail::ArgMaxOp::identity();
+
 #pragma unroll
-      for (std::size_t e = 0; e < experts; ++e) {
-        if (scores[e] > best_score) {
-          best = e;
-          best_score = scores[e];
+      for (unsigned item = 0; item < kExpertsPerThread; ++item) {
+        const auto e = threadIdx.x + item * kThreads;
+        if (e < experts && (selected_mask & (1u << item)) == 0) {
+          local_best = detail::ArgMaxOp::apply(
+              local_best, {scores[item], static_cast<int>(e)});
         }
       }
-
-      ids[rank] = static_cast<std::int32_t>(best);
-      weights[rank] = probs[best];
-      selected_sum += weights[rank];
-      scores[best] = -CUDART_INF_F;
     }
+  }
+
+  if (threadIdx.x == 0) {
     for (std::size_t rank = 0; rank < top_k; ++rank) {
       weights[rank] /= selected_sum;
     }
@@ -129,7 +153,7 @@ void moe_route(ConstTensorView logits, TensorView expert_ids,
   assert(tokens > 0);
   assert(tokens <= std::numeric_limits<std::int32_t>::max());
   assert(experts > 0);
-  assert(experts <= 1024);
+  assert(experts <= kMaxExperts);
   assert(expert_ids.dtype() == DataType::Int32);
   assert(expert_ids.rank() == 2);
   assert(expert_ids.shape()[0] == tokens);
@@ -142,7 +166,7 @@ void moe_route(ConstTensorView logits, TensorView expert_ids,
   assert(top_k <= experts);
 
   route_kernel<<<static_cast<unsigned>(tokens), kThreads,
-                 2 * experts * sizeof(float), stream>>>(
+                 experts * sizeof(float), stream>>>(
       logits.data<float>(), expert_ids.data<std::int32_t>(),
       expert_weights.data<float>(), experts, top_k);
   check_cuda(cudaGetLastError(), "MoE route kernel launch");

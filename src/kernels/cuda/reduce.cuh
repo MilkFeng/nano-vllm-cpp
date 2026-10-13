@@ -46,18 +46,48 @@ struct MaxOp {
   }
 };
 
+struct ArgMaxResult {
+  float value;
+  int index;
+};
+
+struct ArgMaxOp {
+  static __device__ __forceinline__ ArgMaxResult identity() {
+    return {-CUDART_INF_F, ::cuda::std::numeric_limits<int>::max()};
+  }
+
+  static __device__ __forceinline__ ArgMaxResult apply(ArgMaxResult a,
+                                                       ArgMaxResult b) {
+    if (b.value > a.value || (b.value == a.value && b.index < a.index)) {
+      return b;
+    }
+    return a;
+  }
+};
+
+template <bool Xor, typename T>
+__device__ __forceinline__ T warp_shuffle(T value, int offset) {
+  if constexpr (Xor) {
+    return __shfl_xor_sync(0xffffffffu, value, offset);
+  } else {
+    return __shfl_down_sync(0xffffffffu, value, offset);
+  }
+}
+
+template <bool Xor>
+__device__ __forceinline__ ArgMaxResult warp_shuffle(ArgMaxResult value,
+                                                     int offset) {
+  return {
+      warp_shuffle<Xor>(value.value, offset),
+      warp_shuffle<Xor>(value.index, offset),
+  };
+}
+
 template <typename T, typename Op, bool Broadcast = true>
 __device__ __forceinline__ T warp_reduce(T value) {
 #pragma unroll
   for (int offset = 16; offset > 0; offset >>= 1) {
-    T other;
-
-    if constexpr (Broadcast) {
-      other = __shfl_xor_sync(0xffffffffu, value, offset);
-    } else {
-      other = __shfl_down_sync(0xffffffffu, value, offset);
-    }
-
+    const T other = warp_shuffle<Broadcast>(value, offset);
     value = Op::apply(value, other);
   }
 
@@ -130,6 +160,12 @@ __device__ __forceinline__ T block_sum_reduce(T value) {
 template <typename T, int Threads, bool Broadcast = true>
 __device__ __forceinline__ T block_max_reduce(T value) {
   return block_reduce<T, Threads, MaxOp<T>, Broadcast>(value);
+}
+
+template <int Threads, bool Broadcast = true>
+__device__ __forceinline__ ArgMaxResult
+block_argmax_reduce(ArgMaxResult value) {
+  return block_reduce<ArgMaxResult, Threads, ArgMaxOp, Broadcast>(value);
 }
 
 } // namespace nanovllm::kernels::cuda::detail
