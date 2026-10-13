@@ -1,7 +1,8 @@
-#include <algorithm>
+#include <cublasLt.h>
+
 #include <cassert>
 #include <climits>
-#include <cstddef>
+#include <memory>
 #include <stdexcept>
 
 #include "common/cuda_utils.hh"
@@ -11,37 +12,12 @@
 namespace nanovllm::kernels::cuda {
 namespace {
 
-constexpr unsigned kThreads = 256;
+using BlasHandle = std::unique_ptr<cublasLtContext, decltype(&cublasLtDestroy)>;
 
-class BlasHandle {
- public:
-  BlasHandle() {
-    check_blas(cublasCreate(&handle_), "cublasCreate");
-    const auto status = cublasSetMathMode(
-        handle_, static_cast<cublasMath_t>(
-                     CUBLAS_DEFAULT_MATH
-                     | CUBLAS_MATH_DISALLOW_REDUCED_PRECISION_REDUCTION));
-    if (status != CUBLAS_STATUS_SUCCESS) {
-      cublasDestroy(handle_);
-      handle_ = nullptr;
-      check_blas(status, "cublasSetMathMode");
-    }
-  }
-
-  BlasHandle(const BlasHandle&) = delete;
-  BlasHandle& operator=(const BlasHandle&) = delete;
-
-  ~BlasHandle() { cublasDestroy(handle_); }
-
-  cublasHandle_t get() const { return handle_; }
-
- private:
-  cublasHandle_t handle_ = nullptr;
-};
-
-cublasHandle_t blas_handle() {
-  thread_local BlasHandle handle;
-  return handle.get();
+BlasHandle make_blas_handle() {
+  cublasLtHandle_t raw = nullptr;
+  check_blas(cublasLtCreate(&raw), "cublasLtCreate");
+  return BlasHandle(raw, cublasLtDestroy);
 }
 
 cudaDataType_t cuda_dtype(DataType type) {
@@ -57,19 +33,6 @@ cudaDataType_t cuda_dtype(DataType type) {
   }
 }
 
-template <typename T>
-__global__ void broadcast_bias(const T* __restrict__ bias,
-                               T* __restrict__ output, std::size_t count,
-                               std::size_t width) {
-  const std::size_t start_index =
-      static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-  const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
-
-  for (std::size_t index = start_index; index < count; index += step) {
-    output[index] = bias[index % width];
-  }
-}
-
 } // namespace
 
 void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
@@ -77,45 +40,64 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
   detail::assert_tensor(input);
   detail::assert_tensor(weight);
   detail::assert_tensor(output);
+
   assert(same_dtype(input, weight, output));
   assert(input.rank() == 2 && weight.rank() == 2 && output.rank() == 2);
+
   const auto m = input.shape()[0], k = input.shape()[1], n = weight.shape()[0];
+
   assert(k > 0 && n > 0 && weight.shape()[1] == k);
   assert(output.shape()[0] == m && output.shape()[1] == n);
   assert(m <= INT_MAX && n <= INT_MAX && k <= INT_MAX);
+
   if (bias) {
     detail::assert_tensor(*bias);
     assert(same_dtype(*bias, input));
     assert(bias->rank() == 1 && bias->shape()[0] == n);
   }
+
   if (m == 0) {
     return;
   }
 
-  const auto handle = blas_handle();
-  check_blas(cublasSetStream(handle, stream), "cublasSetStream");
+  thread_local const auto handle = make_blas_handle();
+  const auto type = cuda_dtype(input.dtype());
 
+  cublasLtMatrixLayoutOpaque_t weight_layout{}, input_layout{}, output_layout{};
+  check_blas(cublasLtMatrixLayoutInit(&weight_layout, type, k, n, k),
+             "initialize linear weight layout");
+  check_blas(cublasLtMatrixLayoutInit(&input_layout, type, k, m, k),
+             "initialize linear input layout");
+  check_blas(cublasLtMatrixLayoutInit(&output_layout, type, n, m, n),
+             "initialize linear output layout");
+
+  cublasLtMatmulDescOpaque_t operation{};
+  check_blas(cublasLtMatmulDescInit(&operation, CUBLAS_COMPUTE_32F, CUDA_R_32F),
+             "initialize linear operation");
+  const cublasOperation_t transpose = CUBLAS_OP_T;
+  check_blas(
+      cublasLtMatmulDescSetAttribute(&operation, CUBLASLT_MATMUL_DESC_TRANSA,
+                                     &transpose, sizeof(transpose)),
+      "transpose linear weight");
   if (bias) {
-    const auto count = m * n;
-    const auto blocks = static_cast<unsigned>(
-        std::min<std::size_t>((count + kThreads - 1) / kThreads, 65535));
-    detail::dispatch_float(input.dtype(), [&]<typename T> {
-      broadcast_bias<<<blocks, kThreads, 0, stream>>>(
-          bias->data<T>(), output.data<T>(), count, n);
-    });
-
-    check_cuda(cudaGetLastError(), "linear bias launch");
+    const cublasLtEpilogue_t epilogue = CUBLASLT_EPILOGUE_BIAS;
+    const void* pointer = bias->data();
+    check_blas(cublasLtMatmulDescSetAttribute(&operation,
+                                              CUBLASLT_MATMUL_DESC_EPILOGUE,
+                                              &epilogue, sizeof(epilogue)),
+               "enable linear bias epilogue");
+    check_blas(cublasLtMatmulDescSetAttribute(&operation,
+                                              CUBLASLT_MATMUL_DESC_BIAS_POINTER,
+                                              &pointer, sizeof(pointer)),
+               "set linear bias pointer");
   }
 
-  const float alpha = 1.0f, beta = bias ? 1.0f : 0.0f;
-  const auto type = cuda_dtype(input.dtype());
-  check_blas(cublasGemmEx(handle, CUBLAS_OP_T, CUBLAS_OP_N, static_cast<int>(n),
-                          static_cast<int>(m), static_cast<int>(k), &alpha,
-                          weight.data(), type, static_cast<int>(k),
-                          input.data(), type, static_cast<int>(k), &beta,
-                          output.data(), type, static_cast<int>(n),
-                          CUBLAS_COMPUTE_32F, CUBLAS_GEMM_DEFAULT),
-             "cublasGemmEx");
+  const float alpha = 1.0f, beta = 0.0f;
+  check_blas(cublasLtMatmul(handle.get(), &operation, &alpha, weight.data(),
+                            &weight_layout, input.data(), &input_layout, &beta,
+                            output.data(), &output_layout, output.data(),
+                            &output_layout, nullptr, nullptr, 0, stream),
+             "cublasLtMatmul linear");
 }
 
 } // namespace nanovllm::kernels::cuda

@@ -11,7 +11,6 @@
 
 #include "common/thread_pool.hh"
 #include "core/module.hh"
-#include "kernels/cuda/fp8.hh"
 #include "layers/linear.hh"
 #include "layers/swiglu_mlp.hh"
 
@@ -21,10 +20,9 @@ struct FP8ExpertWorkspace {
   Tensor gate;
   Tensor up;
   Tensor activated;
-  kernels::cuda::FP8LinearWorkspace linear;
 
   FP8ExpertWorkspace() = default;
-  FP8ExpertWorkspace(std::size_t hidden_size, std::size_t intermediate_size);
+  explicit FP8ExpertWorkspace(std::size_t intermediate_size);
 };
 
 class FP8Expert final : public Module {

@@ -12,7 +12,6 @@
 
 #include "common/cuda_utils.hh"
 #include "kernels/cpu/expert.hh"
-#include "kernels/cuda/fp8.hh"
 #include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
@@ -25,35 +24,24 @@ std::size_t scale_dimension(std::size_t dimension) {
          + (dimension % kExpertFP8BlockSize != 0);
 }
 
-std::size_t expert_dimension(std::size_t dimension, Device device) {
-  return device.type == DeviceType::Cuda
-             ? scale_dimension(dimension) * kExpertFP8BlockSize
-             : dimension;
-}
-
 } // namespace
 
-FP8ExpertWorkspace::FP8ExpertWorkspace(std::size_t hidden_size,
-                                       std::size_t intermediate_size)
+FP8ExpertWorkspace::FP8ExpertWorkspace(std::size_t intermediate_size)
     : gate(Tensor::empty({1, intermediate_size}, DataType::Float32,
                          Device::cuda(0))),
       up(Tensor::empty({1, intermediate_size}, DataType::Float32,
                        Device::cuda(0))),
       activated(Tensor::empty({1, intermediate_size}, DataType::Float32,
-                              Device::cuda(0))),
-      linear(1, std::max(hidden_size, intermediate_size)) {}
+                              Device::cuda(0))) {}
 
 FP8Expert::FP8Expert(std::size_t hidden_size, std::size_t intermediate_size,
                      Device device)
-    : gate_(expert_dimension(hidden_size, device),
-            expert_dimension(intermediate_size, device), false,
-            DataType::Float8E4M3FN, device),
-      up_(expert_dimension(hidden_size, device),
-          expert_dimension(intermediate_size, device), false,
-          DataType::Float8E4M3FN, device),
-      down_(expert_dimension(intermediate_size, device),
-            expert_dimension(hidden_size, device), false,
-            DataType::Float8E4M3FN, device),
+    : gate_(hidden_size, intermediate_size, false, DataType::Float8E4M3FN,
+            device),
+      up_(hidden_size, intermediate_size, false, DataType::Float8E4M3FN,
+          device),
+      down_(intermediate_size, hidden_size, false, DataType::Float8E4M3FN,
+            device),
       gate_scale_(Tensor::empty(
           {scale_dimension(intermediate_size), scale_dimension(hidden_size)},
           DataType::Float32, device)),
@@ -84,15 +72,15 @@ void FP8Expert::forward_into(ConstTensorView input, TensorView output,
                              FP8ExpertWorkspace& workspace,
                              cudaStream_t stream) const {
   kernels::cuda::linear_fp8(input, gate_.weight().view(), gate_scale_.view(),
-                            workspace.gate.view(), workspace.linear, stream);
+                            workspace.gate.view(), stream);
   kernels::cuda::linear_fp8(input, up_.weight().view(), up_scale_.view(),
-                            workspace.up.view(), workspace.linear, stream);
+                            workspace.up.view(), stream);
   kernels::cuda::silu_and_mul(workspace.gate.view().as_const(),
                               workspace.up.view().as_const(),
                               workspace.activated.view(), stream);
   kernels::cuda::linear_fp8(workspace.activated.view().as_const(),
                             down_.weight().view(), down_scale_.view(), output,
-                            workspace.linear, stream);
+                            stream);
 }
 
 ExpertStore::ExpertStore(std::size_t hidden_size, std::size_t intermediate_size,
@@ -159,23 +147,11 @@ void ExpertCache::populate(cudaStream_t stream) {
         const auto source = parameter->view();
         const auto destination = slots_[slot]->parameter(name).view();
         assert(same_dtype(source, destination));
-        if (source.dtype() == DataType::Float8E4M3FN
-            && !same_shape(source, destination)) {
-          check_cuda(cudaMemsetAsync(destination.data(), 0,
-                                     destination.size_bytes(), stream),
-                     "zero FP8 expert padding");
-          check_cuda(cudaMemcpy2DAsync(
-                         destination.data(), destination.shape()[1],
-                         source.data(), source.shape()[1], source.shape()[1],
-                         source.shape()[0], cudaMemcpyHostToDevice, stream),
-                     "upload padded FP8 expert weight");
-        } else {
-          assert(same_shape(source, destination));
-          check_cuda(cudaMemcpyAsync(destination.data(), source.data(),
-                                     source.size_bytes(),
-                                     cudaMemcpyHostToDevice, stream),
-                     "upload fixed expert cache");
-        }
+        assert(same_shape(source, destination));
+        check_cuda(cudaMemcpyAsync(destination.data(), source.data(),
+                                   source.size_bytes(),
+                                   cudaMemcpyHostToDevice, stream),
+                   "upload fixed expert cache");
       }
     }
     check_cuda(cudaStreamSynchronize(stream), "complete expert cache uploads");
@@ -239,8 +215,7 @@ ExpertExecutor::ExpertExecutor(const ExpertStore& store,
   }
 
   if (cache_.num_slots() != 0) {
-    workspace_ =
-        FP8ExpertWorkspace(store_.hidden_size(), store_.intermediate_size());
+    workspace_ = FP8ExpertWorkspace(store_.intermediate_size());
   }
 }
 

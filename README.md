@@ -92,7 +92,7 @@ Qwen3 的默认值 512，这会仅为 linear 状态分配约 31.4 GiB。日志�
 这条命令给出运行接口，完整 35B 尚未在本机验证：当前 WSL 只有 22 GiB RAM，
 仅全部 routed FP8 权重就约 30 GiB，需先让 WSL 使用足够的物理内存。模型加载
 后非专家参数、激活和累加仍使用 FP32；GPU routed 专家保留 FP8 权重和 FP32
-scale，计算时动态量化激活并调用原生 cuBLASLt FP8 Tensor Core GEMM。
+scale，计算时在 FP32 GEMM 内融合 FP8 权重反量化。
 KV 和递推状态也在 GPU，尚未放到系统 RAM。
 
 ### C++ 聊天模板接口
@@ -341,28 +341,27 @@ CPU 点积逐行计算 gate/up，直接写出 SwiGLU 中间激活。每个计算
 CPU 权重展开缓冲区。全部上传完成后才发布缓存映射。改变 RAM 权重或 scale
 后需显式再次 populate。
 
-GPU FP8 专家调用 `kernels::cuda::linear_fp8()`：按 128 个输入列动态计算
-amax，使用 `max(amax/448, FLT_MIN)` 作为 scale（全零块用 1），将激活
-量化成 E4M3FN。当前 MoE 每次只传一个 token，多个 token 的 Linear 调用
-在同一输入列块内共享 scale。cuBLASLt 以 FP8 权重和 FP8 激活执行原生
-Tensor Core GEMM，使用 FP32 累加与输出，关闭 fast accumulation。
+GPU FP8 专家调用 `kernels::cuda::linear_fp8()`：加载权重时将 E4M3FN 解码成
+FP32，再乘 checkpoint 中对应的 `weight_scale_inv[n/128,k/128]`。
+反量化融合在 GEMM 内，输入激活直接以 FP32 参与计算，无需计算 amax 或
+输入 scale，也不会增加激活量化误差。乘法、累加与输出都保持 FP32。
 
-RTX 5060 Ti（compute capability 12.0）不能直接使用 cuBLASLt 的
-`BLK128x128_32F` scale 模式；按 checkpoint 的 `128x128` 权重块逐块
-调用 tensorwide-scaled FP8 GEMM，以 `beta=0/1` 累加各输入列块。
-权重不重新量化，也不展开成 FP32 矩阵。CUDA 只负责激活量化与 padding，
-矩阵乘法由 cuBLASLt 完成。支持范围见
-[cuBLAS 13.3 scaling modes](https://docs.nvidia.com/cuda/archive/13.3.0/cublas/index.html#scaling-mode-support-overview)。
+多行输入参考寄存器分块 GEMM：每个 block 计算 `16x64` 输出，每个线程
+计算 `2x4` 小块，沿 K 以 32 为步长预取并双缓冲。FP8 权重加载后解码、
+缩放并转置到 shared memory 的 `[K,N]` tile，与 FP32 输入做 `fmaf`。
+`M=1` 时每个 warp 沿 K 并行计算一个输出，直接在寄存器里反量化权重。
 
-权重维度在 GPU 上补零到 128 的倍数，token 数补到 16 的倍数；35B 专家
-的 `H=2048,I=512` 不需要权重 padding。executor 复用一个 FP8 激活缓冲、
-激活 scale、FP32 输出暂存区和 1 MiB cuBLASLt workspace。gate/up/activated
-及最终输出仍为 FP32。CPU 未命中专家仍以 FP32 激活计算，因此 GPU 路径
-增加了激活量化误差，不再要求与 CPU 路径逐位一致。未测量整模型加速。
+一次 Linear 调用只启动一个 kernel，不创建完整 FP32 权重矩阵或全局量化
+激活缓冲，也无需 BLAS workspace。M、N、K 可以不是 tile 的整数倍；
+尾部加载做边界判断，不申请 padding 缓冲。GPU 缓存也直接保存原始 `[N,K]`
+权重，无需补齐到 128 的倍数。executor 只保留 gate/up/activated 三个
+FP32 中间张量。
+CPU 与 GPU 都使用原始 FP32 激活，结果仍可能因累加顺序不同而有浮点差异。
+未测量整模型加速。
 
-令 `Sr=ceil(I/128), Sc=ceil(H/128), Ip=128*Sr, Hp=128*Sc`，RAM 权重字节数为
+令 `Sr=ceil(I/128), Sc=ceil(H/128)`，RAM 权重字节数为
 `E*(3*H*I + 3*Sr*Sc*sizeof(float))`，GPU routed 权重和 scale 字节数为
-`slots*(3*Hp*Ip + 3*Sr*Sc*sizeof(float))`。两者只统计权重和 scale，
+`slots*(3*H*I + 3*Sr*Sc*sizeof(float))`。两者只统计权重和 scale，
 不包含 Router、共享分支和激活。CPU 计算不保留 FP32 权重工作区。
 按 `H=2048,I=512,E=256` 计算，一层 RAM routed 参数约 768 MiB（另加 scale），
 每个 GPU FP8 专家占 3 MiB + 768 字节 scale。CPU 点积内部解码省去
@@ -405,9 +404,8 @@ forward 需要 CUDA 设备 0。所有参数需完整加载后才能执行。
 模型加载器直接读取 safetensors 分片，按实际 dtype 转换。Routed FP8 字节原样
 复制到 RAM，BF16/F32 scale 转成 FP32；其他 BF16/F32 参数转成 FP32，非专家
 FP8 矩阵乘对应的 `128x128` scale 后展开到模型设备。GPU routed 专家复制
-FP8 权重和 FP32 scale，输入临时动态量化为 FP8，输出和累加保持 FP32。
-动态 FP8 激活量化目前只用于 GPU routed 专家，非专家模块与 CPU 未命中
-专家保持 FP32 计算。
+FP8 权重和 FP32 scale，在 GEMM 内融合权重反量化；输入、乘法、累加
+和输出都保持 FP32。非专家模块与 CPU 未命中专家也使用 FP32 激活。
 
 加载先验证全部所需文本 tensor 的名称、shape、dtype 和 scale 网格，再修改参数。
 元数据错误保留原模型；开始复制后若失败，该模型不能再执行，需重新成功加载。
@@ -605,14 +603,21 @@ CPU 点积内部解码在 Ryzen 7 9700X 上验证：256 种 FP8 编码与 CUDA S
 混合、全部 GPU 驻留的 9 次 executor 和 9 次带共享专家的 MoE 调用与修改前
 逐位一致，CUDA memcheck 为 0 个错误。
 
-原生 GPU FP8 GEMM 在 RTX 5060 Ti、CUDA 13.3 上验证：覆盖 256 种 FP8
+当前融合权重反量化的 FP32 GEMM 在 RTX 5060 Ti、CUDA 13.3 上验证：
+462 组用例覆盖未补齐的 M/N/K、未对齐地址、全部 256 种 FP8 编码、128
+scale 边界、零输入、空维度，以及避免激活量化误差的小差值用例。
+对照独立 FP32 权重反量化参考和 cuBLAS FP32 GEMM；有限结果的最大
+`abs(error)/(1+sum(abs(products)))` 为 `4.92e-7`。CUDA memcheck、
+racecheck 和 synccheck 均为 0 个错误。
+
+此前 cuBLASLt 原生 GPU FP8 GEMM 的验证记录（含激活动态量化）：覆盖 256 种 FP8
 编码、11 组矩阵尺寸（含 padding、零输入和空 batch），并加载官方 35B 第 0 层
 的一个真实专家。对照独立的 CPU 动态激活量化参考，Linear 最大绝对误差为
 `1.91e-6`，真实专家为 `1.75e-10`；CUDA memcheck 为 0 个错误。另检查了
 空、混合、全部 GPU 驻留名单下的 9 次 executor 与 9 次带共享专家的 MoE
 调用，GPU 分支使用量化参考，CPU 分支使用 FP32 参考。未验证完整 35B 生成。
 
-下面记录的是接入原生 GPU FP8 GEMM 之前的验证。
+下面记录的是接入 cuBLASLt 原生 GPU FP8 GEMM 之前的验证。
 
 验证运行在 RTX 5060 Ti、CUDA 13.3，数值参考使用 Transformers 5.15.1 的
 官方 Qwen3.5 MoE FP32 实现，并读取相同的 BF16/FP8 权重后展开。临时验证程序

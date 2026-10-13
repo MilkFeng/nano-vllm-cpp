@@ -112,8 +112,8 @@ __global__ void combine_kernel(const float* __restrict__ parts,
     const auto d = index % hidden_size;
     float sum = 0.0f;
     for (std::size_t rank = 0; rank < top_k; ++rank) {
-      sum += weights[token * top_k + rank]
-             * parts[(token * top_k + rank) * hidden_size + d];
+      const std::size_t index = token * top_k + rank;
+      sum += weights[index] * parts[index * hidden_size + d];
     }
     output[index] = sum;
   }

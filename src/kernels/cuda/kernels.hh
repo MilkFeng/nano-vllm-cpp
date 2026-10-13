@@ -14,6 +14,17 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
             std::optional<ConstTensorView> bias = std::nullopt,
             cudaStream_t stream = nullptr);
 
+// input:            FP32 [M, K]
+// weight:           FP8  [N, K]
+// weight_scale_inv: FP32 [N/128, K/128]
+// output:           FP32 [M, N]
+//
+// weight_dequant[i][j] = weight[i][j] * weight_scale_inv[i/128][j/128]
+// input @ weight_dequant^T + bias
+void linear_fp8(ConstTensorView input, ConstTensorView weight,
+                ConstTensorView weight_scale_inv, TensorView output,
+                cudaStream_t stream = nullptr);
+
 // hidden state of the last token of each sequence
 //
 // hidden:       [num_tokens, hidden_size]
