@@ -9,6 +9,7 @@
 namespace nanovllm::kernels::cpu {
 
 [[nodiscard]] float fp8_e4m3fn_to_float(std::uint8_t bits);
+
 [[nodiscard]] const std::array<float, 256>& fp8_e4m3fn_table();
 
 void dequantize_fp8(ConstTensorView weight, ConstTensorView scale_inv,

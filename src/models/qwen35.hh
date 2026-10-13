@@ -71,7 +71,8 @@ class Qwen35DecoderLayer final : public Module {
  public:
   Qwen35DecoderLayer(const ModelConfig& config, std::size_t index,
                      Device device,
-                     const std::vector<std::int32_t>& gpu_expert_ids);
+                     const std::vector<std::int32_t>& gpu_expert_ids,
+                     ThreadPool& cpu_pool);
 
   [[nodiscard]] Qwen35DecoderLayerOutput forward(
       ConstTensorView positions, ConstTensorView hidden_states,
@@ -92,7 +93,8 @@ class Qwen35DecoderLayer final : public Module {
 class Qwen35Model final : public Module {
  public:
   Qwen35Model(const ModelConfig& config, Device device,
-              const std::vector<std::int32_t>& gpu_expert_ids);
+              const std::vector<std::int32_t>& gpu_expert_ids,
+              std::size_t cpu_threads = 8);
 
   [[nodiscard]] Tensor forward(ConstTensorView input_ids,
                                ConstTensorView positions,
@@ -107,6 +109,8 @@ class Qwen35Model final : public Module {
   [[nodiscard]] const Qwen35DecoderLayer& layer(std::size_t index) const;
 
  private:
+  // Declared before layers so the workers outlive every executor.
+  ThreadPool cpu_pool_;
   Embedding embed_tokens_;
   ModuleList layers_;
   RMSNorm norm_;
@@ -116,7 +120,8 @@ class Qwen35ForCausalLM final : public Model {
  public:
   explicit Qwen35ForCausalLM(const ModelConfig& config,
                              Device device = Device::cpu(),
-                             std::vector<std::int32_t> gpu_expert_ids = {});
+                             std::vector<std::int32_t> gpu_expert_ids = {},
+                             std::size_t cpu_threads = 8);
 
   ModelLoadResult load_ckpt(const std::filesystem::path& path) override;
 

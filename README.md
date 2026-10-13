@@ -52,6 +52,7 @@ cmake --build build -j4
 - `--temperature 0` 使用 greedy 解码，正数使用温度采样；`--seed` 设置随机种子。
 - `--max-batched-tokens` 限制每轮 token 数，较长输入会分块 prefill。
 - `--num-blocks` 必填，指定全部请求共享的 KV 块池大小；`--block-size` 指定每块 token 数，默认 256。程序按指定数量分配，不再自动估算显存容量。
+- `--cpu-threads 8` 设置 Qwen3.5 的 CPU 专家计算线程数，默认 8，必须为正数；所有层共用一个常驻线程池。
 - `--gpu-expert-ids 0,2` 设置 Qwen3.5 各层固定常驻 GPU 的 routed 专家 ID，默认为空；其余专家在 CPU 计算。共享专家一直在 GPU，不计入名单。
 - `--json` 输出生成文本和 token ID；`--repeat 2` 在同一引擎中重复请求。Qwen3 保留前缀缓存，Qwen3.5 每次从零状态开始。
 - 每次生成结束后，日志输出实际生成 token 数、耗时和 `tok/s`。耗时仅计入 `generate()`，包含输入编码、prefill、decode 和输出解码，不包含模型加载及聊天模板渲染；多条请求统计总输出吞吐，`--repeat` 的每轮单独记录。
@@ -262,10 +263,11 @@ combine。Router 的整批专家编号一次下载到 CPU；对每个有未命�
 同步完成，保证异步复制的源仍然有效。这会额外暂存 `T*K*H*sizeof(float)` 字节
 的专家输出，尚未实现按专家聚合多个 token 的执行方式。
 
-固定驻留名单通过第三个构造参数传入。例如缓存 4 个专家：
+构造时传入共享线程池，固定驻留名单通过第四个构造参数传入。例如缓存 4 个专家：
 
 ```cpp
-MoE moe({128, 64, 16, 2}, Device::cuda(0),
+ThreadPool cpu_pool(8);
+MoE moe({128, 64, 16, 2}, cpu_pool, Device::cuda(0),
         std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 
@@ -298,7 +300,8 @@ MoEConfig config{
     .top_k = 8,
     .shared_expert_intermediate_size = 512,
 };
-MoE moe(config, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6});
+ThreadPool cpu_pool(8);
+MoE moe(config, cpu_pool, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 
 每个专家注册六个 CPU 参数：三个 `gate_proj/up_proj/down_proj.weight` 为
@@ -317,13 +320,22 @@ ExpertStore: 全部专家 FP8 权重 + scale（RAM）
 
 CPU 未命中专家调用 `FP8Expert::forward_into(input, output)`，由
 `kernels::cpu::expert_forward()` 直接读取 FP8 权重和 FP32 scale。
+CPU 支持 AVX2/FMA 时，点积每次解码 8 个 FP8 值到 SIMD 寄存器并做浮点乘加；
+否则使用标量点积。权重始终保持 FP8，不创建完整的 FP32 权重副本。
+每个计算线程复用一个中间激活缓冲。SIMD 的归约顺序和 FMA 会带来少量浮点误差，
+不保证与标量实现逐位一致。
+
+Qwen3.5 模型持有一个线程池，所有 MoE 层的 `ExpertExecutor` 共用它。
+每个 CPU miss 是一个独立任务：输入下载完成后先提交 CPU 任务，再提交 GPU hit，
+等待 CPU 完成后上传其输出，最后执行 combine。异常退出也会等待所有已提交任务，
+避免工作线程继续访问已经释放或复用的缓冲。
 点积逐行、逐 128 列块计算；每个块读取一次 scale，用共享的 256 项 FP32
 查表解码 FP8 值，立即做乘加，不创建完整 FP32 权重矩阵。查表占 1 KiB，
 输入、SiLU、累加与输出保持 FP32，CPU 路径不额外量化激活。
 
-每次 CPU 专家调用只创建两个长度为 I 的 FP32 gate/up 向量，gate 向量原地
-保存 SwiGLU 结果，共 `2*I*sizeof(float)` 字节；它们在调用结束时释放。
-executor 先提交 GPU hits，再由调用线程直接计算 CPU misses。
+CPU 点积逐行计算 gate/up，直接写出 SwiGLU 中间激活。每个计算线程通过
+`thread_local` 复用一个长度为 I 的 FP32 向量，占 `I*sizeof(float)` 字节；
+35B-A3B 的 I=512，对应每个 worker 2 KiB。
 
 缓存初始化只上传驻留名单，直接复制三个 FP8 权重和三个 FP32 scale，不申请
 CPU 权重展开缓冲区。全部上传完成后才发布缓存映射。改变 RAM 权重或 scale
@@ -515,7 +527,8 @@ MoEConfig config{
     .top_k = 2,
     .shared_expert_intermediate_size = 32,
 };
-MoE moe(config, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6});
+ThreadPool cpu_pool(8);
+MoE moe(config, cpu_pool, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 
 共享分支直接挂在 `MoE` 下，注册以下参数：
@@ -545,14 +558,15 @@ CPU/GPU 计算重叠，工作区使用现有层的临时分配。
 `ExpertExecutor::forward()` 统一使用 CPU/GPU 重叠执行，无需选择执行模式：
 
 ```cpp
-MoE moe({128, 64, 16, 2}, Device::cuda(0),
+ThreadPool cpu_pool(8);
+MoE moe({128, 64, 16, 2}, cpu_pool, Device::cuda(0),
         std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 
 对每个 token，executor 先划分 GPU hits / CPU misses，有 misses 时下载一次
-该 token 的输入并等待完成，随后提交它的全部 GPU hits，再由调用线程计算 CPU
-misses。CPU 输出上传到原始排名对应的行；一个 stream 保证 GPU 专家、上传和
-combine 的顺序。重叠发生在同一个 token 内，token 之间仍逐个执行。`forward()`
+该 token 的输入并等待完成，随后将 CPU misses 提交到共享线程池，再提交
+全部 GPU hits。等待 CPU 任务完成后，将其输出上传到原始排名对应的行；
+一个 stream 保证 GPU 专家、上传和 combine 的顺序。重叠发生在同一个 token 内，token 之间仍逐个执行。`forward()`
 完成后才返回，同一个对象的调用仍需串行，完成后可以改用另一个 stream。
 
 `FP8Expert::forward_into()` 使用预先分配的 gate/up/activated 工作区，直接
@@ -561,8 +575,8 @@ combine 的顺序。重叠发生在同一个 token 内，token 之间仍逐个�
 按需要增长。返回的输出拥有独立存储，后续调用不会覆盖先前结果。
 
 这一版只重叠 CPU/GPU 的计算：输入下载在 GPU hits 之前完成，CPU 输出在
-CPU 计算结束后上传，因此暂存区使用普通 RAM。CPU 专家在调用线程串行计算。
-这只是顺序简单的学习实现，尚未测量整模型性能。
+CPU 计算结束后上传，因此暂存区使用普通 RAM。CPU 专家通过常驻线程池并行
+计算，线程数由 `--cpu-threads` 控制，默认 8。尚未测量这一版的整模型性能。
 
 三个辅助类与 `MoE` 一起放在 `src/layers/moe.hh/.cc`。建议在 `.cc` 中按
 `ExpertStore` 的 RAM 权重 → `ExpertCache` 的固定 GPU 槽位 →
@@ -570,7 +584,20 @@ CPU 计算结束后上传，因此暂存区使用普通 RAM。CPU 专家在调�
 使用 `kernels::cpu::expert_forward()` 和 FP32 累加；仅供旧测试使用的完整 CPU
 MoE 对照实现已移除。
 
-## 本次 Qwen3.5 验证
+## SIMD 与线程池验证
+
+CPU 数值与并发检查可独立运行，不需要模型权重或 GPU：
+
+```bash
+cmake -S . -B build -DNANO_VLLM_CPP_BUILD_TESTS=ON
+cmake --build build --target nano-vllm-cpp-cpu-expert-test -j8
+ctest --test-dir build -R cpu-expert --output-on-failure
+```
+
+覆盖 FP8 全部编码、128 列 scale 边界、非整块尺寸、零输入、并行任务的
+激活缓冲隔离、任务异常传播与线程池销毁前排空任务。
+
+## SIMD 改动之前的 Qwen3.5 验证
 
 CPU 点积内部解码在 Ryzen 7 9700X 上验证：256 种 FP8 编码与 CUDA SDK
 转换一致，24 次专家计算覆盖非整块尺寸、零输入及官方 35B 的一个真实专家，

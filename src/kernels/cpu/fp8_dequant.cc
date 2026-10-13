@@ -1,4 +1,4 @@
-#include "kernels/cpu/fp8.hh"
+#include "kernels/cpu/fp8_dequant.hh"
 
 #include <array>
 #include <cassert>

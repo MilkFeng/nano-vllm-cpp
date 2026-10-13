@@ -22,7 +22,6 @@ struct ChatTemplateOptions {
 };
 
 struct SamplingParams {
-  // Zero selects greedy decoding; positive values use temperature sampling.
   float temperature = 1.0f;
   std::size_t max_tokens = 64;
   bool ignore_eos = false;
@@ -30,17 +29,14 @@ struct SamplingParams {
 
 struct EngineParams {
   std::size_t max_num_batched_tokens = 16384;
-  // Also bounds all live recurrent-state slots for Qwen3.5. Each 35B-A3B
-  // slot uses about 62.8 MiB; choose a small value for that model.
   std::size_t max_num_seqs = 512;
   std::size_t max_model_len = 4096;
-  // Required shared KV pool size; zero is invalid.
   std::size_t num_kvcache_blocks = 0;
   std::size_t kvcache_block_size = 256;
   std::uint64_t seed = 0;
-  // Qwen3.5 only: fixed resident IDs, shared by every MoE layer. Empty keeps
-  // all routed experts in RAM. Does not include the shared expert.
+
   std::vector<std::int32_t> gpu_expert_ids;
+  std::size_t cpu_threads = 8;
 };
 
 enum class LogLevel { Trace, Debug, Info, Warning, Error };

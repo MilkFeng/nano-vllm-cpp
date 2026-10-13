@@ -90,6 +90,9 @@ int main(int argc, char** argv) {
                  "Qwen3.5 fixed GPU routed expert IDs for every layer; empty "
                  "by default")
       ->delimiter(',');
+  app.add_option("--cpu-threads", params.cpu_threads,
+                 "Qwen3.5 CPU expert workers shared by all layers (default: 8)")
+      ->check(CLI::PositiveNumber);
   app.add_option("--seed", params.seed, "Sampling random seed");
   app.add_option(
       "--repeat", repeat,

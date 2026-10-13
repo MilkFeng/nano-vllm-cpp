@@ -9,6 +9,7 @@
 #include <span>
 #include <vector>
 
+#include "common/thread_pool.hh"
 #include "core/module.hh"
 #include "kernels/cuda/fp8.hh"
 #include "layers/linear.hh"
@@ -97,7 +98,8 @@ struct ExpertExecutionOutput {
 
 class ExpertExecutor final {
  public:
-  ExpertExecutor(const ExpertStore& store, const ExpertCache& cache);
+  ExpertExecutor(const ExpertStore& store, const ExpertCache& cache,
+                 ThreadPool& cpu_pool);
 
   ExpertExecutor(const ExpertExecutor&) = delete;
   ExpertExecutor& operator=(const ExpertExecutor&) = delete;
@@ -111,6 +113,7 @@ class ExpertExecutor final {
  private:
   const ExpertStore& store_;
   const ExpertCache& cache_;
+  ThreadPool& cpu_pool_;
   mutable FP8ExpertWorkspace workspace_;
   mutable Tensor host_input_;
   mutable Tensor host_parts_;
@@ -139,7 +142,7 @@ struct MoEOutput {
 class MoE final : public Module {
  public:
   explicit MoE(
-      MoEConfig config, Device device = Device::cuda(0),
+      MoEConfig config, ThreadPool& cpu_pool, Device device = Device::cuda(0),
       std::optional<std::vector<std::int32_t>> gpu_expert_ids = std::nullopt);
 
   void populate_expert_cache(cudaStream_t stream = nullptr);

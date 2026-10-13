@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <future>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -76,7 +77,7 @@ void FP8Expert::forward_into(ConstTensorView input, TensorView output) const {
       input,
       {gate_.weight().view(), up_.weight().view(), down_.weight().view(),
        gate_scale_.view(), up_scale_.view(), down_scale_.view()},
-      output);
+      output, kExpertFP8BlockSize);
 }
 
 void FP8Expert::forward_into(ConstTensorView input, TensorView output,
@@ -228,9 +229,10 @@ const ExpertStore& ExpertCache::source() const noexcept {
 }
 
 ExpertExecutor::ExpertExecutor(const ExpertStore& store,
-                               const ExpertCache& cache)
+                               const ExpertCache& cache, ThreadPool& cpu_pool)
     : store_(store),
-      cache_(cache) {
+      cache_(cache),
+      cpu_pool_(cpu_pool) {
   if (&cache.source() != &store) {
     throw std::invalid_argument(
         "executor and cache must use the same RAM store");
@@ -282,6 +284,8 @@ ExpertExecutionOutput ExpertExecutor::forward(
                                   DataType::Float32);
     }
   }
+  std::vector<std::future<void>> cpu_tasks;
+  cpu_tasks.reserve(misses.size());
   try {
     if (!misses.empty()) {
       check_cuda(
@@ -292,16 +296,23 @@ ExpertExecutionOutput ExpertExecutor::forward(
                  "complete overlapping input download");
     }
 
+    // Start CPU work before spending host time submitting the GPU GEMMs.
+    for (const auto& task : misses) {
+      const auto* expert = &store_.expert_at(task.expert_id);
+      const auto x = host_input_.view().as_const();
+      auto row = host_parts_.slice(0, task.rank, 1).view();
+      cpu_tasks.push_back(
+          cpu_pool_.submit([expert, x, row] { expert->forward_into(x, row); }));
+    }
+
     for (const auto& task : hits) {
       auto row = result.expert_outputs.slice(0, task.rank, 1);
       cache_.expert_at_slot(task.slot).forward_into(input, row.view(),
                                                     workspace_, stream);
     }
 
-    for (const auto& task : misses) {
-      auto row = host_parts_.slice(0, task.rank, 1);
-      store_.expert_at(task.expert_id)
-          .forward_into(host_input_.view().as_const(), row.view());
+    for (auto& task : cpu_tasks) {
+      task.get();
     }
 
     for (const auto& task : misses) {
@@ -316,13 +327,17 @@ ExpertExecutionOutput ExpertExecutor::forward(
     check_cuda(cudaStreamSynchronize(stream),
                "complete overlapping expert dispatch");
   } catch (...) {
+    // Neither CPU nor GPU may retain views of buffers after forward exits.
+    for (auto& task : cpu_tasks) {
+      if (task.valid()) task.wait();
+    }
     cudaStreamSynchronize(stream);
     throw;
   }
   return result;
 }
 
-MoE::MoE(MoEConfig config, Device device,
+MoE::MoE(MoEConfig config, ThreadPool& cpu_pool, Device device,
          std::optional<std::vector<std::int32_t>> gpu_expert_ids)
     : config_(config),
       gate_(config_.hidden_size, config_.num_experts, false, DataType::Float32,
@@ -354,7 +369,7 @@ MoE::MoE(MoEConfig config, Device device,
     std::iota(gpu_expert_ids->begin(), gpu_expert_ids->end(), 0);
   }
   cache_ = std::make_unique<ExpertCache>(experts_, std::move(*gpu_expert_ids));
-  executor_ = std::make_unique<ExpertExecutor>(experts_, *cache_);
+  executor_ = std::make_unique<ExpertExecutor>(experts_, *cache_, cpu_pool);
 }
 
 void MoE::invalidate_expert_cache() noexcept {

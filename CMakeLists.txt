@@ -10,15 +10,11 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-# clangd cannot expand NVCC's --options-file include response files. Keep the
-# same include directories directly in compile_commands.json instead.
 set(CMAKE_CUDA_USE_RESPONSE_FILE_FOR_INCLUDES OFF)
 
 include(FetchContent)
 
 if(MSVC)
-  # Match the dynamic CRT used by the x64-windows vcpkg triplet and Rust.
   set(TOKENIZERS_CPP_MSVC_RUNTIME_LIBRARY "MD" CACHE STRING "")
   add_compile_options(
     "$<$<COMPILE_LANGUAGE:CXX>:/utf-8>"
@@ -27,6 +23,7 @@ if(MSVC)
 endif()
 
 find_package(Git REQUIRED)
+find_package(Threads REQUIRED)
 find_package(nlohmann_json CONFIG REQUIRED)
 find_package(spdlog CONFIG REQUIRED)
 find_package(CLI11 CONFIG REQUIRED)
@@ -52,8 +49,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(tokenizers_cpp)
 
-# minja is header-only. Import its headers without its standalone build, which
-# would fetch a second nlohmann/json and enable upstream examples/tests.
 FetchContent_Declare(
   minja
   GIT_REPOSITORY https://github.com/google/minja.git
@@ -97,6 +92,11 @@ target_compile_options(
   "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/W4>"
   "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-Wall;-Wextra;-Wpedantic>"
   "$<$<COMPILE_LANGUAGE:CUDA>:--display-error-number;--generate-line-info>"
+  PUBLIC
+  "$<$<COMPILE_LANG_AND_ID:CXX,MSVC>:/arch:AVX2>"
+  "$<$<COMPILE_LANG_AND_ID:CXX,GNU,Clang,AppleClang>:-mavx2;-mfma>"
+  "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:MSVC>>:-Xcompiler=/arch:AVX2>"
+  "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-Xcompiler=-mavx2,-mfma>"
 )
 
 if(WIN32)
@@ -106,6 +106,7 @@ endif()
 target_link_libraries(
   nano-vllm-cpp
   PRIVATE
+  Threads::Threads
   CUDA::cudart
   CUDA::cublas
   CUDA::cublasLt

@@ -14,6 +14,6 @@ struct ExpertWeights {
 };
 
 void expert_forward(ConstTensorView input, const ExpertWeights& weights,
-                    TensorView output);
+                    TensorView output, std::size_t block_size);
 
 } // namespace nanovllm::kernels::cpu

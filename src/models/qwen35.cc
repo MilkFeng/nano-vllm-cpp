@@ -16,7 +16,7 @@
 #include "common/cuda_utils.hh"
 #include "core/checkpoint.hh"
 #include "core/device.hh"
-#include "kernels/cpu/fp8.hh"
+#include "kernels/cpu/fp8_dequant.hh"
 #include "kernels/cuda/attention.hh"
 #include "kernels/cuda/inference.hh"
 #include "kernels/cuda/kernels.hh"
@@ -346,8 +346,8 @@ std::size_t Qwen35Cache::state_bytes() const {
 
 Qwen35DecoderLayer::Qwen35DecoderLayer(
     const ModelConfig& config, std::size_t index, Device device,
-    const std::vector<std::int32_t>& gpu_expert_ids)
-    : mlp_(qwen35_moe_config(config), device, gpu_expert_ids),
+    const std::vector<std::int32_t>& gpu_expert_ids, ThreadPool& cpu_pool)
+    : mlp_(qwen35_moe_config(config), cpu_pool, device, gpu_expert_ids),
       input_layernorm_(config.hidden_size, config.rms_norm_eps,
                        DataType::Float32, device, true),
       post_attention_layernorm_(config.hidden_size, config.rms_norm_eps,
@@ -405,8 +405,10 @@ MoE& Qwen35DecoderLayer::mlp() noexcept {
 }
 
 Qwen35Model::Qwen35Model(const ModelConfig& config, Device device,
-                         const std::vector<std::int32_t>& gpu_expert_ids)
-    : embed_tokens_(config.vocab_size, config.hidden_size, DataType::Float32,
+                         const std::vector<std::int32_t>& gpu_expert_ids,
+                         std::size_t cpu_threads)
+    : cpu_pool_(cpu_threads),
+      embed_tokens_(config.vocab_size, config.hidden_size, DataType::Float32,
                     device),
       norm_(config.hidden_size, config.rms_norm_eps, DataType::Float32, device,
             true) {
@@ -414,7 +416,8 @@ Qwen35Model::Qwen35Model(const ModelConfig& config, Device device,
   register_module("layers", layers_);
   register_module("norm", norm_);
   for (std::size_t i = 0; i < config.num_hidden_layers; ++i) {
-    layers_.emplace_back<Qwen35DecoderLayer>(config, i, device, gpu_expert_ids);
+    layers_.emplace_back<Qwen35DecoderLayer>(config, i, device, gpu_expert_ids,
+                                             cpu_pool_);
   }
 }
 
@@ -481,10 +484,11 @@ const Qwen35DecoderLayer& Qwen35Model::layer(std::size_t i) const {
 }
 
 Qwen35ForCausalLM::Qwen35ForCausalLM(const ModelConfig& config, Device device,
-                                     std::vector<std::int32_t> gpu_expert_ids)
+                                     std::vector<std::int32_t> gpu_expert_ids,
+                                     std::size_t cpu_threads)
     : config_(config),
       device_(device),
-      model_(config_, device_, gpu_expert_ids),
+      model_(config_, device_, gpu_expert_ids, cpu_threads),
       lm_head_(
           config_.vocab_size, config_.hidden_size, DataType::Float32, device_,
           config_.tie_word_embeddings ? &model_.embed_tokens().weight().tensor()
