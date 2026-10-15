@@ -9,9 +9,10 @@ $executable = Join-Path $projectRoot 'build\windows\Release\nano-vllm-cpp-cli.ex
 
 & $executable `
     --model $MODEL `
-    --prompt 'hello' `
-    --max-tokens 512 `
+    --prompt 'Write a Python function is_palindrome_ignore_non_alnum(s: str) -> bool that checks if a string is a palindrome, ignoring all non-alphanumeric characters and case. Provide test cases including edge cases like empty strings and punctuation-only strings.' `
+    --max-tokens 1024 `
     --num-blocks 256 `
     --max-seqs 1 `
-    --gpu-expert-ids 0,2,4
+    --gpu-expert-ids 0,2,4 `
+    --seed 42
 exit $LASTEXITCODE

@@ -9,7 +9,8 @@ MODEL=$QWEN35_35B_FP8_MODEL
 build/nano-vllm-cpp-cli \
   --model $MODEL \
   --prompt "你好" \
-  --max-tokens 512 \
+  --max-tokens 1024 \
   --num-blocks 256 \
   --max-seqs 1 \
-  --gpu-expert-ids 0,2,4
+  --gpu-expert-ids 0,2,4 \
+  --seed 42
