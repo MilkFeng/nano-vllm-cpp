@@ -24,6 +24,7 @@ std::size_t assert_sequences(std::size_t tokens, std::size_t slots,
     assert(cu.dtype() == DataType::Int32 && cu.rank() == 1
            && cu.shape()[0] > 1);
   }
+
   if (ids.numel() != 0) {
     detail::assert_tensor(ids);
     assert(ids.dtype() == DataType::Int32 && ids.rank() == 1

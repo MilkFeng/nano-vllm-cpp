@@ -155,8 +155,7 @@ __global__ void matmul_kernel(const float* __restrict__ input,
     }
   }
 
-  const float scale =
-      K == 0 ? 1.0f : weight_scale_inv[(n_begin / kBlockSize) * k_blocks];
+  const float scale = weight_scale_inv[(n_begin / kBlockSize) * k_blocks];
 
 #pragma unroll
   for (unsigned i = 0; i < b_loads; ++i) {

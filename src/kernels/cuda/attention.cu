@@ -64,8 +64,10 @@ __global__ void store_kernel(const T* __restrict__ key,
     if (slot == -1) {
       continue;
     }
-    assert(slot >= 0 && static_cast<std::size_t>(slot) < num_slots);
-    const auto cache_offset = static_cast<std::size_t>(slot) * token_width;
+
+    assert(slot >= 0 && slot < num_slots);
+
+    const auto cache_offset = slot * token_width;
     for (std::size_t d = threadIdx.x; d < token_width; d += blockDim.x) {
       key_cache[cache_offset + d] = key[token * token_width + d];
       value_cache[cache_offset + d] = value[token * token_width + d];
@@ -86,9 +88,6 @@ struct AttentionShape {
   std::size_t context_capacity;
 };
 
-// A single warp owns a query head. Its lanes keep up to eight Q/output values
-// each, and share a dot product with shuffle reductions. No temporary scores
-// or device allocations are needed, including when sequences cross pages.
 template <typename T, bool Paged, bool Decode>
 __global__ void attention_kernel(const T* __restrict__ query,
                                  const T* __restrict__ key,
@@ -116,7 +115,6 @@ __global__ void attention_kernel(const T* __restrict__ query,
       if constexpr (!Paged) {
         assert(cu_key[shape.batch] == shape.kv_tokens);
       }
-      // upper_bound handles empty sequences (repeated cumulative lengths).
       std::size_t low = 0, high = shape.batch;
       while (low < high) {
         const auto middle = low + (high - low) / 2;
@@ -244,15 +242,22 @@ void store_kvcache(ConstTensorView key, ConstTensorView value,
   assert_heads(value);
   assert_cache(key_cache);
   assert_cache(value_cache);
+
   assert(same_dtype(key, value, key_cache, value_cache));
   assert(same_shape(key, value));
   assert(same_shape(key_cache, value_cache));
   assert(key.shape()[1] == key_cache.shape()[2]
          && key.shape()[2] == key_cache.shape()[3]);
+
   assert_indices(slot_mapping, 1);
+
   assert(slot_mapping.shape()[0] == key.shape()[0]);
+
   const auto tokens = key.shape()[0];
-  if (tokens == 0) return;
+  if (tokens == 0) {
+    return;
+  }
+
   const auto token_width = key.shape()[1] * key.shape()[2];
   const auto slots = key_cache.shape()[0] * key_cache.shape()[1];
   const auto dtype = key.dtype();
@@ -274,7 +279,9 @@ void prefill_attention(ConstTensorView query, ConstTensorView key,
                        float scale, cudaStream_t stream) {
   assert_heads(query);
   assert_output(query, output, scale);
+
   const bool paged = block_tables.numel() != 0;
+
   if (paged) {
     assert_cache(key);
     assert_cache(value);
@@ -283,20 +290,29 @@ void prefill_attention(ConstTensorView query, ConstTensorView key,
     assert_heads(value);
   }
   assert(same_dtype(key, value) && same_shape(key, value));
+
   assert_gqa(query, key, paged);
   assert_indices(cu_seqlens_q, 1);
   assert_indices(cu_seqlens_k, 1);
+
   assert(cu_seqlens_q.shape()[0] >= 1);
   assert(same_shape(cu_seqlens_q, cu_seqlens_k));
+
   const auto batch = cu_seqlens_q.shape()[0] - 1;
+
   assert(query.shape()[0] <= INT_MAX && (paged || key.shape()[0] <= INT_MAX));
   assert(query.shape()[0] == 0 || batch > 0);
+
   if (paged) {
     assert_indices(block_tables, 2);
     assert(block_tables.shape()[0] == batch);
   }
+
   const auto rows = query.shape()[0] * query.shape()[1];
-  if (rows == 0) return;
+  if (rows == 0) {
+    return;
+  }
+
   const auto shape = make_shape(query, key, batch, block_tables, paged);
   const auto blocks = static_cast<unsigned>(std::min<std::size_t>(rows, 65535));
   detail::dispatch_float(query.dtype(), [&]<typename T>() {
@@ -325,11 +341,14 @@ void paged_attention_decode(ConstTensorView query, ConstTensorView key_cache,
   assert_output(query, output, scale);
   assert_cache(key_cache);
   assert_cache(value_cache);
+
   assert(same_shape(key_cache, value_cache));
   assert(same_dtype(query, key_cache, value_cache, output));
+
   assert_gqa(query, key_cache, true);
   assert_indices(context_lens, 1);
   assert_indices(block_tables, 2);
+
   const auto batch = query.shape()[0];
   assert(context_lens.shape()[0] == batch && block_tables.shape()[0] == batch);
   const auto rows = batch * query.shape()[1];
