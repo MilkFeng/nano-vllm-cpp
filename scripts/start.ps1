@@ -14,5 +14,6 @@ $executable = Join-Path $projectRoot 'build\windows\Release\nano-vllm-cpp-cli.ex
     --num-blocks 256 `
     --max-seqs 1 `
     --gpu-expert-ids 0,2,4 `
-    --seed 42
+    --seed 42 `
+    --repeat 3
 exit $LASTEXITCODE
