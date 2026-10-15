@@ -14,8 +14,6 @@ struct ForwardContext {
   ConstTensorView cu_seqlens_k;
   std::size_t max_seqlen_q = 0;
   std::size_t max_seqlen_k = 0;
-  ConstTensorView slot_mapping;
-  ConstTensorView context_lens;
   ConstTensorView block_tables;
   ConstTensorView state_indices;
   cudaStream_t stream = nullptr;

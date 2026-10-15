@@ -11,10 +11,26 @@
 
 namespace nanovllm::kernels::cuda::detail {
 
+namespace {
+
+template <bool Broadcast, typename T>
+__device__ __forceinline__ T warp_shuffle(T value, int offset) {
+  if constexpr (Broadcast) {
+    return __shfl_xor_sync(0xffffffffu, value, offset);
+  } else {
+    return __shfl_down_sync(0xffffffffu, value, offset);
+  }
+}
+
 template <typename T>
 struct SumOp {
   static __device__ __forceinline__ T identity() { return T(0); }
   static __device__ __forceinline__ T apply(T a, T b) { return a + b; }
+
+  template <bool Broadcast>
+  static __device__ __forceinline__ T warp_shuffle(T value, int offset) {
+    return detail::warp_shuffle<Broadcast>(value, offset);
+  }
 };
 
 template <typename T>
@@ -44,6 +60,11 @@ struct MaxOp {
       return max(a, b);
     }
   }
+
+  template <bool Broadcast>
+  static __device__ __forceinline__ T warp_shuffle(T value, int offset) {
+    return detail::warp_shuffle<Broadcast>(value, offset);
+  }
 };
 
 struct ArgMaxResult {
@@ -63,31 +84,22 @@ struct ArgMaxOp {
     }
     return a;
   }
-};
 
-template <bool Xor, typename T>
-__device__ __forceinline__ T warp_shuffle(T value, int offset) {
-  if constexpr (Xor) {
-    return __shfl_xor_sync(0xffffffffu, value, offset);
-  } else {
-    return __shfl_down_sync(0xffffffffu, value, offset);
+  template <bool Broadcast>
+  static __device__ __forceinline__ ArgMaxResult
+  warp_shuffle(ArgMaxResult value, int offset) {
+    return {
+        detail::warp_shuffle<Broadcast>(value.value, offset),
+        detail::warp_shuffle<Broadcast>(value.index, offset),
+    };
   }
-}
-
-template <bool Xor>
-__device__ __forceinline__ ArgMaxResult warp_shuffle(ArgMaxResult value,
-                                                     int offset) {
-  return {
-      warp_shuffle<Xor>(value.value, offset),
-      warp_shuffle<Xor>(value.index, offset),
-  };
-}
+};
 
 template <typename T, typename Op, bool Broadcast = true>
 __device__ __forceinline__ T warp_reduce(T value) {
 #pragma unroll
   for (int offset = 16; offset > 0; offset >>= 1) {
-    const T other = warp_shuffle<Broadcast>(value, offset);
+    const T other = Op::template warp_shuffle<Broadcast>(value, offset);
     value = Op::apply(value, other);
   }
 
@@ -141,6 +153,8 @@ __device__ __forceinline__ T block_reduce(T value) {
     }
   }
 }
+
+} // namespace
 
 template <typename T, bool Broadcast = true>
 __device__ __forceinline__ T warp_sum_reduce(T value) {

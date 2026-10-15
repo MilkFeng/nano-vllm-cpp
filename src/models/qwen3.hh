@@ -35,7 +35,6 @@ class Qwen3Attention final : public Module {
   [[nodiscard]] std::size_t head_dim() const noexcept;
   [[nodiscard]] std::size_t q_size() const noexcept;
   [[nodiscard]] std::size_t kv_size() const noexcept;
-  [[nodiscard]] float scaling() const noexcept;
 
  private:
   std::size_t hidden_size_;
@@ -44,7 +43,6 @@ class Qwen3Attention final : public Module {
   std::size_t head_dim_;
   std::size_t q_size_;
   std::size_t kv_size_;
-  float scaling_;
   bool qkv_bias_;
 
   Linear q_proj_;

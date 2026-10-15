@@ -445,17 +445,20 @@ output = (q / sqrt(key_head_dim))^T S
 - Linear 层的卷积历史：`[linear_layers, state_slots, conv_dim, kernel_size-1]`；
   递推矩阵：`[linear_layers, state_slots, value_heads, key_dim, value_dim]`。
 
-缓存借用视图，必须比绑定它的 forward 活得更久。`ForwardContext` 保留已有的
-`slot_mapping`、`block_tables`、`context_lens`、`cu_seqlens_q/k`，增加可选的
-GPU Int32 `[B]` `state_indices`：将本次 batch 行映射到序列固定的递推状态槽位。
+缓存借用视图，必须比绑定它的 forward 活得更久。Full attention 的 prefill 和
+decode 都调用 `flash_attn_with_kvcache`，在同一个 kernel 中写入本轮 KV 并计算 attention。
+`ForwardContext` 通过 `block_tables`、`cu_seqlens_q/k` 和 `max_seqlen_q/k`
+描述变长 Q 和 paged KV；`cu_seqlens_k` 对应的长度包含历史和当前 token。
+可选的 GPU Int32 `[B]` `state_indices` 将本次 batch 行映射到序列固定的递推状态槽位。
 batch 换序时更新映射；空视图表示槽位等于 batch 行号，同一次调用不得重复槽位。
-decode 每条序列输入一个 token，context length 包含当前 token。
+decode 每条序列输入一个 token，`cu_seqlens_q` 为 `[0, 1, ..., B]`。
 
 新序列复用槽位前调用 `cache.reset_state(slot, stream)`。它清空该槽位所有
 linear 层的历史和状态，旧 K/V 的可见范围则由 block table 与长度控制。
-重置与 forward 应使用同一 stream，跨 stream 前需同步。没有绑定缓存时，
-只支持从零状态开始的 stateless prefill。现有 prefix cache 只保存 K/V 块，
-不能复用 GatedDeltaNet 的递推状态，因此 Engine 已对 Qwen3.5 关闭 prefix reuse。
+重置与 forward 应使用同一 stream，跨 stream 前需同步。Full attention 始终需要
+绑定 KV cache；GatedDeltaNet 没有绑定状态缓存时只支持从零状态开始的 stateless
+prefill。现有 prefix cache 只保存 K/V 块，不能复用 GatedDeltaNet 的递推状态，
+因此 Engine 已对 Qwen3.5 关闭 prefix reuse。
 
 按 35B-A3B 的 10 个 full 层和 30 个 linear 层计算，当前 FP32 K/V 每个逻辑
 token 占 40 KiB；linear 状态每个序列约 62.8 MiB，与上下文长度无关。

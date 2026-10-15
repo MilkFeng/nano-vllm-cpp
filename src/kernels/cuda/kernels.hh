@@ -173,7 +173,7 @@ void build_rope_cache(TensorView cos_sin_cache, float theta,
 // apply rotary embedding for query/key
 //
 // positions:     [tokens]
-// query:         [tokens, query_heads, head_dim]
+// query:         [q_tokens, query_heads, head_dim]
 // key            [tokens, key_heads, head_dim]
 // cos_sin_cache: [max_positions, rotary_dim]
 //
@@ -230,42 +230,18 @@ void moe_combine(ConstTensorView expert_outputs, ConstTensorView expert_weights,
 void moe_add_shared(ConstTensorView shared_output, ConstTensorView gate_logits,
                     TensorView output, cudaStream_t stream = nullptr);
 
-// key/value:             [tokens, key_heads, head_dim]
-// slot_mapping:          [tokens]
-// key_cache/value_cache: [kv_blocks, block_tokens, key_heads, head_dim]
-//
-// slot = slot_mapping[t];
-// block = slot / S;
-// offset = slot % S;
-//
-// key_cache[block, offset, :, :] = key[t, :, :];
-// value_cache[block, offset, :, :] = value[t, :, :];
-void store_kvcache(ConstTensorView key, ConstTensorView value,
-                   TensorView key_cache, TensorView value_cache,
-                   ConstTensorView slot_mapping, cudaStream_t stream = nullptr);
-
-// query:                     [tokens, query_heads, head_dim]
-// key/value:                 [blocks, block_tokens, key_heads, head_dim]
+// query/output:              [q_tokens, query_heads, head_dim]
+// key_cache/value_cache:     [blocks, block_tokens, key_heads, head_dim]
+// key/value (new tokens):    [q_tokens, key_heads, head_dim]
 // cu_seqlens_q/cu_seqlens_k: [batch + 1]
-// block_tables:              [batch, max_blocks]
-// output:                    [tokens, query_heads, head_dim]
-void prefill_attention(ConstTensorView query, ConstTensorView key,
-                       ConstTensorView value, ConstTensorView cu_seqlens_q,
-                       ConstTensorView cu_seqlens_k,
-                       ConstTensorView block_tables, TensorView output,
-                       float scale, cudaStream_t stream = nullptr);
-
-// query:                 [batch, query_heads, head_dim]
-// key_cache/value_cache: [blocks, block_tokens, key_heads, head_dim]
-// context_lens:          [batch]
-// block_tables:          [batch, max_blocks]
-// output:                [batch, query_heads, head_dim]
-//
-// output = Softmax(scale * Q @ K^T + causal_mask) @ V
-void paged_attention_decode(ConstTensorView query, ConstTensorView key_cache,
-                            ConstTensorView value_cache,
-                            ConstTensorView context_lens,
-                            ConstTensorView block_tables, TensorView output,
-                            float scale, cudaStream_t stream = nullptr);
+// block_table:               [batch, max_blocks]
+void flash_attn_with_kvcache(ConstTensorView query, TensorView key_cache,
+                             TensorView value_cache, ConstTensorView key,
+                             ConstTensorView value,
+                             ConstTensorView cu_seqlens_q,
+                             ConstTensorView cu_seqlens_k,
+                             std::size_t max_seqlen_q, std::size_t max_seqlen_k,
+                             ConstTensorView block_table, TensorView output,
+                             bool causal, cudaStream_t stream = nullptr);
 
 } // namespace nanovllm::kernels::cuda

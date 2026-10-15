@@ -100,12 +100,11 @@ std::vector<std::int32_t> ModelRunner::run(
 
   const CudaDeviceGuard guard(0);
 
-  std::vector<std::int32_t> ids, positions, slots, cu_q{0}, cu_k{0}, lengths;
+  std::vector<std::int32_t> ids, positions, cu_q{0}, cu_k{0};
   std::vector<float> temperatures;
   std::vector<std::int32_t> state_ids;
   std::size_t max_q = 0, max_k = 0, table_width = 0;
 
-  bool needs_cached_prefill = false;
   for (const auto* seq : seqs) {
     if (seq == nullptr || seq->num_tokens() > params_.max_model_len) {
       throw std::invalid_argument("invalid scheduled sequence");
@@ -124,8 +123,9 @@ std::vector<std::int32_t> ModelRunner::run(
     const auto count = seq->num_scheduled_tokens;
     const auto end = start + count;
 
-    if (start != 0) {
-      needs_cached_prefill = true;
+    if (end > seq->block_ids.size() * params_.kvcache_block_size) {
+      throw std::invalid_argument(
+          "scheduled tokens exceed allocated KV blocks");
     }
 
     max_q = std::max(max_q, count);
@@ -138,20 +138,12 @@ std::vector<std::int32_t> ModelRunner::run(
         throw std::invalid_argument("token ID is outside the model vocabulary");
       }
 
-      const auto block = seq->block_ids.at(pos / params_.kvcache_block_size);
-      if (block >= num_blocks_) {
-        throw std::invalid_argument("invalid KV block ID");
-      }
-
       ids.push_back(token);
       positions.push_back(pos);
-      slots.push_back(block * params_.kvcache_block_size
-                      + pos % params_.kvcache_block_size);
     }
 
     cu_q.push_back(ids.size());
     cu_k.push_back(cu_k.back() + end);
-    lengths.push_back(end);
     temperatures.push_back(seq->sampling_params.temperature);
   }
 
@@ -194,10 +186,8 @@ std::vector<std::int32_t> ModelRunner::run(
 
   auto input_ids = upload(ids, {ids.size()});
   auto input_positions = upload(positions, {positions.size()});
-  auto slot_mapping = upload(slots, {slots.size()});
   auto boundaries_q = upload(cu_q, {cu_q.size()});
   auto boundaries_k = upload(cu_k, {cu_k.size()});
-  auto context_lens = upload(lengths, {lengths.size()});
   auto block_tables = upload(tables, {seqs.size(), table_width});
   auto state_indices = upload(state_ids, {state_ids.size()});
   auto temperature = upload(temperatures, {seqs.size()});
@@ -208,11 +198,7 @@ std::vector<std::int32_t> ModelRunner::run(
   context.cu_seqlens_k = boundaries_k.view().as_const();
   context.max_seqlen_q = max_q;
   context.max_seqlen_k = max_k;
-  context.slot_mapping = slot_mapping.view().as_const();
-  context.context_lens = context_lens.view().as_const();
-  if (!prefill || needs_cached_prefill) {
-    context.block_tables = block_tables.view().as_const();
-  }
+  context.block_tables = block_tables.view().as_const();
   context.state_indices = state_indices.view().as_const();
   context.stream = stream_;
 

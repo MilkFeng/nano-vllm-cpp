@@ -4,7 +4,6 @@
 #include <array>
 #include <bit>
 #include <cassert>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <format>
@@ -181,7 +180,6 @@ Qwen35Attention::Qwen35Attention(const ModelConfig& config, Device device)
       num_kv_heads_(config.num_key_value_heads),
       head_dim_(config.head_dim),
       q_size_(config.q_size()),
-      scaling_(1.0f / std::sqrt(float(head_dim_))),
       q_proj_(hidden_size_, 2 * q_size_, config.attention_bias,
               DataType::Float32, device),
       k_proj_(hidden_size_, config.kv_size(), config.attention_bias,
@@ -208,8 +206,6 @@ Tensor Qwen35Attention::forward(ConstTensorView positions,
   const auto tokens = hidden_states.shape()[0];
   const auto stream = context.stream;
   const auto device = hidden_states.device();
-  const bool cached = key_cache_.numel() != 0;
-  const bool paged = context.block_tables.numel() != 0;
 
   auto packed = q_proj_.forward(hidden_states, stream);
   auto query_heads =
@@ -231,26 +227,14 @@ Tensor Qwen35Attention::forward(ConstTensorView positions,
   auto key = k_norm_.forward(key_heads.view(), stream);
 
   rotary_emb_.forward(positions, query.view(), key.view(), stream);
-  if (cached) {
-    kernels::cuda::store_kvcache(key.view().as_const(), value.view(),
-                                 key_cache_, value_cache_, context.slot_mapping,
-                                 stream);
-  }
   auto output =
       Tensor::empty({tokens, num_heads_, head_dim_}, DataType::Float32, device);
 
-  if (context.is_prefill) {
-    kernels::cuda::prefill_attention(
-        query.view().as_const(), paged ? key_cache() : key.view().as_const(),
-        paged ? value_cache() : value.view(), context.cu_seqlens_q,
-        context.cu_seqlens_k, context.block_tables, output.view(), scaling_,
-        stream);
-  } else {
-    kernels::cuda::paged_attention_decode(query.view().as_const(), key_cache(),
-                                          value_cache(), context.context_lens,
-                                          context.block_tables, output.view(),
-                                          scaling_, stream);
-  }
+  kernels::cuda::flash_attn_with_kvcache(
+      query.view().as_const(), key_cache_, value_cache_, key.view().as_const(),
+      value.view(), context.cu_seqlens_q, context.cu_seqlens_k,
+      context.max_seqlen_q, context.max_seqlen_k, context.block_tables,
+      output.view(), true, stream);
 
   kernels::cuda::apply_sigmoid_gate(output.view(), gate.view().as_const(),
                                     stream);

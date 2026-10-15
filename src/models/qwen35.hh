@@ -33,7 +33,6 @@ class Qwen35Attention final : public Module {
 
  private:
   std::size_t hidden_size_, num_heads_, num_kv_heads_, head_dim_, q_size_;
-  float scaling_;
   Linear q_proj_, k_proj_, v_proj_, o_proj_;
   RMSNorm q_norm_, k_norm_;
   RotaryEmbedding rotary_emb_;

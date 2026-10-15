@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cassert>
-#include <cmath>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -36,7 +35,6 @@ Qwen3Attention::Qwen3Attention(const ModelConfig& config, DataType dtype,
       head_dim_(config.head_dim),
       q_size_(num_heads_ * head_dim_),
       kv_size_(num_kv_heads_ * head_dim_),
-      scaling_(1.0f / std::sqrtf(head_dim_)),
       qkv_bias_(config.attention_bias),
       q_proj_(hidden_size_, q_size_, qkv_bias_, dtype, device),
       k_proj_(hidden_size_, kv_size_, qkv_bias_, dtype, device),
@@ -71,8 +69,6 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
   const auto device = q_proj_.weight().view().device();
 
   const auto tokens = hidden_states.shape()[0];
-  const bool have_cache = key_cache_.numel() != 0 && value_cache_.numel() != 0;
-  const bool paged_prefill = context.block_tables.numel() != 0;
 
   auto query_projection = q_proj_.forward(hidden_states, stream);
   auto key_projection = k_proj_.forward(hidden_states, stream);
@@ -92,29 +88,13 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
 
   rotary_emb_.forward(positions, query.view(), key.view(), stream);
 
-  if (have_cache) {
-    kernels::cuda::store_kvcache(key.view().as_const(), value.view().as_const(),
-                                 key_cache_, value_cache_, context.slot_mapping,
-                                 stream);
-  }
-
   auto attention_output = Tensor::empty({tokens, num_heads_, head_dim_},
                                         hidden_states.dtype(), device);
-  if (context.is_prefill) {
-    const auto attention_key =
-        paged_prefill ? key_cache() : key.view().as_const();
-    const auto attention_value =
-        paged_prefill ? value_cache() : value.view().as_const();
-    kernels::cuda::prefill_attention(query.view().as_const(), attention_key,
-                                     attention_value, context.cu_seqlens_q,
-                                     context.cu_seqlens_k, context.block_tables,
-                                     attention_output.view(), scaling_, stream);
-  } else {
-    kernels::cuda::paged_attention_decode(
-        query.view().as_const(), key_cache(), value_cache(),
-        context.context_lens, context.block_tables, attention_output.view(),
-        scaling_, stream);
-  }
+  kernels::cuda::flash_attn_with_kvcache(
+      query.view().as_const(), key_cache_, value_cache_, key.view().as_const(),
+      value.view().as_const(), context.cu_seqlens_q, context.cu_seqlens_k,
+      context.max_seqlen_q, context.max_seqlen_k, context.block_tables,
+      attention_output.view(), true, stream);
 
   const auto flattened = attention_output.reshape(std::array{tokens, q_size_});
   return o_proj_.forward(flattened.view(), stream);
@@ -157,10 +137,6 @@ std::size_t Qwen3Attention::q_size() const noexcept {
 
 std::size_t Qwen3Attention::kv_size() const noexcept {
   return kv_size_;
-}
-
-float Qwen3Attention::scaling() const noexcept {
-  return scaling_;
 }
 
 Qwen3Cache::Qwen3Cache(const ModelConfig& config, std::size_t num_blocks,
