@@ -71,7 +71,7 @@ class Qwen35DecoderLayer final : public Module {
   Qwen35DecoderLayer(const ModelConfig& config, std::size_t index,
                      Device device,
                      const std::vector<std::int32_t>& gpu_expert_ids,
-                     ThreadPool& cpu_pool);
+                     ThreadPool& cpu_pool, MoEExecutionWorkspace& workspace);
 
   [[nodiscard]] Qwen35DecoderLayerOutput forward(
       ConstTensorView positions, ConstTensorView hidden_states,
@@ -108,8 +108,9 @@ class Qwen35Model final : public Module {
   [[nodiscard]] const Qwen35DecoderLayer& layer(std::size_t index) const;
 
  private:
-  // Declared before layers so the workers outlive every executor.
+  // Workers and scratch storage outlive every executor.
   ThreadPool cpu_pool_;
+  mutable MoEExecutionWorkspace moe_workspace_;
   Embedding embed_tokens_;
   ModuleList layers_;
   RMSNorm norm_;

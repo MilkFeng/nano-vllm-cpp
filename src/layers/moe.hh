@@ -9,6 +9,7 @@
 #include <span>
 #include <vector>
 
+#include "common/pinned_buffer.hh"
 #include "common/thread_pool.hh"
 #include "core/module.hh"
 #include "layers/linear.hh"
@@ -22,7 +23,23 @@ struct FP8ExpertWorkspace {
   Tensor activated;
 
   FP8ExpertWorkspace() = default;
-  explicit FP8ExpertWorkspace(std::size_t intermediate_size);
+  explicit FP8ExpertWorkspace(std::size_t intermediate_size,
+                              std::size_t rows = 1);
+  void reserve(std::size_t rows, std::size_t intermediate_size);
+};
+
+struct MoEExecutionWorkspace {
+  PinnedHostBuffer host_ids;
+  PinnedHostBuffer host_order;
+  PinnedHostBuffer host_input;
+  PinnedHostBuffer host_parts;
+  Tensor host_grouped_input;
+  Tensor order;
+  Tensor grouped_input;
+  Tensor grouped_parts;
+  Tensor single_input;
+  Tensor single_parts;
+  FP8ExpertWorkspace expert;
 };
 
 class FP8Expert final : public Module {
@@ -88,8 +105,7 @@ class ExpertCache final {
   bool ready_ = false;
 };
 
-struct ExpertExecutionOutput {
-  Tensor expert_outputs;
+struct ExpertExecutionStats {
   std::size_t gpu_experts = 0;
   std::size_t cpu_experts = 0;
 };
@@ -104,17 +120,20 @@ class ExpertExecutor final {
   ExpertExecutor(ExpertExecutor&&) = delete;
   ExpertExecutor& operator=(ExpertExecutor&&) = delete;
 
-  [[nodiscard]] ExpertExecutionOutput forward(
+  [[nodiscard]] ExpertExecutionStats forward_into(
       ConstTensorView input, std::span<const std::int32_t> expert_ids,
-      cudaStream_t stream = nullptr) const;
+      std::size_t top_k, TensorView expert_outputs,
+      MoEExecutionWorkspace& workspace, cudaStream_t stream = nullptr) const;
 
  private:
+  [[nodiscard]] ExpertExecutionStats forward_single_into(
+      ConstTensorView input, std::span<const std::int32_t> expert_ids,
+      TensorView expert_outputs, MoEExecutionWorkspace& workspace,
+      cudaStream_t stream) const;
+
   const ExpertStore& store_;
   const ExpertCache& cache_;
   ThreadPool& cpu_pool_;
-  mutable FP8ExpertWorkspace workspace_;
-  mutable Tensor host_input_;
-  mutable Tensor host_parts_;
 };
 
 struct MoEConfig {
@@ -141,7 +160,8 @@ class MoE final : public Module {
  public:
   explicit MoE(
       MoEConfig config, ThreadPool& cpu_pool, Device device = Device::cuda(0),
-      std::optional<std::vector<std::int32_t>> gpu_expert_ids = std::nullopt);
+      std::optional<std::vector<std::int32_t>> gpu_expert_ids = std::nullopt,
+      MoEExecutionWorkspace* workspace = nullptr);
 
   void populate_expert_cache(cudaStream_t stream = nullptr);
   void invalidate_expert_cache() noexcept;
@@ -160,6 +180,8 @@ class MoE final : public Module {
   ExpertStore experts_;
   std::unique_ptr<SwiGLUMLP> shared_expert_;
   std::unique_ptr<Linear> shared_expert_gate_;
+  std::unique_ptr<MoEExecutionWorkspace> owned_workspace_;
+  MoEExecutionWorkspace* workspace_ = nullptr;
   std::unique_ptr<ExpertCache> cache_;
   std::unique_ptr<ExpertExecutor> executor_;
 };

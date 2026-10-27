@@ -213,6 +213,17 @@ void apply_sigmoid_gate(TensorView output, ConstTensorView gate,
 void moe_route(ConstTensorView logits, TensorView expert_ids,
                TensorView expert_weights, cudaStream_t stream = nullptr);
 
+// input: [T,H], order: Int32 [G] containing original flattened token/top-k ranks.
+// grouped[q,d] = input[order[q] / top_k,d], grouped: [G,H].
+void moe_gather(ConstTensorView input, ConstTensorView order,
+                std::size_t top_k, TensorView grouped,
+                cudaStream_t stream = nullptr);
+
+// grouped/output: [T*K,H], order: Int32 [T*K], a permutation of [0,T*K).
+// output[order[q],d] = grouped[q,d]; unique destinations require no atomics.
+void moe_scatter(ConstTensorView grouped, ConstTensorView order,
+                 TensorView output, cudaStream_t stream = nullptr);
+
 // expert_outputs: [tokens * topk, hidden_size]
 // expert_weights: [tokens, topk]
 // output:         [tokens, hidden_size]

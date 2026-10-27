@@ -98,6 +98,38 @@ __global__ void route_kernel(const float* __restrict__ logits,
   }
 }
 
+__global__ void moe_gather_kernel(const float* __restrict__ input,
+                                  const std::int32_t* __restrict__ order,
+                                  float* __restrict__ grouped,
+                                  std::size_t count, std::size_t width,
+                                  std::size_t tokens, std::size_t top_k) {
+  const std::size_t start =
+      static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
+  for (auto index = start; index < count; index += step) {
+    const auto rank = order[index / width];
+    assert(rank >= 0 && rank / top_k < tokens);
+    grouped[index] =
+        input[(static_cast<std::size_t>(rank) / top_k) * width + index % width];
+  }
+}
+
+__global__ void moe_scatter_kernel(const float* __restrict__ grouped,
+                                   const std::int32_t* __restrict__ order,
+                                   float* __restrict__ output,
+                                   std::size_t count, std::size_t width,
+                                   std::size_t rows) {
+  const std::size_t start =
+      static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+  const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
+  for (auto index = start; index < count; index += step) {
+    const auto rank = order[index / width];
+    assert(rank >= 0 && rank < rows);
+    output[static_cast<std::size_t>(rank) * width + index % width] =
+        grouped[index];
+  }
+}
+
 __global__ void combine_kernel(const float* __restrict__ parts,
                                const float* __restrict__ weights,
                                float* __restrict__ output,
@@ -170,6 +202,58 @@ void moe_route(ConstTensorView logits, TensorView expert_ids,
       logits.data<float>(), expert_ids.data<std::int32_t>(),
       expert_weights.data<float>(), experts, top_k);
   check_cuda(cudaGetLastError(), "MoE route kernel launch");
+}
+
+void moe_gather(ConstTensorView input, ConstTensorView order, std::size_t top_k,
+                TensorView grouped, cudaStream_t stream) {
+  detail::assert_tensor(input);
+  detail::assert_tensor(order);
+  detail::assert_tensor(grouped);
+
+  assert(same_device(input, order, grouped));
+  assert(input.dtype() == DataType::Float32 && same_dtype(input, grouped));
+  assert(input.rank() == 2 && grouped.rank() == 2 && order.rank() == 1);
+  assert(order.dtype() == DataType::Int32
+         && order.numel() == grouped.shape()[0]);
+  assert(input.shape()[1] > 0 && grouped.shape()[1] == input.shape()[1]);
+  assert(top_k > 0);
+
+  if (grouped.numel() == 0) {
+    return;
+  }
+
+  const auto blocks = static_cast<unsigned>(std::min<std::size_t>(
+      (grouped.numel() + kThreads - 1) / kThreads, 65535));
+  moe_gather_kernel<<<blocks, kThreads, 0, stream>>>(
+      input.data<float>(), order.data<std::int32_t>(), grouped.data<float>(),
+      grouped.numel(), input.shape()[1], input.shape()[0], top_k);
+  check_cuda(cudaGetLastError(), "MoE gather kernel launch");
+}
+
+void moe_scatter(ConstTensorView grouped, ConstTensorView order,
+                 TensorView output, cudaStream_t stream) {
+  detail::assert_tensor(grouped);
+  detail::assert_tensor(order);
+  detail::assert_tensor(output);
+
+  assert(same_device(grouped, order, output));
+  assert(grouped.dtype() == DataType::Float32 && same_dtype(grouped, output));
+  assert(grouped.rank() == 2 && same_shape(grouped, output)
+         && order.rank() == 1);
+  assert(order.dtype() == DataType::Int32
+         && order.numel() == grouped.shape()[0]);
+  assert(grouped.shape()[1] > 0);
+
+  if (output.numel() == 0) {
+    return;
+  }
+
+  const auto blocks = static_cast<unsigned>(
+      std::min<std::size_t>((output.numel() + kThreads - 1) / kThreads, 65535));
+  moe_scatter_kernel<<<blocks, kThreads, 0, stream>>>(
+      grouped.data<float>(), order.data<std::int32_t>(), output.data<float>(),
+      output.numel(), output.shape()[1], output.shape()[0]);
+  check_cuda(cudaGetLastError(), "MoE scatter kernel launch");
 }
 
 void moe_combine(ConstTensorView expert_outputs, ConstTensorView expert_weights,

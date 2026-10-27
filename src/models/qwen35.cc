@@ -328,8 +328,9 @@ std::size_t Qwen35Cache::state_bytes() const {
 
 Qwen35DecoderLayer::Qwen35DecoderLayer(
     const ModelConfig& config, std::size_t index, Device device,
-    const std::vector<std::int32_t>& gpu_expert_ids, ThreadPool& cpu_pool)
-    : mlp_(qwen35_moe_config(config), cpu_pool, device, gpu_expert_ids),
+    const std::vector<std::int32_t>& gpu_expert_ids, ThreadPool& cpu_pool,
+    MoEExecutionWorkspace& workspace)
+    : mlp_(qwen35_moe_config(config), cpu_pool, device, gpu_expert_ids, &workspace),
       input_layernorm_(config.hidden_size, config.rms_norm_eps,
                        DataType::Float32, device, true),
       post_attention_layernorm_(config.hidden_size, config.rms_norm_eps,
@@ -399,7 +400,7 @@ Qwen35Model::Qwen35Model(const ModelConfig& config, Device device,
   register_module("norm", norm_);
   for (std::size_t i = 0; i < config.num_hidden_layers; ++i) {
     layers_.emplace_back<Qwen35DecoderLayer>(config, i, device, gpu_expert_ids,
-                                             cpu_pool_);
+                                             cpu_pool_, moe_workspace_);
   }
 }
 

@@ -306,8 +306,8 @@ FP8 权重直接借用 mmap 字节；scale 复制到 Tensor，保证浮点访问
 CPU routed 专家的计算直接在点积内部解码。
 `ExpertStore` 支持保存 FP8 权重和 scale，CPU 未命中专家在点积内部解码，GPU
 固定缓存直接复制原始 FP8 权重和 FP32 scale。Qwen3.5 模型加载器可直接读取官方 FP8
-checkpoint；GPU routed 专家使用原生 FP8 GEMM 与动态激活量化，其他
-模块仍按下面的 FP32 路径执行。
+checkpoint；GPU routed 专家在 FP32 GEMV/GEMM 内融合 FP8 权重反量化，
+激活和累加保持 FP32。
 
 ## 学习用 MoE
 
@@ -319,7 +319,7 @@ checkpoint；GPU routed 专家使用原生 FP8 GEMM 与动态激活量化，其�
 ```text
 x[T,H] → Router Linear → logits[T,E]
        → 每个 token 独立 softmax、top-k、选中概率重新归一化
-       → 逐 token 执行 K 个 SwiGLUMLP
+       → 按专家聚合 token，CPU/GPU 执行批量 SwiGLUMLP
        → 每个 token 按自己的路由权重求和 → y[T,H]
 ```
 
@@ -343,22 +343,26 @@ x[T,H] → Router Linear → logits[T,E]
 `experts.N.gate_proj.weight` 等。GPU 的 `ExpertCache` 只分配固定名单对应的
 专家槽位，缓存副本不注册为额外模型参数。Router 在 GPU 上计算，命中的专家
 在 GPU 槽位上执行，未命中的专家在 CPU 上执行；CPU 输出复制回 GPU 后统一
-combine。Router 的整批专家编号一次下载到 CPU；对每个有未命中的 token，
-只下载一次输入向量，由它的全部 CPU 专家复用。
+combine。Router 的整批专家编号一次下载到 CPU，构造稳定的专家分组；有 CPU
+专家时整批输入只下载一次，按专家打包后交给线程池。
 
 ```text
 批量 Router → expert_ids[T,K]
-            → for each token: ExpertExecutor(input[1,H], ids[1,K])
-                ├── ExpertCache 命中 → GPU FP8Expert → 原生 FP8 GEMM
-                └── 未命中 → ExpertStore → CPU expert_forward → 上传输出
-            → 按 token 和排名收集 expert_outputs[T*K,H]
+            → ExpertExecutor::forward_into(input[T,H], ids[T*K])
+                ├── GPU 专家组 → gather → FP8Expert(input[M_e,H])
+                └── CPU 专家组 → 打包 → expert_forward(input[M_e,H])
+            → 一次上传 CPU 输出 → scatter 恢复 expert_outputs[T*K,H]
             → CUDA combine → y[T,H]
 ```
 
-这一版复用单 token `ExpertExecutor`，逐 token 分派，每个 token 执行完才处理
-下一个。每次执行返回的专家输出复制到整批输出中；源 Tensor 保留到最终 stream
-同步完成，保证异步复制的源仍然有效。这会额外暂存 `T*K*H*sizeof(float)` 字节
-的专家输出，尚未实现按专家聚合多个 token 的执行方式。
+`order[q]` 保存分组行对应的原始 `token*K+rank`。GPU 专家组在前，CPU 专家组
+在后，CPU 分组输出因此可以一次连续上传。`moe_gather` 按 `order[q]/K` 收集
+GPU 输入，`moe_scatter` 将完整的分组结果还原到原始行号，无需原子操作。
+每个活跃专家收到 `[M_e,H]`，GPU 单行走 GEMV，多行走已有的 GEMM；CPU
+按权重行遍历多个输入 token。路由权重仍只在原来的 combine 中应用一次。
+
+`T=1` 直接向 `[K,H]` 输出写入，跳过分组排列和 gather/scatter，保留 decode
+快速路径。executor 不再为每个 token 创建输出 Tensor 或额外做 D2D 汇总复制。
 
 构造时传入共享线程池，固定驻留名单通过第四个构造参数传入。例如缓存 4 个专家：
 
@@ -417,22 +421,23 @@ ExpertStore: 全部专家 FP8 权重 + scale（RAM）
 
 CPU 未命中专家调用 `FP8Expert::forward_into(input, output)`，由
 `kernels::cpu::expert_forward()` 直接读取 FP8 权重和 FP32 scale。
-CPU 支持 AVX2/FMA 时，点积每次解码 8 个 FP8 值到 SIMD 寄存器并做浮点乘加；
-否则使用标量点积。权重始终保持 FP8，不创建完整的 FP32 权重副本。
+当前构建使用 AVX2/FMA，点积每次解码 8 个 FP8 值到 SIMD 寄存器并做浮点乘加。
+权重始终保持 FP8，不创建完整的 FP32 权重副本。
 每个计算线程复用一个中间激活缓冲。SIMD 的归约顺序和 FMA 会带来少量浮点误差，
 不保证与标量实现逐位一致。
 
 Qwen3.5 模型持有一个线程池，所有 MoE 层的 `ExpertExecutor` 共用它。
-每个 CPU miss 是一个独立任务：输入下载完成后先提交 CPU 任务，再提交 GPU hit，
-等待 CPU 完成后上传其输出，最后执行 combine。异常退出也会等待所有已提交任务，
+多 token 时每个活跃 CPU 专家组是一个任务：输入下载并打包后先提交 CPU 任务，
+再提交 GPU 专家组，等待 CPU 完成后上传其输出，最后执行 combine。
+异常退出也会等待所有已提交任务，
 避免工作线程继续访问已经释放或复用的缓冲。
 点积逐行、逐 128 列块计算；每个块读取一次 scale，用共享的 256 项 FP32
 查表解码 FP8 值，立即做乘加，不创建完整 FP32 权重矩阵。查表占 1 KiB，
 输入、SiLU、累加与输出保持 FP32，CPU 路径不额外量化激活。
 
-CPU 点积逐行计算 gate/up，直接写出 SwiGLU 中间激活。每个计算线程通过
-`thread_local` 复用一个长度为 I 的 FP32 向量，占 `I*sizeof(float)` 字节；
-35B-A3B 的 I=512，对应每个 worker 2 KiB。
+CPU 点积逐行计算 gate/up，同一权重行连续服务多个 token，直接写出 SwiGLU
+中间激活。每个计算线程通过 `thread_local` 复用 `[M_e,I]` 的 FP32 缓冲，
+占 `M_e*I*sizeof(float)` 字节；单 token、I=512 时仍为 2 KiB。
 
 缓存初始化只上传驻留名单，直接复制三个 FP8 权重和三个 FP32 scale，不申请
 CPU 权重展开缓冲区。全部上传完成后才发布缓存映射。改变 RAM 权重或 scale
@@ -653,7 +658,7 @@ CPU/GPU 计算重叠，工作区使用现有层的临时分配。
 
 ### CPU/GPU 重叠执行
 
-`ExpertExecutor::forward()` 统一使用 CPU/GPU 重叠执行，无需选择执行模式：
+`ExpertExecutor::forward_into()` 统一使用 CPU/GPU 重叠执行，无需选择执行模式：
 
 ```cpp
 ThreadPool cpu_pool(8);
@@ -661,20 +666,29 @@ MoE moe({128, 64, 16, 2}, cpu_pool, Device::cuda(0),
         std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 
-对每个 token，executor 先划分 GPU hits / CPU misses，有 misses 时下载一次
-该 token 的输入并等待完成，随后将 CPU misses 提交到共享线程池，再提交
-全部 GPU hits。等待 CPU 任务完成后，将其输出上传到原始排名对应的行；
-一个 stream 保证 GPU 专家、上传和 combine 的顺序。重叠发生在同一个 token 内，token 之间仍逐个执行。`forward()`
-完成后才返回，同一个对象的调用仍需串行，完成后可以改用另一个 stream。
+executor 将 `[T,K]` 的分派按专家计数分组，先提交 CPU 专家任务，再提交 GPU
+专家计算，因此两者可以重叠。GPU 专家、CPU 输出上传、scatter 和 combine
+使用同一个 stream 排序。executor 返回前完成全部 CPU 任务，GPU 工作可以仍在
+排队；`MoE::forward()` 在返回前统一同步，随后才能复用工作区或改用其他 stream。
+内部 executor 的 cache 就绪状态、张量形状及专家编号是调用方的前置条件，
+Debug 构建通过断言检查；Release 测试只传入满足这些条件的分派。
 
 `FP8Expert::forward_into()` 使用预先分配的 gate/up/activated 工作区，直接
 写入输出行。所有 GPU 专家共用这三个缓冲区，依靠同一 stream 排序；提交 GPU
 专家时不会分配或释放 CUDA Tensor。CPU 输入与输出暂存区也会复用，输出区
 按需要增长。返回的输出拥有独立存储，后续调用不会覆盖先前结果。
 
-这一版只重叠 CPU/GPU 的计算：输入下载在 GPU hits 之前完成，CPU 输出在
-CPU 计算结束后上传，因此暂存区使用普通 RAM。CPU 专家通过常驻线程池并行
-计算，线程数由 `--cpu-threads` 控制，默认 8。尚未测量这一版的整模型性能。
+`Qwen35Model` 持有一份 `MoEExecutionWorkspace`，各层共享，避免每层长期保留
+一套 `[T*K,H]` 缓冲。单独构造 `MoE` 时默认拥有自己的工作区，也可通过第五个
+构造参数传入外部工作区。批量传输暂存区使用 pinned RAM，CPU 分组输入使用普通
+RAM；单 token 输入/输出保留小规模普通 RAM 暂存路径。GPU 分组输入、分组输出、
+排列映射和专家中间缓冲均按容量复用。扩容只在
+提交依赖这些缓冲的任务之前发生。工作区及同一模型的调用必须串行。
+
+这一版重叠 CPU/GPU 计算，输入下载仍在计算之前完成，CPU 输出在计算完成后
+上传；没有引入多 stream 传输流水线。线程数由 `--cpu-threads` 控制，默认 8。
+在未命中的多 token 场景，整层 MoE 的显式 stream 同步从约 `2*T+2` 次减少到
+3 次；显存分配器和其他模块可能还有同步，不能据此直接推导耗时缩减比例。
 
 三个辅助类与 `MoE` 一起放在 `src/layers/moe.hh/.cc`。建议在 `.cc` 中按
 `ExpertStore` 的 RAM 权重 → `ExpertCache` 的固定 GPU 槽位 →
@@ -682,18 +696,31 @@ CPU 计算结束后上传，因此暂存区使用普通 RAM。CPU 专家通过�
 使用 `kernels::cpu::expert_forward()` 和 FP32 累加；仅供旧测试使用的完整 CPU
 MoE 对照实现已移除。
 
-## SIMD 与线程池验证
+## MoE 分组执行验证
 
-CPU 数值与并发检查可独立运行，不需要模型权重或 GPU：
+使用合成权重，不依赖模型下载，需要 CUDA GPU：
 
 ```bash
 cmake -S . -B build -DNANO_VLLM_CPP_BUILD_TESTS=ON
-cmake --build build --target nano-vllm-cpp-cpu-expert-test -j8
-ctest --test-dir build -R cpu-expert --output-on-failure
+cmake --build build --target nano-vllm-cpp-moe-batch-test -j4
+ctest --test-dir build -R '^moe-batch$' --output-on-failure
 ```
 
-覆盖 FP8 全部编码、128 列 scale 边界、非整块尺寸、零输入、并行任务的
-激活缓冲隔离、任务异常传播与线程池销毁前排空任务。
+独立标量 E4M3FN 解码和 FP64 点积参考覆盖全 CPU、混合和全 GPU 驻留、单 token
+快速路径、多行 GEMM、128 scale 边界、非整块尺寸、空输入、重复/偏斜路由、
+工作区扩容后缩小、跨层共享、输出所有权、assignment 计数和共享专家 combine。
+GPU GEMM 与 GEMV 的累加顺序不同，数值按容差对齐。
+
+该程序也提供单层 MoE 微基准：
+
+```bash
+./build/nano-vllm-cpp-moe-batch-test --benchmark
+```
+
+它使用 `H=2048,I=512,E=16,K=8`、3 个 GPU 常驻专家和 8 个 CPU worker，分别
+测量 `T=1/128`；T=1 预热 10 轮、统计 51 轮，T=128 预热 2 轮、统计 9 轮，
+报告中位数与最小/最大值。它不代表完整 35B
+模型性能；整模型比较请继续使用上面的 `nano-vllm-cpp-bench` 和相同配置。
 
 ## SIMD 改动之前的 Qwen3.5 验证
 
