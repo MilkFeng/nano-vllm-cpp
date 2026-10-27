@@ -439,6 +439,14 @@ CPU 点积逐行计算 gate/up，同一权重行连续服务多个 token，直�
 中间激活。每个计算线程通过 `thread_local` 复用 `[M_e,I]` 的 FP32 缓冲，
 占 `M_e*I*sizeof(float)` 字节；单 token、I=512 时仍为 2 KiB。
 
+CPU 专家按 4、2、1 行拆分 token。`fp8_dot_batch_kernel()` 对同一输出通道的
+2/4 个 token 共用已解码、乘 scale 的 FP32 权重向量，每个 token 保持独立的
+双累加器；gate/up 分别调用，再直接写入 activated，down 同样采用批量点积。
+M=1 和剩余的单行继续调用原点积，不创建完整 FP32 权重矩阵或 gate/up 矩阵。
+128 列 scale 块完整覆盖输入时使用无尾部快路径；其他尺寸保留 8 列及标量尾部，
+输入 row stride 以 float 元素计。归约长度和中间激活/输出形状均不变。
+编译器对尾部的向量化可能造成少量浮点差异，批量路径按容差验证。
+
 缓存初始化只上传驻留名单，直接复制三个 FP8 权重和三个 FP32 scale，不申请
 CPU 权重展开缓冲区。全部上传完成后才发布缓存映射。改变 RAM 权重或 scale
 后需显式再次 populate。

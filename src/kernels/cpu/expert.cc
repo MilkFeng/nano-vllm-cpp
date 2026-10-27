@@ -69,33 +69,81 @@ void expert_forward(ConstTensorView input, const ExpertWeights& weights,
   const auto* up = weights.up.data<std::uint8_t>();
   const auto* gate_scale = weights.gate_scale.data<float>();
   const auto* up_scale = weights.up_scale.data<float>();
+  const auto* down = weights.down.data<std::uint8_t>();
+  const auto* down_scale = weights.down_scale.data<float>();
+  auto* result = output.data<float>();
+
+  // Keep the original dot products and storage path for single-token decode.
+  if (tokens == 1) {
+    for (std::size_t row = 0; row < intermediate_size; ++row) {
+      const auto scale_offset = (row / block_size) * hidden_blocks;
+      const float g =
+          fp8_dot_kernel(gate + row * hidden_size, gate_scale + scale_offset, x,
+                         hidden_size, block_size);
+      const float u =
+          fp8_dot_kernel(up + row * hidden_size, up_scale + scale_offset, x,
+                         hidden_size, block_size);
+      activated[row] = (g / (1.0f + std::exp(-g))) * u;
+    }
+    for (std::size_t row = 0; row < hidden_size; ++row) {
+      result[row] =
+          fp8_dot_kernel(down + row * intermediate_size,
+                         down_scale + (row / block_size) * intermediate_blocks,
+                         activated.data(), intermediate_size, block_size);
+    }
+    return;
+  }
 
   for (std::size_t row = 0; row < intermediate_size; ++row) {
     const auto scale_offset = (row / block_size) * hidden_blocks;
-    // Reuse each FP8 weight row across tokens while it is hot in CPU cache.
-    for (std::size_t token = 0; token < tokens; ++token) {
+    for (std::size_t token = 0; token < tokens;) {
+      const auto remaining = tokens - token;
+      const std::size_t rows = remaining >= 4 ? 4 : remaining >= 2 ? 2 : 1;
       const auto* input_row = x + token * hidden_size;
-      const float g = fp8_dot_kernel(gate + row * hidden_size,
-                                     gate_scale + scale_offset, input_row,
-                                     hidden_size, block_size);
-      const float u = fp8_dot_kernel(up + row * hidden_size,
-                                     up_scale + scale_offset, input_row,
-                                     hidden_size, block_size);
-      activated[token * intermediate_size + row] =
-          (g / (1.0f + std::exp(-g))) * u;
+      float g[4], u[4];
+      if (rows == 1) {
+        g[0] =
+            fp8_dot_kernel(gate + row * hidden_size, gate_scale + scale_offset,
+                           input_row, hidden_size, block_size);
+        u[0] = fp8_dot_kernel(up + row * hidden_size, up_scale + scale_offset,
+                              input_row, hidden_size, block_size);
+      } else {
+        fp8_dot_batch_kernel(gate + row * hidden_size,
+                             gate_scale + scale_offset, input_row, hidden_size,
+                             rows, hidden_size, block_size, g);
+        fp8_dot_batch_kernel(up + row * hidden_size, up_scale + scale_offset,
+                             input_row, hidden_size, rows, hidden_size,
+                             block_size, u);
+      }
+      for (std::size_t b = 0; b < rows; ++b) {
+        activated[(token + b) * intermediate_size + row] =
+            (g[b] / (1.0f + std::exp(-g[b]))) * u[b];
+      }
+      token += rows;
     }
   }
 
-  const auto* down = weights.down.data<std::uint8_t>();
-  const auto* down_scale = weights.down_scale.data<float>();
-
-  auto* result = output.data<float>();
   for (std::size_t row = 0; row < hidden_size; ++row) {
-    for (std::size_t token = 0; token < tokens; ++token) {
-      result[token * hidden_size + row] = fp8_dot_kernel(
-          down + row * intermediate_size,
-          down_scale + (row / block_size) * intermediate_blocks,
-          activated.data() + token * intermediate_size, intermediate_size, block_size);
+    const auto* weight_row = down + row * intermediate_size;
+    const auto* scale_row =
+        down_scale + (row / block_size) * intermediate_blocks;
+    for (std::size_t token = 0; token < tokens;) {
+      const auto remaining = tokens - token;
+      const std::size_t rows = remaining >= 4 ? 4 : remaining >= 2 ? 2 : 1;
+      const auto* input_row = activated.data() + token * intermediate_size;
+      float values[4];
+      if (rows == 1) {
+        values[0] = fp8_dot_kernel(weight_row, scale_row, input_row,
+                                   intermediate_size, block_size);
+      } else {
+        fp8_dot_batch_kernel(weight_row, scale_row, input_row,
+                             intermediate_size, rows, intermediate_size,
+                             block_size, values);
+      }
+      for (std::size_t b = 0; b < rows; ++b) {
+        result[(token + b) * hidden_size + row] = values[b];
+      }
+      token += rows;
     }
   }
 }
