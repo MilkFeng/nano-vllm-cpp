@@ -134,7 +134,7 @@ __global__ void flash_attn_with_kvcache_kernel(
   const auto key_head = query_head / group_size;
   const auto query_offset =
       ((query_start + query_pos) * shape.query_heads + query_head) * head_dim;
-  const float scale = rsqrtf(static_cast<float>(head_dim));
+  const float scale = rsqrtf(head_dim);
 
   float q[kHeadElements] = {};
   float acc[kHeadElements] = {};
