@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <format>
 #include <magic_enum/magic_enum.hpp>
@@ -12,6 +14,12 @@
 namespace nanovllm {
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
+
+double elapsed_seconds(Clock::time_point start, Clock::time_point end) {
+  return std::chrono::duration<double>(end - start).count();
+}
 
 class NullLogger final : public Logger {
  public:
@@ -39,7 +47,8 @@ class LLMEngine::Impl {
         scheduler_(model_runner_.num_blocks(), params.kvcache_block_size,
                    params.max_num_seqs, params.max_num_batched_tokens,
                    tokenizer_.eos_token_id(), params.max_model_len,
-                   model_config_.architecture == ModelArchitecture::Qwen35Moe) {
+                   model_config_.architecture == ModelArchitecture::Qwen35Moe,
+                   params.enable_prefix_cache) {
     logger_->info(std::format(
         "Loaded {}", magic_enum::enum_name(model_config_.architecture)));
 
@@ -67,7 +76,9 @@ class LLMEngine::Impl {
   }
 
   std::vector<GenerationOutput> generate(std::span<const std::string> prompts,
-                                         SamplingParams sampling_params) {
+                                         SamplingParams sampling_params,
+                                         GenerationMetrics* metrics) {
+    const auto start = Clock::now();
     std::vector<std::vector<std::int32_t>> encoded;
     for (const auto& prompt : prompts) {
       auto ids = tokenizer_.encode(prompt);
@@ -77,23 +88,95 @@ class LLMEngine::Impl {
       }
       encoded.push_back(std::move(ids));
     }
+    const auto encoded_at = Clock::now();
+    auto result = generate(encoded, sampling_params, metrics);
+    if (metrics) {
+      metrics->tokenization_seconds = elapsed_seconds(start, encoded_at);
+      metrics->total_seconds = elapsed_seconds(start, Clock::now());
+    }
+    return result;
+  }
+
+  std::vector<GenerationOutput> generate(
+      std::span<const std::vector<std::int32_t>> prompts,
+      SamplingParams sampling_params, GenerationMetrics* metrics) {
+    const auto start = Clock::now();
+    GenerationMetrics stats;
+    if (metrics) stats.requests.resize(prompts.size());
+    for (const auto& ids : prompts) {
+      if (ids.empty() || ids.size() > params_.max_model_len
+          || std::ranges::any_of(ids, [&](auto id) {
+               return id < 0 || std::size_t(id) >= model_config_.vocab_size;
+             })) {
+        throw std::invalid_argument(
+            "invalid token input length or vocabulary ID");
+      }
+    }
     scheduler_.clear();
     std::vector<std::size_t> request_ids;
     try {
-      for (const auto& ids : encoded) {
+      const auto submitted_at = Clock::now();
+      for (const auto& ids : prompts) {
         request_ids.push_back(scheduler_.append_sequence(ids, sampling_params));
+        if (metrics) {
+          stats.requests[request_ids.back()].input_tokens = ids.size();
+          stats.input_tokens += ids.size();
+        }
       }
       while (!scheduler_.finished()) {
+        const auto step_start = metrics ? Clock::now() : Clock::time_point{};
         const auto scheduled = scheduler_.schedule();
         if (scheduled.seq_ids.empty()) {
           throw std::runtime_error("scheduler made no progress");
         }
         std::vector<const Sequence*> batch;
+        std::vector<std::size_t> previous_outputs;
         for (const auto id : scheduled.seq_ids) {
-          batch.push_back(&scheduler_.sequence(id));
+          const auto& seq = scheduler_.sequence(id);
+          batch.push_back(&seq);
+          if (metrics) {
+            previous_outputs.push_back(seq.num_generated_tokens());
+            if (scheduled.prefill) {
+              stats.prefill_input_tokens += seq.num_scheduled_tokens;
+            }
+          }
         }
         const auto tokens = model_runner_.run(batch, scheduled.prefill);
         scheduler_.postprocess(scheduled, tokens);
+        if (metrics) {
+          const auto completed_at = Clock::now();
+          const auto step_seconds = elapsed_seconds(step_start, completed_at);
+          if (scheduled.prefill) {
+            ++stats.prefill_steps;
+            stats.prefill_seconds += step_seconds;
+          } else {
+            ++stats.decode_steps;
+            stats.decode_seconds += step_seconds;
+          }
+          for (std::size_t i = 0; i < scheduled.seq_ids.size(); ++i) {
+            const auto id = scheduled.seq_ids[i];
+            const auto generated =
+                scheduler_.sequence(id).num_generated_tokens();
+            if (generated == previous_outputs[i]) continue; // Partial prefill.
+            auto& request = stats.requests[id];
+            const auto latency = elapsed_seconds(submitted_at, completed_at);
+            if (!request.ttft_seconds) request.ttft_seconds = latency;
+            request.output_tokens = generated;
+            request.latency_seconds = latency;
+            if (generated > 1) {
+              request.tpot_seconds =
+                  (latency - *request.ttft_seconds) / (generated - 1);
+            }
+            const auto emitted = generated - previous_outputs[i];
+            stats.output_tokens += emitted;
+            (scheduled.prefill ? stats.prefill_output_tokens
+                               : stats.decode_output_tokens) += emitted;
+          }
+        }
+      }
+      const auto inference_done = Clock::now();
+      if (metrics) {
+        stats.inference_seconds = elapsed_seconds(submitted_at, inference_done);
       }
       std::vector<GenerationOutput> result;
       for (const auto id : request_ids) {
@@ -103,7 +186,16 @@ class LLMEngine::Impl {
             {tokens.begin(), tokens.end()},
         });
       }
+      const auto decoded_at = Clock::now();
+      if (metrics) {
+        stats.detokenization_seconds =
+            elapsed_seconds(inference_done, decoded_at);
+      }
       scheduler_.clear();
+      if (metrics) {
+        stats.total_seconds = elapsed_seconds(start, Clock::now());
+        *metrics = std::move(stats);
+      }
       return result;
     } catch (...) {
       scheduler_.clear();
@@ -146,8 +238,15 @@ std::string LLMEngine::apply_chat_template(
 }
 
 std::vector<GenerationOutput> LLMEngine::generate(
-    std::span<const std::string> prompts, SamplingParams sampling_params) {
-  return pimpl_->generate(prompts, sampling_params);
+    std::span<const std::string> prompts, SamplingParams sampling_params,
+    GenerationMetrics* metrics) {
+  return pimpl_->generate(prompts, sampling_params, metrics);
+}
+
+std::vector<GenerationOutput> LLMEngine::generate(
+    std::span<const std::vector<std::int32_t>> prompts,
+    SamplingParams sampling_params, GenerationMetrics* metrics) {
+  return pimpl_->generate(prompts, sampling_params, metrics);
 }
 
 } // namespace nanovllm

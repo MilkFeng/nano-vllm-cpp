@@ -14,7 +14,7 @@ Scheduler::Scheduler(std::size_t num_blocks, std::size_t block_size,
                      std::size_t max_num_seqs,
                      std::size_t max_num_batched_tokens,
                      std::int32_t eos_token_id, std::size_t max_model_len,
-                     bool use_recurrent_state)
+                     bool use_recurrent_state, bool enable_prefix_cache)
     : num_blocks_(num_blocks),
       block_size_(block_size),
       max_num_seqs_(max_num_seqs),
@@ -22,7 +22,8 @@ Scheduler::Scheduler(std::size_t num_blocks, std::size_t block_size,
       eos_token_id_(eos_token_id),
       max_model_len_(max_model_len),
       use_recurrent_state_(use_recurrent_state),
-      block_manager_(num_blocks, block_size, !use_recurrent_state) {
+      block_manager_(num_blocks, block_size,
+                     !use_recurrent_state && enable_prefix_cache) {
   if (max_num_seqs == 0 || max_num_batched_tokens == 0 || max_model_len == 0) {
     throw std::invalid_argument("scheduler limits must be positive");
   }

@@ -52,6 +52,8 @@ int main(int argc, char** argv) {
   nanovllm::SamplingParams sampling;
   bool json_output = false;
   bool thinking = true;
+  bool report_metrics = false;
+  bool disable_prefix_cache = false;
   std::size_t repeat = 1;
 
   params.seed = dis(gen);
@@ -99,6 +101,10 @@ int main(int argc, char** argv) {
       "Repeat requests on the same engine, printing the last result");
   app.add_flag("--json", json_output,
                "Print generated text and token IDs as JSON");
+  app.add_flag("--metrics", report_metrics,
+               "Log separate prefill/decode timings and per-request TTFT/TPOT");
+  app.add_flag("--no-prefix-cache", disable_prefix_cache,
+               "Disable prefix reuse, including across repeated generations");
 
   argv = app.ensure_utf8(argv);
   CLI11_PARSE(app, argc, argv);
@@ -109,6 +115,7 @@ int main(int argc, char** argv) {
     }
 
     const auto logger = std::make_shared<ConsoleLogger>();
+    params.enable_prefix_cache = !disable_prefix_cache;
     nanovllm::LLMEngine engine(model_path, params, logger);
 
     for (auto& prompt : prompts) {
@@ -120,7 +127,9 @@ int main(int argc, char** argv) {
     std::vector<nanovllm::GenerationOutput> outputs;
     for (std::size_t i = 0; i < repeat; ++i) {
       const auto start = std::chrono::steady_clock::now();
-      outputs = engine.generate(prompts, sampling);
+      nanovllm::GenerationMetrics metrics;
+      outputs = engine.generate(prompts, sampling,
+                                report_metrics ? &metrics : nullptr);
       const auto seconds = std::chrono::duration<double>(
                                std::chrono::steady_clock::now() - start)
                                .count();
@@ -134,6 +143,29 @@ int main(int argc, char** argv) {
           "Generation {}/{}: {} output tokens in {:.3f} s "
           "({:.2f} tok/s; includes prefill)",
           i + 1, repeat, generated_tokens, seconds, tokens_per_second));
+      if (report_metrics) {
+        logger->info(std::format(
+            "Prefill: {} input tokens, {} steps, {:.3f} ms; "
+            "Decode: {} output tokens, {} steps, {:.3f} ms ({:.2f} tok/s)",
+            metrics.prefill_input_tokens, metrics.prefill_steps,
+            metrics.prefill_seconds * 1000, metrics.decode_output_tokens,
+            metrics.decode_steps, metrics.decode_seconds * 1000,
+            metrics.decode_seconds > 0
+                ? metrics.decode_output_tokens / metrics.decode_seconds
+                : 0));
+        for (std::size_t r = 0; r < metrics.requests.size(); ++r) {
+          const auto& request = metrics.requests[r];
+          logger->info(std::format(
+              "Request {}: {} input / {} output tokens; TTFT {} ms; TPOT {} ms",
+              r + 1, request.input_tokens, request.output_tokens,
+              request.ttft_seconds
+                  ? std::format("{:.3f}", *request.ttft_seconds * 1000)
+                  : "n/a",
+              request.tpot_seconds
+                  ? std::format("{:.3f}", *request.tpot_seconds * 1000)
+                  : "n/a"));
+        }
+      }
     }
 
     if (json_output) {

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -37,6 +38,7 @@ struct EngineParams {
 
   std::vector<std::int32_t> gpu_expert_ids;
   std::size_t cpu_threads = 8;
+  bool enable_prefix_cache = true; // Qwen3.5 always disables prefix reuse.
 };
 
 enum class LogLevel { Trace, Debug, Info, Warning, Error };
@@ -59,6 +61,33 @@ struct GenerationOutput {
   std::vector<std::int32_t> token_ids;
 };
 
+struct RequestMetrics {
+  std::size_t input_tokens = 0;
+  std::size_t output_tokens = 0;
+  std::optional<double> ttft_seconds;
+  std::optional<double> tpot_seconds;
+  double latency_seconds = 0;
+};
+
+struct GenerationMetrics {
+  std::size_t input_tokens = 0;
+  std::size_t output_tokens = 0;
+
+  std::size_t prefill_input_tokens = 0;
+  std::size_t prefill_output_tokens = 0;
+  std::size_t decode_output_tokens = 0;
+  std::size_t prefill_steps = 0;
+  std::size_t decode_steps = 0;
+
+  double prefill_seconds = 0;
+  double decode_seconds = 0;
+  double inference_seconds = 0;
+  double tokenization_seconds = 0;
+  double detokenization_seconds = 0;
+  double total_seconds = 0;
+  std::vector<RequestMetrics> requests;
+};
+
 class LLMEngine {
  public:
   LLMEngine(const std::filesystem::path& model_path, EngineParams params,
@@ -79,8 +108,14 @@ class LLMEngine {
 
   // Prompts are already formatted; this method performs raw text generation.
   [[nodiscard]] std::vector<GenerationOutput> generate(
-      std::span<const std::string> prompts,
-      SamplingParams sampling_params = {});
+      std::span<const std::string> prompts, SamplingParams sampling_params = {},
+      GenerationMetrics* metrics = nullptr);
+
+  // Exact-length token inputs, without a chat template or text tokenization.
+  [[nodiscard]] std::vector<GenerationOutput> generate(
+      std::span<const std::vector<std::int32_t>> prompts,
+      SamplingParams sampling_params = {},
+      GenerationMetrics* metrics = nullptr);
 
  private:
   class Impl;

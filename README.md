@@ -70,6 +70,103 @@ C++ 调用方也必须设置 `EngineParams::num_kvcache_blocks`；默认值 `0` 
 
 默认温度为 1，只做全词表温度采样；当前不会加载 `generation_config.json` 中的 temperature、top-k 或 top-p 配置。`--max-model-len` 限制总上下文长度；输出长度仍由 `--max-tokens` 控制，默认最多生成 64 个 token。
 
+### Prefill / Decode benchmark
+
+构建后生成独立的 `nano-vllm-cpp-bench`。它在同一个引擎上运行指定的输入长度、
+输出长度和 batch 大小的笛卡尔积，每个配置先预热，再统计正式轮次。
+
+```bash
+./build/nano-vllm-cpp-bench --model "$HOME/models/Qwen3-0.6B" \
+  --input-tokens 128,1024,4096 --output-tokens 128 --batch-sizes 1,4,8 \
+  --warmup 1 --repeat 3 --num-blocks 2304 --block-size 16 \
+  --max-batched-tokens 1024 --output benchmark.json
+```
+
+`--num-blocks` 是共享 KV 块池大小；上面的配置可容纳 8 条最大总长度为 4224
+的序列。减小块池可能导致等待或抢占重算，实际执行的 prefill token 数会体现在
+报告中。引擎的 `max_model_len` 自动设为最大输入长度加最大输出长度，
+`max_seqs` 设为最大 batch 大小，因此整个矩阵使用相同的资源配置。
+
+Qwen3.5 可以先用小输入、单序列测量，之后再增加长度和并发：
+
+```bash
+./build/nano-vllm-cpp-bench --model "$HOME/models/Qwen3.5-35B-A3B-FP8" \
+  --input-tokens 128 --output-tokens 128 --batch-sizes 1 \
+  --warmup 1 --repeat 3 --num-blocks 32 --block-size 16 \
+  --max-batched-tokens 128 --cpu-threads 8 --gpu-expert-ids 0,2,4 \
+  --output benchmark-qwen35.json
+```
+
+Windows 下对应的可执行文件为
+`build\windows\Release\nano-vllm-cpp-bench.exe`，参数相同。例如 PowerShell：
+
+```powershell
+.\build\windows\Release\nano-vllm-cpp-bench.exe `
+  --model "$HOME\Desktop\PROGRAMS\cuda\models\Qwen3.5-35B-A3B-FP8" `
+  --input-tokens 128 --output-tokens 128 --batch-sizes 1 `
+  --warmup 1 --repeat 3 --num-blocks 32 --block-size 16 `
+  --max-batched-tokens 128 --cpu-threads 8 --gpu-expert-ids 0,2,4 `
+  --output benchmark-qwen35.json
+```
+
+计时口径：
+
+| 指标 | 定义 |
+| --- | --- |
+| Prefill ms | 所有 prefill 调度步的 wall time 之和，包含分块 prefill 和抢占后的重算 |
+| Prefill tok/s | 实际执行的 prefill 输入 token 数 / prefill 秒数；不把生成的首 token 计入分子 |
+| Decode ms | 所有 decode 调度步的 wall time 之和 |
+| Decode tok/s | 在 decode 步实际生成的 token 数 / decode 秒数；多序列时是聚合吞吐 |
+| Decode ms/step | decode 总时间 / decode 步数；一个调度步可以为多条序列各生成一个 token |
+| TTFT | 从整批请求提交到该请求第一个 token 在 CPU 上可用，包含排队和分块 prefill 等待 |
+| TPOT | 每条请求的 `(最后 token 时间 - 首 token 时间) / (输出 token 数 - 1)`，包含期间的调度等待 |
+| Output tok/s | 所有输出 token 数 / 整批 inference 时间，包含 prefill、decode 和调度开销 |
+
+每个阶段的计时覆盖 `schedule → ModelRunner::run → postprocess`。
+`run()` 返回前已经同步 CUDA stream，因此时间包含 GPU 实际执行、数据搬运与
+CPU 专家计算等待。它是端到端执行阶段的 wall time，并非单纯 GPU kernel 时间。
+第一个输出 token 通常由最后一个 prefill 块产生；中间 prefill 块丢弃的采样结果
+不计入输出。请求在抢占后重新 prefill 时产生的新 token 也按实际阶段归类。
+仅输出一个 token 时没有 decode，Decode tok/s 和 TPOT 在 JSON 中为 `null`，
+终端显示 `n/a`。
+
+模型加载、构造输入、聊天模板和输入分词不计入 inference。报告另存模型加载、
+输出解码和整次调用时间。benchmark 固定 greedy、忽略 EOS，确保实际输出长度
+与参数一致；预热和正式轮次都关闭前缀缓存，重复输入不会跳过 prefill。
+输入由 `--prompt` 文本的 token ID 循环填充，逐请求旋转起始位置，得到精确长度，
+不应用聊天模板。这是合成负载；尤其对 MoE，测试真实任务时应同时用 CLI 的
+`--metrics` 观察实际提示词。
+
+终端显示每个配置的阶段耗时与吞吐、TTFT p50/p95 和 TPOT p50。JSON 保存 GPU、
+CUDA、构建类型、模型路径、全部配置、每轮原始数据、逐请求指标和均值、总体标准差、
+min/p50/p95/max。阶段指标的样本是正式轮次，请求指标的样本是正式轮次中的全部
+请求；百分位使用排序后的线性插值。每个配置完成后写入报告，全部完成后
+`completed` 才置为 `true`。报告中的模型路径不代替权重版本标识，比较不同运行时
+请保持权重和构建版本一致。
+
+对真实文本使用现有 CLI：
+
+```bash
+./build/nano-vllm-cpp-cli --model "$HOME/models/Qwen3-0.6B" \
+  --prompt 'Explain how paged attention works.' --thinking=false \
+  --temperature 0 --max-tokens 128 --ignore-eos \
+  --max-model-len 1024 --max-seqs 1 --max-batched-tokens 128 \
+  --num-blocks 64 --block-size 16 --repeat 3 --metrics --no-prefix-cache
+```
+
+`--metrics` 只向 stderr 增加分阶段和逐请求日志，原有 `--json` 输出格式保持不变。
+C++ 调用方可向 `generate()` 或 `generate_tokens()` 的第三个参数传入
+`GenerationMetrics*` 获取原始秒数；不传入时不收集逐步指标。
+
+可用小模型运行 GPU 集成检查，无需安装 Python 推理框架：
+
+```bash
+python3 tests/benchmark_test.py --model "$HOME/models/Qwen3-0.6B"
+```
+
+检查覆盖输入/输出/batch 矩阵、单 token 输出、分块 prefill、预热隔离、
+重复运行不复用前缀、KV 不足时的抢占重算，以及原始计数、计时与汇总统计的关系。
+
 ### Qwen3.5 FP8 CLI
 
 接入的目标是 `Qwen/Qwen3.5-35B-A3B-FP8`，使用下载后的原始分片，无需离线

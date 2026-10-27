@@ -131,3 +131,13 @@ target_link_libraries(
   CLI11::CLI11
   nlohmann_json::nlohmann_json
 )
+
+
+add_executable(nano-vllm-cpp-bench app/benchmark.cc)
+
+target_include_directories(nano-vllm-cpp-bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(nano-vllm-cpp-bench PRIVATE
+  NANOVLLM_BENCH_BUILD_TYPE="$<CONFIG>")
+
+target_link_libraries(nano-vllm-cpp-bench PRIVATE
+  nano-vllm-cpp::nano-vllm-cpp CLI11::CLI11 nlohmann_json::nlohmann_json CUDA::cudart)
