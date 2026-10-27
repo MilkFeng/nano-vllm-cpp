@@ -8,12 +8,14 @@
 
 #include "core/model.hh"
 #include "core/model_config.hh"
+#include "core/expert_placement.hh"
 #include "layers/embedding.hh"
 #include "layers/gated_delta_net.hh"
 #include "layers/lm_head.hh"
 #include "layers/moe.hh"
 #include "layers/rms_norm.hh"
 #include "layers/rotary_embedding.hh"
+#include "nanovllm/nanovllm.hh"
 
 namespace nanovllm {
 
@@ -76,7 +78,7 @@ class Qwen35DecoderLayer final : public Module {
   [[nodiscard]] Qwen35DecoderLayerOutput forward(
       ConstTensorView positions, ConstTensorView hidden_states,
       std::optional<ConstTensorView> residual,
-      const ForwardContext& context) const;
+      const ForwardContext& context, MoEPhaseProfile* profile = nullptr) const;
 
   [[nodiscard]] Qwen35Attention* self_attention() noexcept;
   [[nodiscard]] GatedDeltaNet* linear_attention() noexcept;
@@ -93,7 +95,9 @@ class Qwen35Model final : public Module {
  public:
   Qwen35Model(const ModelConfig& config, Device device,
               const std::vector<std::int32_t>& gpu_expert_ids,
-              std::size_t cpu_threads = 8);
+              std::size_t cpu_threads = 8,
+              const ExpertPlacement& gpu_expert_ids_by_layer = {},
+              bool profile_experts = false);
 
   [[nodiscard]] Tensor forward(ConstTensorView input_ids,
                                ConstTensorView positions,
@@ -106,6 +110,9 @@ class Qwen35Model final : public Module {
   [[nodiscard]] std::size_t num_layers() const noexcept;
   [[nodiscard]] Qwen35DecoderLayer& layer(std::size_t index);
   [[nodiscard]] const Qwen35DecoderLayer& layer(std::size_t index) const;
+  void reset_expert_profile();
+  [[nodiscard]] const std::vector<MoELayerProfile>& expert_profile()
+      const noexcept;
 
  private:
   // Workers and scratch storage outlive every executor.
@@ -114,6 +121,7 @@ class Qwen35Model final : public Module {
   Embedding embed_tokens_;
   ModuleList layers_;
   RMSNorm norm_;
+  mutable std::vector<MoELayerProfile> expert_profile_;
 };
 
 class Qwen35ForCausalLM final : public Model {
@@ -121,7 +129,9 @@ class Qwen35ForCausalLM final : public Model {
   explicit Qwen35ForCausalLM(const ModelConfig& config,
                              Device device = Device::cpu(),
                              std::vector<std::int32_t> gpu_expert_ids = {},
-                             std::size_t cpu_threads = 8);
+                             std::size_t cpu_threads = 8,
+                             const ExpertPlacement& gpu_expert_ids_by_layer = {},
+                             bool profile_experts = false);
 
   ModelLoadResult load_ckpt(const std::filesystem::path& path) override;
 

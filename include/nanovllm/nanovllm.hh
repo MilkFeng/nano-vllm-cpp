@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -37,9 +38,44 @@ struct EngineParams {
   std::uint64_t seed = 0;
 
   std::vector<std::int32_t> gpu_expert_ids;
+  std::vector<std::vector<std::int32_t>> gpu_expert_ids_by_layer;
+  std::filesystem::path gpu_expert_config;
   std::size_t cpu_threads = 8;
+  bool profile_experts = false;
   bool enable_prefix_cache = true; // Qwen3.5 always disables prefix reuse.
 };
+
+struct ModelInfo {
+  std::string model_type;
+  std::size_t max_position_embeddings = 0;
+  std::size_t hidden_size = 0;
+  std::size_t intermediate_size = 0;
+  std::size_t num_hidden_layers = 0;
+  std::size_t num_experts = 0;
+  std::size_t top_k = 0;
+  std::size_t expert_size_bytes = 0;
+  std::vector<std::vector<std::int32_t>> gpu_expert_ids_by_layer;
+};
+
+[[nodiscard]] ModelInfo inspect_model(const std::filesystem::path& model_path,
+                                      const EngineParams& params = {});
+
+struct GPUInfo {
+  std::string name;
+  std::size_t total_memory_bytes = 0;
+  int compute_capability_major = 0;
+  int compute_capability_minor = 0;
+  int cuda_driver_version = 0;
+  int cuda_runtime_version = 0;
+};
+
+struct GPUMemoryInfo {
+  std::size_t free_bytes = 0;
+  std::size_t total_bytes = 0;
+};
+
+[[nodiscard]] GPUInfo gpu_info();
+[[nodiscard]] GPUMemoryInfo gpu_memory_info();
 
 enum class LogLevel { Trace, Debug, Info, Warning, Error };
 
@@ -69,6 +105,26 @@ struct RequestMetrics {
   double latency_seconds = 0;
 };
 
+struct ExpertRoutingProfile {
+  std::size_t tokens = 0;
+  std::size_t calls = 0;
+  std::map<std::size_t, std::size_t> group_sizes;
+};
+
+struct MoEPhaseProfile {
+  std::size_t calls = 0;
+  std::size_t input_tokens = 0;
+  std::size_t gpu_assignments = 0;
+  std::size_t cpu_assignments = 0;
+  double seconds = 0;
+  std::vector<ExpertRoutingProfile> experts;
+};
+
+struct MoELayerProfile {
+  MoEPhaseProfile prefill;
+  MoEPhaseProfile decode;
+};
+
 struct GenerationMetrics {
   std::size_t input_tokens = 0;
   std::size_t output_tokens = 0;
@@ -86,6 +142,7 @@ struct GenerationMetrics {
   double detokenization_seconds = 0;
   double total_seconds = 0;
   std::vector<RequestMetrics> requests;
+  std::vector<MoELayerProfile> expert_profile;
 };
 
 class LLMEngine {
@@ -105,6 +162,9 @@ class LLMEngine {
   [[nodiscard]] std::string apply_chat_template(
       std::span<const ChatMessage> messages,
       ChatTemplateOptions options = {}) const;
+
+  // Encode raw text with the model tokenizer, without a chat template.
+  [[nodiscard]] std::vector<std::int32_t> encode(std::string_view text) const;
 
   // Prompts are already formatted; this method performs raw text generation.
   [[nodiscard]] std::vector<GenerationOutput> generate(

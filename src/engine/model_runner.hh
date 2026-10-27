@@ -29,6 +29,8 @@ class ModelRunner {
   [[nodiscard]] std::size_t num_blocks() const { return num_blocks_; }
   [[nodiscard]] std::size_t kvcache_size_bytes() const;
   [[nodiscard]] std::size_t state_cache_size_bytes() const;
+  void reset_expert_profile();
+  [[nodiscard]] std::vector<MoELayerProfile> expert_profile() const;
 
   [[nodiscard]] std::vector<std::int32_t> run(
       std::span<const Sequence* const> seqs, bool prefill);

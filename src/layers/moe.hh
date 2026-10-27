@@ -14,6 +14,7 @@
 #include "core/module.hh"
 #include "layers/linear.hh"
 #include "layers/swiglu_mlp.hh"
+#include "nanovllm/nanovllm.hh"
 
 namespace nanovllm {
 
@@ -167,7 +168,8 @@ class MoE final : public Module {
   void invalidate_expert_cache() noexcept;
 
   [[nodiscard]] MoEOutput forward(ConstTensorView hidden_states,
-                                  cudaStream_t stream = nullptr) const;
+                                  cudaStream_t stream = nullptr,
+                                  MoEPhaseProfile* profile = nullptr) const;
 
   [[nodiscard]] const MoEConfig& config() const noexcept;
 

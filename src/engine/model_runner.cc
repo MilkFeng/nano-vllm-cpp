@@ -6,6 +6,7 @@
 
 #include "common/cuda_utils.hh"
 #include "core/device.hh"
+#include "core/expert_placement.hh"
 #include "core/forward_context.hh"
 #include "kernels/cuda/kernels.hh"
 
@@ -34,15 +35,23 @@ ModelRunner::ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
         "or reduce max_model_len");
   }
 
+  // Reject malformed lists before allocating model weights or CUDA resources.
+  const auto placement = resolve_expert_placement(
+      config_, params_.gpu_expert_ids, params_.gpu_expert_ids_by_layer);
+  if (params_.profile_experts
+      && config_.architecture != ModelArchitecture::Qwen35Moe) {
+    throw std::invalid_argument("expert profiling requires Qwen3.5 MoE");
+  }
+
   const CudaDeviceGuard guard(0);
   check_cuda(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking),
              "create inference stream");
   try {
     // load model ckpt
     if (config_.architecture == ModelArchitecture::Qwen35Moe) {
-      model_ = std::make_unique<Qwen35ForCausalLM>(config_, Device::cuda(0),
-                                                   params_.gpu_expert_ids,
-                                                   params_.cpu_threads);
+      model_ = std::make_unique<Qwen35ForCausalLM>(
+          config_, Device::cuda(0), std::vector<std::int32_t>{},
+          params_.cpu_threads, placement, params_.profile_experts);
     } else {
       model_ = std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda(0));
     }
@@ -87,6 +96,21 @@ std::size_t ModelRunner::kvcache_size_bytes() const {
 
 std::size_t ModelRunner::state_cache_size_bytes() const {
   return hybrid_cache_ ? hybrid_cache_->state_bytes() : 0;
+}
+
+void ModelRunner::reset_expert_profile() {
+  if (params_.profile_experts) {
+    static_cast<Qwen35ForCausalLM&>(*model_)
+        .transformer()
+        .reset_expert_profile();
+  }
+}
+
+std::vector<MoELayerProfile> ModelRunner::expert_profile() const {
+  return params_.profile_experts ? static_cast<Qwen35ForCausalLM&>(*model_)
+                                       .transformer()
+                                       .expert_profile()
+                                 : std::vector<MoELayerProfile>{};
 }
 
 std::vector<std::int32_t> ModelRunner::run(

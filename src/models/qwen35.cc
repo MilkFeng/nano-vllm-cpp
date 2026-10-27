@@ -350,7 +350,7 @@ Qwen35DecoderLayer::Qwen35DecoderLayer(
 Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
     ConstTensorView positions, ConstTensorView hidden_states,
     std::optional<ConstTensorView> residual,
-    const ForwardContext& context) const {
+    const ForwardContext& context, MoEPhaseProfile* profile) const {
   RMSNormOutput before;
   auto residual_view = hidden_states;
   if (residual) {
@@ -370,7 +370,8 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
   auto after = post_attention_layernorm_.forward(attention.view().as_const(),
                                                  residual_view, context.stream);
   auto output =
-      mlp_.forward(after.hidden_states.view().as_const(), context.stream);
+      mlp_.forward(after.hidden_states.view().as_const(), context.stream,
+                   profile);
 
   return {std::move(output.hidden_states), std::move(after.residual)};
 }
@@ -389,7 +390,9 @@ MoE& Qwen35DecoderLayer::mlp() noexcept {
 
 Qwen35Model::Qwen35Model(const ModelConfig& config, Device device,
                          const std::vector<std::int32_t>& gpu_expert_ids,
-                         std::size_t cpu_threads)
+                         std::size_t cpu_threads,
+                         const ExpertPlacement& gpu_expert_ids_by_layer,
+                         bool profile_experts)
     : cpu_pool_(cpu_threads),
       embed_tokens_(config.vocab_size, config.hidden_size, DataType::Float32,
                     device),
@@ -398,10 +401,21 @@ Qwen35Model::Qwen35Model(const ModelConfig& config, Device device,
   register_module("embed_tokens", embed_tokens_);
   register_module("layers", layers_);
   register_module("norm", norm_);
+  const auto placement = resolve_expert_placement(config, gpu_expert_ids,
+                                                 gpu_expert_ids_by_layer);
   for (std::size_t i = 0; i < config.num_hidden_layers; ++i) {
-    layers_.emplace_back<Qwen35DecoderLayer>(config, i, device, gpu_expert_ids,
+    layers_.emplace_back<Qwen35DecoderLayer>(config, i, device, placement[i],
                                              cpu_pool_, moe_workspace_);
   }
+  if (profile_experts) expert_profile_.resize(config.num_hidden_layers);
+}
+
+void Qwen35Model::reset_expert_profile() {
+  for (auto& layer : expert_profile_) layer = {};
+}
+
+const std::vector<MoELayerProfile>& Qwen35Model::expert_profile() const noexcept {
+  return expert_profile_;
 }
 
 Tensor Qwen35Model::forward(ConstTensorView input_ids,
@@ -415,8 +429,12 @@ Tensor Qwen35Model::forward(ConstTensorView input_ids,
       residual_view = residual.view().as_const();
     }
 
+    auto* profile = expert_profile_.empty()
+                        ? nullptr
+                        : context.is_prefill ? &expert_profile_[i].prefill
+                                             : &expert_profile_[i].decode;
     auto output = layer(i).forward(positions, hidden.view().as_const(),
-                                   residual_view, context);
+                                   residual_view, context, profile);
 
     hidden = std::move(output.hidden_states);
     residual = std::move(output.residual);
@@ -468,10 +486,13 @@ const Qwen35DecoderLayer& Qwen35Model::layer(std::size_t i) const {
 
 Qwen35ForCausalLM::Qwen35ForCausalLM(const ModelConfig& config, Device device,
                                      std::vector<std::int32_t> gpu_expert_ids,
-                                     std::size_t cpu_threads)
+                                     std::size_t cpu_threads,
+                                     const ExpertPlacement& gpu_expert_ids_by_layer,
+                                     bool profile_experts)
     : config_(config),
       device_(device),
-      model_(config_, device_, gpu_expert_ids, cpu_threads),
+      model_(config_, device_, gpu_expert_ids, cpu_threads,
+             gpu_expert_ids_by_layer, profile_experts),
       lm_head_(
           config_.vocab_size, config_.hidden_size, DataType::Float32, device_,
           config_.tie_word_embeddings ? &model_.embed_tokens().weight().tensor()

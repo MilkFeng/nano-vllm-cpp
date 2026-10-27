@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "num_hidden_layers": 40,
+  "num_experts": 256,
+  "default": [0, 2, 4],
+  "layers": {
+    "0": [5, 19, 87],
+    "1": [2, 41, 128, 203],
+    "2": []
+  }
+}

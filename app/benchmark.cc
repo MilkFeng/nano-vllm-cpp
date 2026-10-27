@@ -1,5 +1,3 @@
-#include <cuda_runtime_api.h>
-
 #include <CLI/CLI.hpp>
 #include <algorithm>
 #include <chrono>
@@ -19,19 +17,11 @@
 #include <thread>
 #include <vector>
 
-#include "common/cuda_utils.hh"
-#include "core/model_config.hh"
-#include "engine/tokenizer.hh"
 #include "nanovllm/nanovllm.hh"
 
 namespace {
 
 using Json = nlohmann::json;
-
-class SilentLogger final : public nanovllm::Logger {
- public:
-  void log(nanovllm::LogLevel, std::string_view) override {}
-};
 
 Json ratio(double numerator, double denominator) {
   return denominator > 0 ? Json(numerator / denominator) : Json(nullptr);
@@ -66,6 +56,30 @@ Json describe(std::vector<double> values) {
           {"max", values.back()}};
 }
 
+Json serialize(const nanovllm::MoEPhaseProfile& phase) {
+  Json experts = Json::array();
+  for (std::size_t id = 0; id < phase.experts.size(); ++id) {
+    const auto& expert = phase.experts[id];
+    if (expert.calls == 0) continue;
+    Json groups = Json::object();
+    for (const auto& [rows, calls] : expert.group_sizes)
+      groups[std::to_string(rows)] = calls;
+    experts.push_back({{"id", id},
+                       {"tokens", expert.tokens},
+                       {"calls", expert.calls},
+                       {"group_sizes", std::move(groups)}});
+  }
+  return {{"calls", phase.calls},
+          {"input_tokens", phase.input_tokens},
+          {"gpu_assignments", phase.gpu_assignments},
+          {"cpu_assignments", phase.cpu_assignments},
+          {"gpu_assignment_ratio",
+           ratio(phase.gpu_assignments,
+                 phase.gpu_assignments + phase.cpu_assignments)},
+          {"moe_ms", phase.seconds * 1000},
+          {"experts", std::move(experts)}};
+}
+
 Json serialize(const nanovllm::GenerationMetrics& metrics) {
   Json requests = Json::array();
   for (const auto& request : metrics.requests) {
@@ -75,7 +89,7 @@ Json serialize(const nanovllm::GenerationMetrics& metrics) {
                         {"tpot_ms", milliseconds(request.tpot_seconds)},
                         {"latency_ms", request.latency_seconds * 1000}});
   }
-  return {
+  Json result = {
       {"input_tokens", metrics.input_tokens},
       {"output_tokens", metrics.output_tokens},
       {"prefill",
@@ -100,6 +114,17 @@ Json serialize(const nanovllm::GenerationMetrics& metrics) {
       {"detokenization_ms", metrics.detokenization_seconds * 1000},
       {"requests", std::move(requests)},
   };
+  if (!metrics.expert_profile.empty()) {
+    auto& profile = result["expert_profile"] = Json::array();
+    for (std::size_t layer = 0; layer < metrics.expert_profile.size();
+         ++layer) {
+      const auto& entry = metrics.expert_profile[layer];
+      profile.push_back({{"layer", layer},
+                         {"prefill", serialize(entry.prefill)},
+                         {"decode", serialize(entry.decode)}});
+    }
+  }
+  return result;
 }
 
 Json summarize(const Json& runs) {
@@ -154,6 +179,7 @@ int main(int argc, char** argv) {
   CLI::App app{
       "Prefill/decode benchmark with exact-length synthetic token inputs"};
   std::string model_path, output_path = "benchmark.json";
+  std::string expert_config_path, prompts_path;
   std::string seed_text =
       "The quick brown fox jumps over the lazy dog. "
       "Explain how computers process information. ";
@@ -183,8 +209,14 @@ int main(int argc, char** argv) {
   app.add_option("--repeat", repeat,
                  "Measured generations per case (default: 3)")
       ->check(CLI::PositiveNumber);
-  app.add_option("--prompt", seed_text,
-                 "Seed text whose token IDs are cycled to fill inputs");
+  auto* prompt_option =
+      app.add_option("--prompt", seed_text,
+                     "Seed text whose token IDs are cycled to fill inputs");
+  app.add_option(
+         "--prompts-file", prompts_path,
+         "JSON array of seed texts, rotated across requests and repeats")
+      ->check(CLI::ExistingFile)
+      ->excludes(prompt_option);
   app.add_option("--num-blocks", params.num_kvcache_blocks,
                  "Shared KV cache block count")
       ->required()
@@ -199,9 +231,17 @@ int main(int argc, char** argv) {
   app.add_option("--cpu-threads", params.cpu_threads,
                  "Qwen3.5 CPU expert workers")
       ->check(CLI::PositiveNumber);
-  app.add_option("--gpu-expert-ids", params.gpu_expert_ids,
-                 "Qwen3.5 fixed GPU expert IDs, comma-separated")
-      ->delimiter(',');
+  auto* expert_ids_option =
+      app.add_option("--gpu-expert-ids", params.gpu_expert_ids,
+                     "Qwen3.5 fixed GPU expert IDs, comma-separated")
+          ->delimiter(',');
+  app.add_option("--gpu-expert-config", expert_config_path,
+                 "Qwen3.5 per-layer static GPU expert JSON")
+      ->check(CLI::ExistingFile)
+      ->excludes(expert_ids_option);
+  app.add_flag("--profile-experts", params.profile_experts,
+               "Collect per-layer prefill/decode routing counts and group "
+               "sizes; adds overhead");
   app.add_option("--seed", params.seed,
                  "Random seed recorded with the run (default: 42)");
   app.add_option("-o,--output", output_path,
@@ -220,35 +260,33 @@ int main(int argc, char** argv) {
     params.max_model_len = max_input + max_output;
     params.max_num_seqs =
         *std::max_element(batch_sizes.begin(), batch_sizes.end());
-    const auto config = nanovllm::ModelConfig::read_from_file(
-        std::filesystem::path(model_path) / "config.json");
+    params.gpu_expert_config = expert_config_path;
+    const auto config = nanovllm::inspect_model(model_path, params);
+    const auto& placement = config.gpu_expert_ids_by_layer;
+    if (!expert_config_path.empty()) {
+      params.gpu_expert_ids_by_layer = placement;
+      params.gpu_expert_config.clear();
+    }
     // Validate before allocating the model or constructing large input vectors.
     if (params.max_model_len > config.max_position_embeddings) {
       throw std::invalid_argument(
           "input + output length exceeds model context limit");
     }
-    nanovllm::Tokenizer tokenizer(
-        std::make_shared<SilentLogger>(),
-        std::filesystem::path(model_path) / "tokenizer.json",
-        std::filesystem::path(model_path) / "tokenizer_config.json");
-    const auto seed_ids = tokenizer.encode(seed_text);
-    if (seed_ids.empty())
-      throw std::invalid_argument("seed prompt encodes to no tokens");
-
-    nanovllm::check_cuda(cudaSetDevice(0), "select benchmark GPU");
-    cudaDeviceProp properties{};
-    nanovllm::check_cuda(cudaGetDeviceProperties(&properties, 0),
-                         "read GPU properties");
-    int runtime = 0, driver = 0;
-    nanovllm::check_cuda(cudaRuntimeGetVersion(&runtime),
-                         "read CUDA runtime version");
-    nanovllm::check_cuda(cudaDriverGetVersion(&driver),
-                         "read CUDA driver version");
+    std::vector<std::string> seed_texts{seed_text};
+    if (!prompts_path.empty()) {
+      std::ifstream input(prompts_path);
+      const auto document = Json::parse(input);
+      if (!document.is_array() || document.empty())
+        throw std::invalid_argument(
+            "prompts file must be a nonempty JSON string array");
+      seed_texts = document.get<std::vector<std::string>>();
+    }
+    const auto properties = nanovllm::gpu_info();
     const auto now = std::time(nullptr);
     std::ostringstream timestamp;
     timestamp << std::put_time(std::gmtime(&now), "%Y-%m-%dT%H:%M:%SZ");
     Json report = {
-        {"schema_version", 1},
+        {"schema_version", 2},
         {"completed", false},
         {"started_at_utc", timestamp.str()},
         {"model", std::filesystem::absolute(model_path).string()},
@@ -256,10 +294,12 @@ int main(int argc, char** argv) {
         {"build_type", NANOVLLM_BENCH_BUILD_TYPE},
         {"gpu",
          {{"name", properties.name},
-          {"total_memory_bytes", properties.totalGlobalMem},
-          {"compute_capability", {properties.major, properties.minor}},
-          {"cuda_runtime_version", runtime},
-          {"cuda_driver_version", driver}}},
+          {"total_memory_bytes", properties.total_memory_bytes},
+          {"compute_capability",
+           {properties.compute_capability_major,
+            properties.compute_capability_minor}},
+          {"cuda_runtime_version", properties.cuda_runtime_version},
+          {"cuda_driver_version", properties.cuda_driver_version}}},
         {"cpu_logical_threads", std::thread::hardware_concurrency()},
         {"settings",
          {{"input_tokens", input_lengths},
@@ -271,7 +311,9 @@ int main(int argc, char** argv) {
           {"temperature", 0},
           {"ignore_eos", true},
           {"seed", params.seed},
-          {"seed_text", seed_text},
+          {"seed_text", prompts_path.empty() ? Json(seed_text) : Json(nullptr)},
+          {"prompt_texts", seed_texts},
+          {"profile_experts", params.profile_experts},
           {"max_model_len", params.max_model_len},
           {"max_seqs", params.max_num_seqs},
           {"max_batched_tokens", params.max_num_batched_tokens},
@@ -281,6 +323,28 @@ int main(int argc, char** argv) {
           {"gpu_expert_ids", params.gpu_expert_ids}}},
         {"cases", Json::array()},
     };
+    if (!placement.empty()) {
+      Json layers = Json::object();
+      std::size_t slots = 0;
+      for (std::size_t i = 0; i < placement.size(); ++i) {
+        layers[std::to_string(i)] = placement[i];
+        slots += placement[i].size();
+      }
+      report["expert_placement"] = {
+          {"num_hidden_layers", config.num_hidden_layers},
+          {"num_experts", config.num_experts},
+          {"top_k", config.top_k},
+          {"hidden_size", config.hidden_size},
+          {"intermediate_size", config.intermediate_size},
+          {"expert_size_bytes", config.expert_size_bytes},
+          {"gpu_slots", slots},
+          {"cache_bytes", slots * config.expert_size_bytes},
+          {"config_file",
+           expert_config_path.empty()
+               ? Json(nullptr)
+               : Json(std::filesystem::absolute(expert_config_path).string())},
+          {"layers", std::move(layers)}};
+    }
     save(output_path, report);
     std::cout << "Loading " << model_path << " on " << properties.name
               << "...\n"
@@ -294,6 +358,18 @@ int main(int argc, char** argv) {
         std::chrono::duration<double>(std::chrono::steady_clock::now()
                                       - load_start)
             .count();
+    const auto memory = nanovllm::gpu_memory_info();
+    report["memory_after_load"] = {{"free_bytes", memory.free_bytes},
+                                   {"total_bytes", memory.total_bytes}};
+    std::vector<std::vector<std::int32_t>> seed_ids;
+    for (const auto& text : seed_texts) {
+      seed_ids.push_back(engine.encode(text));
+      if (seed_ids.back().empty())
+        throw std::invalid_argument("seed prompt encodes to no tokens");
+    }
+    if (params.profile_experts)
+      std::cout
+          << "Expert profiling enabled: timings include profiling overhead.\n";
     std::cout << std::setw(7) << "Input" << std::setw(8) << "Output"
               << std::setw(7) << "Batch" << std::setw(13) << "Prefill ms"
               << std::setw(14) << "Prefill tok/s" << std::setw(13)
@@ -303,18 +379,19 @@ int main(int argc, char** argv) {
     for (const auto input_length : input_lengths) {
       for (const auto output_length : output_lengths) {
         for (const auto batch_size : batch_sizes) {
-          std::vector<std::vector<std::int32_t>> prompts(
-              batch_size, std::vector<std::int32_t>(input_length));
-          for (std::size_t request = 0; request < batch_size; ++request) {
-            for (std::size_t token = 0; token < input_length; ++token) {
-              prompts[request][token] =
-                  seed_ids[(token + request) % seed_ids.size()];
-            }
-          }
           const nanovllm::SamplingParams sampling{.temperature = 0,
                                                   .max_tokens = output_length,
                                                   .ignore_eos = true};
-          const auto run = [&](nanovllm::GenerationMetrics* metrics) {
+          const auto run = [&](std::size_t round,
+                               nanovllm::GenerationMetrics* metrics) {
+            std::vector<std::vector<std::int32_t>> prompts(
+                batch_size, std::vector<std::int32_t>(input_length));
+            for (std::size_t request = 0; request < batch_size; ++request) {
+              const auto& seed =
+                  seed_ids[(round * batch_size + request) % seed_ids.size()];
+              for (std::size_t token = 0; token < input_length; ++token)
+                prompts[request][token] = seed[(token + request) % seed.size()];
+            }
             const auto outputs = engine.generate(prompts, sampling, metrics);
             for (const auto& output : outputs) {
               if (output.token_ids.size() != output_length) {
@@ -323,11 +400,11 @@ int main(int argc, char** argv) {
               }
             }
           };
-          for (std::size_t i = 0; i < warmup; ++i) run(nullptr);
+          for (std::size_t i = 0; i < warmup; ++i) run(i, nullptr);
           Json runs = Json::array();
           for (std::size_t i = 0; i < repeat; ++i) {
             nanovllm::GenerationMetrics metrics;
-            run(&metrics);
+            run(i, &metrics);
             runs.push_back(serialize(metrics));
           }
           auto summary = summarize(runs);

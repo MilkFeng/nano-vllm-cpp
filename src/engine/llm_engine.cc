@@ -5,6 +5,7 @@
 #include <magic_enum/magic_enum.hpp>
 #include <stdexcept>
 
+#include "core/expert_placement.hh"
 #include "core/model_config.hh"
 #include "engine/model_runner.hh"
 #include "engine/scheduler.hh"
@@ -38,27 +39,35 @@ class LLMEngine::Impl {
   Impl(const std::filesystem::path& model_path, EngineParams params,
        std::shared_ptr<Logger> logger)
       : model_path_(model_path),
-        params_(params),
-        logger_(logger ? std::move(logger) : null_logger()),
         model_config_(ModelConfig::read_from_file(model_path_ / "config.json")),
+        params_(resolve_engine_params(model_config_, std::move(params))),
+        logger_(logger ? std::move(logger) : null_logger()),
         tokenizer_(logger_, model_path_ / "tokenizer.json",
                    model_path_ / "tokenizer_config.json"),
-        model_runner_(logger_, params, model_config_, model_path_),
-        scheduler_(model_runner_.num_blocks(), params.kvcache_block_size,
-                   params.max_num_seqs, params.max_num_batched_tokens,
-                   tokenizer_.eos_token_id(), params.max_model_len,
+        model_runner_(logger_, params_, model_config_, model_path_),
+        scheduler_(model_runner_.num_blocks(), params_.kvcache_block_size,
+                   params_.max_num_seqs, params_.max_num_batched_tokens,
+                   tokenizer_.eos_token_id(), params_.max_model_len,
                    model_config_.architecture == ModelArchitecture::Qwen35Moe,
-                   params.enable_prefix_cache) {
+                   params_.enable_prefix_cache) {
     logger_->info(std::format(
         "Loaded {}", magic_enum::enum_name(model_config_.architecture)));
 
     if (model_config_.architecture == ModelArchitecture::Qwen35Moe) {
+      const auto placement =
+          resolve_expert_placement(model_config_, params_.gpu_expert_ids,
+                                   params_.gpu_expert_ids_by_layer);
+      std::size_t slots = 0;
+      for (const auto& ids : placement) {
+        slots += ids.size();
+      }
       logger_->info(std::format(
           "{} recurrent state slots ({} bytes for conv and "
           "recurrent state); "
-          "prefix cache disabled; {} GPU routed experts per layer",
-          params_.max_num_seqs, model_runner_.state_cache_size_bytes(),
-          params_.gpu_expert_ids.size()));
+          "prefix cache disabled; {} GPU routed expert slots ({} bytes) across "
+          "{} layers",
+          params_.max_num_seqs, model_runner_.state_cache_size_bytes(), slots,
+          slots * routed_expert_size_bytes(model_config_), placement.size()));
     }
   }
 
@@ -73,6 +82,10 @@ class LLMEngine::Impl {
   std::string apply_chat_template(std::span<const ChatMessage> messages,
                                   ChatTemplateOptions options) const {
     return tokenizer_.apply_chat_template(messages, options);
+  }
+
+  std::vector<std::int32_t> encode(std::string_view text) const {
+    return tokenizer_.encode(text);
   }
 
   std::vector<GenerationOutput> generate(std::span<const std::string> prompts,
@@ -102,7 +115,10 @@ class LLMEngine::Impl {
       SamplingParams sampling_params, GenerationMetrics* metrics) {
     const auto start = Clock::now();
     GenerationMetrics stats;
-    if (metrics) stats.requests.resize(prompts.size());
+    model_runner_.reset_expert_profile();
+    if (metrics) {
+      stats.requests.resize(prompts.size());
+    }
     for (const auto& ids : prompts) {
       if (ids.empty() || ids.size() > params_.max_model_len
           || std::ranges::any_of(ids, [&](auto id) {
@@ -190,6 +206,7 @@ class LLMEngine::Impl {
       if (metrics) {
         stats.detokenization_seconds =
             elapsed_seconds(inference_done, decoded_at);
+        stats.expert_profile = model_runner_.expert_profile();
       }
       scheduler_.clear();
       if (metrics) {
@@ -205,11 +222,11 @@ class LLMEngine::Impl {
 
  private:
   std::filesystem::path model_path_;
+  ModelConfig model_config_;
   EngineParams params_;
 
   std::shared_ptr<Logger> logger_;
 
-  ModelConfig model_config_;
   Tokenizer tokenizer_;
 
   ModelRunner model_runner_;
@@ -235,6 +252,10 @@ LLMEngine& LLMEngine::operator=(LLMEngine&& other) noexcept {
 std::string LLMEngine::apply_chat_template(
     std::span<const ChatMessage> messages, ChatTemplateOptions options) const {
   return pimpl_->apply_chat_template(messages, options);
+}
+
+std::vector<std::int32_t> LLMEngine::encode(std::string_view text) const {
+  return pimpl_->encode(text);
 }
 
 std::vector<GenerationOutput> LLMEngine::generate(

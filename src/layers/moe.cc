@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <future>
@@ -549,7 +550,9 @@ void MoE::populate_expert_cache(cudaStream_t stream) {
 }
 
 MoEOutput MoE::forward(ConstTensorView hidden_states,
-                       cudaStream_t stream) const {
+                       cudaStream_t stream, MoEPhaseProfile* profile) const {
+  const auto started = profile ? std::chrono::steady_clock::now()
+                               : std::chrono::steady_clock::time_point{};
   if (!cache_ || !cache_->ready()) {
     throw std::logic_error(
         "call populate_expert_cache after initializing MoE weights");
@@ -612,6 +615,24 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
     // work.
     cudaStreamSynchronize(stream);
     throw;
+  }
+  if (profile) {
+    profile->seconds += std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - started).count();
+    ++profile->calls;
+    profile->input_tokens += tokens;
+    profile->gpu_assignments += stats.gpu_experts;
+    profile->cpu_assignments += stats.cpu_experts;
+    profile->experts.resize(config_.num_experts);
+    std::vector<std::size_t> counts(config_.num_experts, 0);
+    for (const auto id : host_ids) ++counts[id];
+    for (std::size_t id = 0; id < counts.size(); ++id) {
+      if (counts[id] == 0) continue;
+      auto& expert = profile->experts[id];
+      expert.tokens += counts[id];
+      ++expert.calls;
+      ++expert.group_sizes[counts[id]];
+    }
   }
   return {
       std::move(output),

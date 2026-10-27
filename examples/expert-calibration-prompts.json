@@ -1,0 +1,6 @@
+[
+  "Explain how a CPU cache works, including spatial locality, temporal locality, and cache misses.",
+  "用中文说明连续批处理如何改善大模型推理吞吐，并讨论首 token 延迟与并发数的关系。",
+  "Write a C++ implementation of a thread-safe bounded queue and explain its synchronization.",
+  "Solve this problem step by step: how many distinct permutations of the word MISSISSIPPI exist?"
+]

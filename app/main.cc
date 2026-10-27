@@ -47,6 +47,7 @@ int main(int argc, char** argv) {
 
   CLI::App app{"Single-GPU Qwen3 / Qwen3.5 MoE inference with C++ and CUDA"};
   std::string model_path;
+  std::string expert_config_path;
   std::vector<std::string> prompts;
   nanovllm::EngineParams params;
   nanovllm::SamplingParams sampling;
@@ -88,10 +89,16 @@ int main(int argc, char** argv) {
                  "Total KV cache blocks shared by all sequences")
       ->required()
       ->check(CLI::PositiveNumber);
-  app.add_option("--gpu-expert-ids", params.gpu_expert_ids,
-                 "Qwen3.5 fixed GPU routed expert IDs for every layer; empty "
-                 "by default")
-      ->delimiter(',');
+  auto* expert_ids_option =
+      app.add_option(
+             "--gpu-expert-ids", params.gpu_expert_ids,
+             "Qwen3.5 fixed GPU routed expert IDs for every layer; empty "
+             "by default")
+          ->delimiter(',');
+  app.add_option("--gpu-expert-config", expert_config_path,
+                 "Qwen3.5 per-layer static GPU expert JSON")
+      ->check(CLI::ExistingFile)
+      ->excludes(expert_ids_option);
   app.add_option("--cpu-threads", params.cpu_threads,
                  "Qwen3.5 CPU expert workers shared by all layers (default: 8)")
       ->check(CLI::PositiveNumber);
@@ -115,6 +122,7 @@ int main(int argc, char** argv) {
     }
 
     const auto logger = std::make_shared<ConsoleLogger>();
+    params.gpu_expert_config = expert_config_path;
     params.enable_prefix_cache = !disable_prefix_cache;
     nanovllm::LLMEngine engine(model_path, params, logger);
 

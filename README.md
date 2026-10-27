@@ -109,6 +109,16 @@ Windows 下对应的可执行文件为
   --output benchmark-qwen35.json
 ```
 
+Qwen3.5 还支持 `--gpu-expert-config placement.json`，为每层指定不同的常驻
+GPU 专家；它与 `--gpu-expert-ids` 互斥。`--profile-experts` 在报告中记录
+prefill/decode 各自的路由频率、专家聚合 token 数分布和整段 MoE 时间，预热轮次
+不计入报告。该模式有统计开销，性能比较时应关闭。
+
+`scripts/expert_placement.py` 仅依赖 Python 3.9+ 标准库，可从统计报告生成静态配置，
+并自动比较相同显存预算下的均匀放置与热点放置，输出 `comparison.json`。
+Windows 使用 `python` 运行同一脚本。完整命令和配置格式见
+[静态专家放置 benchmark](docs/static-expert-placement.md)。
+
 计时口径：
 
 | 指标 | 定义 |
