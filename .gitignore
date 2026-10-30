@@ -5,3 +5,7 @@ compile_commands.json
 *.log
 *.tmp
 *.out
+
+
+*.pyc
+**/__pycache__

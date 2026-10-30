@@ -140,3 +140,26 @@ target_compile_definitions(nano-vllm-cpp-bench PRIVATE
 
 target_link_libraries(nano-vllm-cpp-bench PRIVATE
   nano-vllm-cpp::nano-vllm-cpp CLI11::CLI11 nlohmann_json::nlohmann_json)
+
+# =========== COMP KERNEL ===========
+
+add_executable(nano-vllm-cpp-comp-gemm EXCLUDE_FROM_ALL
+  exp/gemm/comp_gemm.cc
+  exp/gemm/comp_gemm_main.cc
+  exp/gemm/gemm_benchmark.cc
+  exp/gemm/gemm_baseline.cu
+)
+
+target_include_directories(nano-vllm-cpp-comp-gemm PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(nano-vllm-cpp-comp-gemm PRIVATE
+  nano-vllm-cpp::nano-vllm-cpp CUDA::cudart CUDA::cublas CUDA::cublasLt
+  CLI11::CLI11 nlohmann_json::nlohmann_json
+)
+
+target_compile_definitions(nano-vllm-cpp-comp-gemm PRIVATE
+  NANOVLLM_GEMM_BUILD_TYPE="$<CONFIG>"
+  NANOVLLM_GEMM_CUDA_COMPILER="${CMAKE_CUDA_COMPILER_VERSION}"
+)

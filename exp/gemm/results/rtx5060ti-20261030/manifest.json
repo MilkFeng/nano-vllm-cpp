@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "started_at_utc": "2026-10-30T15:30:58.557152+00:00",
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "cpu": "x86_64",
+  "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+  "git_head": {
+    "command": [
+      "git",
+      "rev-parse",
+      "HEAD"
+    ],
+    "exit_code": 0,
+    "stdout": "9eb96e57db638224ba74c3c3aa4c671c393dfde9",
+    "stderr": ""
+  },
+  "git_status": {
+    "command": [
+      "git",
+      "status",
+      "--short"
+    ],
+    "exit_code": 0,
+    "stdout": "M  CMakeLists.txt\nA  docs/performance-plan.md\nAM exp/gemm/README.md\nA  exp/gemm/comp_gemm.cc\nA  exp/gemm/comp_gemm.hh\nA  exp/gemm/comp_gemm_main.cc\nA  exp/gemm/gemm_baseline.cu\nA  exp/gemm/gemm_benchmark.cc\nA  exp/gemm/gemm_benchmark.hh\nAM exp/gemm/run_gemm.py\nM  src/kernels/cuda/linear.cu\n?? exp/gemm/__pycache__/\n?? exp/gemm/test_report.py",
+    "stderr": ""
+  },
+  "executable": "/home/feng/nano-vllm-cpp/build/nano-vllm-cpp-comp-gemm",
+  "executable_sha256": "07727ae9331da8b84bec795025e00d8133722e571a7f42f83efc057eeb7150d1",
+  "source_sha256": {
+    "CMakeLists.txt": "b14ac5d62822f019b7b33d7ac0812b4f56b741277e5a164014e75671e5848167",
+    "src/kernels/cuda/linear.cu": "b73c9f5558e3a29ec30329675d705a324c461092e7dc43dc7c921aed649cdaeb",
+    "src/kernels/cuda/common.cuh": "0fabb906b8bf8c6cbdfe4255efe376082497c26675a347588fa52e4ae11165ee",
+    "src/kernels/cuda/reduce.cuh": "a1cea6f3d8b6123e55de6db033ffa1a2ce140697820c5f5eff00d4c5a69ee859",
+    "exp/gemm/comp_gemm.cc": "b972e4c9c01bd1178d5819476d81e6f2af8dfa1d0607902d48f98447bf4b7902",
+    "exp/gemm/comp_gemm_main.cc": "ca89e06d918231ff4238cb4a11d664a2cbac7e424235b331f81dc511fae117fc",
+    "exp/gemm/gemm_benchmark.cc": "4ac68a9f9af94db55abcc5ec15b2def74758baf445477f1a2865c6569d604ced",
+    "exp/gemm/gemm_baseline.cu": "d4b783a1459caf0c7b304761277f783c8b2b0da842b5d720c7c0da0ad745f614",
+    "exp/gemm/comp_gemm.hh": "0e19f6b8b76cde69440ce85df175e2385e4271ca21b97a1e66ab29eb06c438ce",
+    "exp/gemm/gemm_benchmark.hh": "5d7325bc1bcfdab0ae084006e48b753b9298bc265491df372e6cd14ad61dbbeb",
+    "exp/gemm/run_gemm.py": "3fe9c6ef7ed547c1daa92397b136d09b6a58df5bfd0f201e97ec8a189dfe6650",
+    "exp/gemm/test_report.py": "8bf4c07d2213a5dd27988595725b1177e19979a76671c870170679e90f859c39"
+  },
+  "gpu_before": {
+    "command": [
+      "nvidia-smi",
+      "--query-gpu=name,uuid,driver_version,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,clocks.sm,clocks.mem,pstate",
+      "--format=csv,noheader,nounits"
+    ],
+    "exit_code": 0,
+    "stdout": "NVIDIA GeForce RTX 5060 Ti, GPU-4b8ffcdd-ff37-d70d-1af6-5c24482bee9d, 617.42, 16311, 1902, 24, 48, 44.40, 2175, 7001, P3",
+    "stderr": ""
+  },
+  "runs": [
+    {
+      "command": [
+        "/home/feng/nano-vllm-cpp/build/nano-vllm-cpp-comp-gemm",
+        "--suite",
+        "full",
+        "--cache",
+        "both",
+        "--output",
+        "/home/feng/nano-vllm-cpp/build/gemm-results/resume-full-20261030/run-001.json",
+        "--samples",
+        "15",
+        "--target-ms",
+        "10",
+        "--warmup",
+        "20",
+        "--seed",
+        "42",
+        "--workspace-mib",
+        "32",
+        "--heuristic-candidates",
+        "8"
+      ],
+      "gpu_before": {
+        "command": [
+          "nvidia-smi",
+          "--query-gpu=name,uuid,driver_version,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,clocks.sm,clocks.mem,pstate",
+          "--format=csv,noheader,nounits"
+        ],
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, GPU-4b8ffcdd-ff37-d70d-1af6-5c24482bee9d, 617.42, 16311, 1902, 24, 48, 43.93, 2175, 7001, P3",
+        "stderr": ""
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 94.86208222700043,
+      "gpu_after": {
+        "command": [
+          "nvidia-smi",
+          "--query-gpu=name,uuid,driver_version,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,clocks.sm,clocks.mem,pstate",
+          "--format=csv,noheader,nounits"
+        ],
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, GPU-4b8ffcdd-ff37-d70d-1af6-5c24482bee9d, 617.42, 16311, 1827, 76, 50, 94.03, 2760, 14001, P0",
+        "stderr": ""
+      }
+    },
+    {
+      "command": [
+        "/home/feng/nano-vllm-cpp/build/nano-vllm-cpp-comp-gemm",
+        "--suite",
+        "full",
+        "--cache",
+        "both",
+        "--output",
+        "/home/feng/nano-vllm-cpp/build/gemm-results/resume-full-20261030/run-002.json",
+        "--samples",
+        "15",
+        "--target-ms",
+        "10",
+        "--warmup",
+        "20",
+        "--seed",
+        "43",
+        "--workspace-mib",
+        "32",
+        "--heuristic-candidates",
+        "8"
+      ],
+      "gpu_before": {
+        "command": [
+          "nvidia-smi",
+          "--query-gpu=name,uuid,driver_version,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,clocks.sm,clocks.mem,pstate",
+          "--format=csv,noheader,nounits"
+        ],
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, GPU-4b8ffcdd-ff37-d70d-1af6-5c24482bee9d, 617.42, 16311, 1827, 76, 50, 89.19, 2760, 14001, P0",
+        "stderr": ""
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 92.81340102500144,
+      "gpu_after": {
+        "command": [
+          "nvidia-smi",
+          "--query-gpu=name,uuid,driver_version,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,clocks.sm,clocks.mem,pstate",
+          "--format=csv,noheader,nounits"
+        ],
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, GPU-4b8ffcdd-ff37-d70d-1af6-5c24482bee9d, 617.42, 16311, 2019, 55, 53, 120.27, 2745, 14001, P0",
+        "stderr": ""
+      }
+    },
+    {
+      "command": [
+        "/home/feng/nano-vllm-cpp/build/nano-vllm-cpp-comp-gemm",
+        "--suite",
+        "full",
+        "--cache",
+        "both",
+        "--output",
+        "/home/feng/nano-vllm-cpp/build/gemm-results/resume-full-20261030/run-003.json",
+        "--samples",
+        "15",
+        "--target-ms",
+        "10",
+        "--warmup",
+        "20",
+        "--seed",
+        "44",
+        "--workspace-mib",
+        "32",
+        "--heuristic-candidates",
+        "8"
+      ],
+      "gpu_before": {
+        "command": [
+          "nvidia-smi",
+          "--query-gpu=name,uuid,driver_version,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,clocks.sm,clocks.mem,pstate",
+          "--format=csv,noheader,nounits"
+        ],
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, GPU-4b8ffcdd-ff37-d70d-1af6-5c24482bee9d, 617.42, 16311, 2019, 55, 53, 113.28, 2745, 14001, P0",
+        "stderr": ""
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 89.55209645099967,
+      "gpu_after": {
+        "command": [
+          "nvidia-smi",
+          "--query-gpu=name,uuid,driver_version,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,clocks.sm,clocks.mem,pstate",
+          "--format=csv,noheader,nounits"
+        ],
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, GPU-4b8ffcdd-ff37-d70d-1af6-5c24482bee9d, 617.42, 16311, 2020, 44, 60, 137.48, 2700, 14001, P0",
+        "stderr": ""
+      }
+    }
+  ],
+  "reproduction_command": "/usr/bin/python3 exp/gemm/run_gemm.py --executable /home/feng/nano-vllm-cpp/build/nano-vllm-cpp-comp-gemm --suite full --cache both --runs 3 --samples 15 --target-ms 10 --warmup 20 --seed 42 --workspace-mib 32 --heuristic-candidates 8",
+  "cpu_model": "AMD Ryzen 7 9700X 8-Core Processor",
+  "environment_overrides": {
+    "NVIDIA_TF32_OVERRIDE": "0"
+  },
+  "source_sha256_after": {
+    "CMakeLists.txt": "b14ac5d62822f019b7b33d7ac0812b4f56b741277e5a164014e75671e5848167",
+    "src/kernels/cuda/linear.cu": "b73c9f5558e3a29ec30329675d705a324c461092e7dc43dc7c921aed649cdaeb",
+    "src/kernels/cuda/common.cuh": "0fabb906b8bf8c6cbdfe4255efe376082497c26675a347588fa52e4ae11165ee",
+    "src/kernels/cuda/reduce.cuh": "a1cea6f3d8b6123e55de6db033ffa1a2ce140697820c5f5eff00d4c5a69ee859",
+    "exp/gemm/comp_gemm.cc": "b972e4c9c01bd1178d5819476d81e6f2af8dfa1d0607902d48f98447bf4b7902",
+    "exp/gemm/comp_gemm_main.cc": "ca89e06d918231ff4238cb4a11d664a2cbac7e424235b331f81dc511fae117fc",
+    "exp/gemm/gemm_benchmark.cc": "4ac68a9f9af94db55abcc5ec15b2def74758baf445477f1a2865c6569d604ced",
+    "exp/gemm/gemm_baseline.cu": "d4b783a1459caf0c7b304761277f783c8b2b0da842b5d720c7c0da0ad745f614",
+    "exp/gemm/comp_gemm.hh": "0e19f6b8b76cde69440ce85df175e2385e4271ca21b97a1e66ab29eb06c438ce",
+    "exp/gemm/gemm_benchmark.hh": "5d7325bc1bcfdab0ae084006e48b753b9298bc265491df372e6cd14ad61dbbeb",
+    "exp/gemm/run_gemm.py": "3fe9c6ef7ed547c1daa92397b136d09b6a58df5bfd0f201e97ec8a189dfe6650",
+    "exp/gemm/test_report.py": "8bf4c07d2213a5dd27988595725b1177e19979a76671c870170679e90f859c39"
+  },
+  "source_changed_during_run": false,
+  "executable_sha256_after": "07727ae9331da8b84bec795025e00d8133722e571a7f42f83efc057eeb7150d1",
+  "gpu_after": {
+    "command": [
+      "nvidia-smi",
+      "--query-gpu=name,uuid,driver_version,memory.total,memory.used,utilization.gpu,temperature.gpu,power.draw,clocks.sm,clocks.mem,pstate",
+      "--format=csv,noheader,nounits"
+    ],
+    "exit_code": 0,
+    "stdout": "NVIDIA GeForce RTX 5060 Ti, GPU-4b8ffcdd-ff37-d70d-1af6-5c24482bee9d, 617.42, 16311, 2020, 44, 60, 129.90, 2700, 14001, P0",
+    "stderr": ""
+  },
+  "finished_at_utc": "2026-10-30T15:35:24.054709+00:00"
+}
