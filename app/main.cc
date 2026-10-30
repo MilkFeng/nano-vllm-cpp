@@ -1,13 +1,12 @@
-#include <CLI/CLI.hpp>
 #include <array>
 #include <chrono>
-#include <filesystem>
 #include <format>
 #include <iostream>
 #include <mutex>
 #include <nanovllm/nanovllm.hh>
 #include <nlohmann/json.hpp>
-#include <random>
+
+#include "common.hh"
 
 class ConsoleLogger final : public nanovllm::Logger {
  public:
@@ -41,103 +40,29 @@ class ConsoleLogger final : public nanovllm::Logger {
 };
 
 int main(int argc, char** argv) {
-  std::random_device rd;
-  std::mt19937_64 gen(rd());
-  std::uniform_int_distribution<uint64_t> dis(0, UINT64_MAX);
-
-  CLI::App app{"Single-GPU Qwen3 / Qwen3.5 MoE inference with C++ and CUDA"};
-  std::string model_path;
-  std::string expert_config_path;
-  std::vector<std::string> prompts;
-  nanovllm::EngineParams params;
-  nanovllm::SamplingParams sampling;
-  bool json_output = false;
-  bool thinking = true;
-  bool report_metrics = false;
-  bool disable_prefix_cache = false;
-  std::size_t repeat = 1;
-
-  params.seed = dis(gen);
-
-  app.add_option("-m,--model", model_path,
-                 "Model directory containing config, safetensors weights or a "
-                 "shard index, and tokenizer files")
-      ->required();
-  app.add_option("-p,--prompt", prompts,
-                 "User message; the model chat template is applied by default; "
-                 "may be repeated")
-      ->required();
-  app.add_flag(
-      "--thinking", thinking,
-      "Enable thinking in the model chat template (enabled by default)");
-  app.add_option("--max-tokens", sampling.max_tokens,
-                 "Maximum new tokens per prompt");
-  app.add_option("--temperature", sampling.temperature,
-                 "Sampling temperature; 0 selects greedy decoding");
-  app.add_flag("--ignore-eos", sampling.ignore_eos,
-               "Continue generation after EOS");
-  app.add_option("--max-model-len", params.max_model_len,
-                 "Maximum total prompt and output length");
-  app.add_option("--max-seqs", params.max_num_seqs,
-                 "Maximum sequences scheduled per batch; also live recurrent "
-                 "state slots for Qwen3.5");
-  app.add_option("--max-batched-tokens", params.max_num_batched_tokens,
-                 "Per-step token budget; smaller values split prefill");
-  app.add_option("--block-size", params.kvcache_block_size,
-                 "Tokens per KV cache block");
-  app.add_option("--num-blocks", params.num_kvcache_blocks,
-                 "Total KV cache blocks shared by all sequences")
-      ->required()
-      ->check(CLI::PositiveNumber);
-  auto* expert_ids_option =
-      app.add_option(
-             "--gpu-expert-ids", params.gpu_expert_ids,
-             "Qwen3.5 fixed GPU routed expert IDs for every layer; empty "
-             "by default")
-          ->delimiter(',');
-  app.add_option("--gpu-expert-config", expert_config_path,
-                 "Qwen3.5 per-layer static GPU expert JSON")
-      ->check(CLI::ExistingFile)
-      ->excludes(expert_ids_option);
-  app.add_option("--cpu-threads", params.cpu_threads,
-                 "Qwen3.5 CPU expert workers shared by all layers (default: 8)")
-      ->check(CLI::PositiveNumber);
-  app.add_option("--seed", params.seed, "Sampling random seed");
-  app.add_option(
-      "--repeat", repeat,
-      "Repeat requests on the same engine, printing the last result");
-  app.add_flag("--json", json_output,
-               "Print generated text and token IDs as JSON");
-  app.add_flag("--metrics", report_metrics,
-               "Log separate prefill/decode timings and per-request TTFT/TPOT");
-  app.add_flag("--no-prefix-cache", disable_prefix_cache,
-               "Disable prefix reuse, including across repeated generations");
-
-  argv = app.ensure_utf8(argv);
-  CLI11_PARSE(app, argc, argv);
+  int exit_code = 0;
+  auto parsed = nanovllm::app::parse_args(
+      argc, argv, nanovllm::app::Mode::Generate, exit_code);
+  if (!parsed) return exit_code;
+  auto& options = *parsed;
 
   try {
-    if (repeat == 0) {
-      throw std::invalid_argument("repeat must be positive");
-    }
-
     const auto logger = std::make_shared<ConsoleLogger>();
-    params.gpu_expert_config = expert_config_path;
-    params.enable_prefix_cache = !disable_prefix_cache;
-    nanovllm::LLMEngine engine(model_path, params, logger);
+    const auto& params = options.params;
+    nanovllm::LLMEngine engine(options.model_path, params, logger);
 
-    for (auto& prompt : prompts) {
+    for (auto& prompt : options.prompts) {
       const std::array messages{nanovllm::ChatMessage{"user", prompt}};
-      prompt =
-          engine.apply_chat_template(messages, {.enable_thinking = thinking});
+      prompt = engine.apply_chat_template(
+          messages, {.enable_thinking = options.thinking});
     }
 
     std::vector<nanovllm::GenerationOutput> outputs;
-    for (std::size_t i = 0; i < repeat; ++i) {
+    for (std::size_t i = 0; i < options.repeat; ++i) {
       const auto start = std::chrono::steady_clock::now();
       nanovllm::GenerationMetrics metrics;
-      outputs = engine.generate(prompts, sampling,
-                                report_metrics ? &metrics : nullptr);
+      outputs = engine.generate(options.prompts, options.sampling,
+                                options.report_metrics ? &metrics : nullptr);
       const auto seconds = std::chrono::duration<double>(
                                std::chrono::steady_clock::now() - start)
                                .count();
@@ -150,8 +75,17 @@ int main(int argc, char** argv) {
       logger->info(std::format(
           "Generation {}/{}: {} output tokens in {:.3f} s "
           "({:.2f} tok/s; includes prefill)",
-          i + 1, repeat, generated_tokens, seconds, tokens_per_second));
-      if (report_metrics) {
+          i + 1, options.repeat, generated_tokens, seconds, tokens_per_second));
+      if (options.report_metrics) {
+        if (params.expert_adaptation.every != 0) {
+          const auto& adapted = metrics.expert_adaptation;
+          logger->info(std::format(
+              "Expert adaptation: {} rounds, {} swaps, {} bytes uploaded, "
+              "{:.3f} ms; decode GPU/CPU assignments {}/{}",
+              adapted.rounds, adapted.swaps, adapted.bytes_uploaded,
+              adapted.seconds * 1000, adapted.gpu_assignments,
+              adapted.cpu_assignments));
+        }
         logger->info(std::format(
             "Prefill: {} input tokens, {} steps, {:.3f} ms; "
             "Decode: {} output tokens, {} steps, {:.3f} ms ({:.2f} tok/s)",
@@ -176,7 +110,7 @@ int main(int argc, char** argv) {
       }
     }
 
-    if (json_output) {
+    if (options.json_output) {
       auto result = nlohmann::json::array();
       for (const auto& output : outputs) {
         result.push_back(

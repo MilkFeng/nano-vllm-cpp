@@ -5,7 +5,7 @@
 #include <magic_enum/magic_enum.hpp>
 #include <stdexcept>
 
-#include "core/expert_placement.hh"
+#include "core/expert_policy.hh"
 #include "core/model_config.hh"
 #include "engine/model_runner.hh"
 #include "engine/scheduler.hh"
@@ -40,7 +40,7 @@ class LLMEngine::Impl {
        std::shared_ptr<Logger> logger)
       : model_path_(model_path),
         model_config_(ModelConfig::read_from_file(model_path_ / "config.json")),
-        params_(resolve_engine_params(model_config_, std::move(params))),
+        params_(std::move(params)),
         logger_(logger ? std::move(logger) : null_logger()),
         tokenizer_(logger_, model_path_ / "tokenizer.json",
                    model_path_ / "tokenizer_config.json"),
@@ -55,8 +55,7 @@ class LLMEngine::Impl {
 
     if (model_config_.architecture == ModelArchitecture::Qwen35Moe) {
       const auto placement =
-          resolve_expert_placement(model_config_, params_.gpu_expert_ids,
-                                   params_.gpu_expert_ids_by_layer);
+          resolve_expert_placement(model_config_, params_.gpu_expert_ids);
       std::size_t slots = 0;
       for (const auto& ids : placement) {
         slots += ids.size();
@@ -207,6 +206,7 @@ class LLMEngine::Impl {
         stats.detokenization_seconds =
             elapsed_seconds(inference_done, decoded_at);
         stats.expert_profile = model_runner_.expert_profile();
+        stats.expert_adaptation = model_runner_.expert_adaptation_stats();
       }
       scheduler_.clear();
       if (metrics) {
@@ -247,6 +247,25 @@ LLMEngine& LLMEngine::operator=(LLMEngine&& other) noexcept {
     pimpl_ = std::move(other.pimpl_);
   }
   return *this;
+}
+
+ModelInfo LLMEngine::inspect(const std::filesystem::path& model_path,
+                             const EngineParams& params) {
+  const auto config = ModelConfig::read_from_file(model_path / "config.json");
+  const bool moe = config.architecture == ModelArchitecture::Qwen35Moe;
+  return {
+      .model_type = config.model_type,
+      .max_position_embeddings = config.max_position_embeddings,
+      .hidden_size = config.hidden_size,
+      .intermediate_size =
+          moe ? config.moe_intermediate_size : config.intermediate_size,
+      .num_hidden_layers = config.num_hidden_layers,
+      .num_experts = config.num_experts,
+      .top_k = config.num_experts_per_tok,
+      .expert_size_bytes = moe ? routed_expert_size_bytes(config) : 0,
+      .gpu_expert_ids_by_layer =
+          resolve_expert_placement(config, params.gpu_expert_ids),
+  };
 }
 
 std::string LLMEngine::apply_chat_template(

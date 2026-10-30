@@ -53,7 +53,8 @@ cmake --build build -j4
 - `--max-batched-tokens` 限制每轮 token 数，较长输入会分块 prefill。
 - `--num-blocks` 必填，指定全部请求共享的 KV 块池大小；`--block-size` 指定每块 token 数，默认 256。程序按指定数量分配，不再自动估算显存容量。
 - `--cpu-threads 8` 设置 Qwen3.5 的 CPU 专家计算线程数，默认 8，必须为正数；所有层共用一个常驻线程池。
-- `--gpu-expert-ids 0,2` 设置 Qwen3.5 各层固定常驻 GPU 的 routed 专家 ID，默认为空；其余专家在 CPU 计算。共享专家一直在 GPU，不计入名单。
+- `--gpu-expert-ids 0,2` 设置 Qwen3.5 各层初始常驻 GPU 的 routed 专家 ID，默认为空；其余专家在 CPU 计算。共享专家一直在 GPU，不计入名单。
+- `--expert-adapt-every 4` 开启在线热点替换；`--expert-adapt-swaps 8` 限制每轮全模型替换数，`--expert-adapt-decay 0.7` 控制旧热度衰减。每层槽位数保持不变，默认关闭。
 - `--json` 输出生成文本和 token ID；`--repeat 2` 在同一引擎中重复请求。Qwen3 保留前缀缓存，Qwen3.5 每次从零状态开始。
 - 每次生成结束后，日志输出实际生成 token 数、耗时和 `tok/s`。耗时仅计入 `generate()`，包含输入编码、prefill、decode 和输出解码，不包含模型加载及聊天模板渲染；多条请求统计总输出吞吐，`--repeat` 的每轮单独记录。
 - 达到 EOS、`--max-tokens` 或总长度 `--max-model-len` 时结束；`--ignore-eos` 可忽略 EOS。
@@ -109,15 +110,14 @@ Windows 下对应的可执行文件为
   --output benchmark-qwen35.json
 ```
 
-Qwen3.5 还支持 `--gpu-expert-config placement.json`，为每层指定不同的常驻
-GPU 专家；它与 `--gpu-expert-ids` 互斥。`--profile-experts` 在报告中记录
+Qwen3.5 使用 `--gpu-expert-ids` 指定各层初始名单和缓存容量。
+`--profile-experts` 在报告中记录
 prefill/decode 各自的路由频率、专家聚合 token 数分布和整段 MoE 时间，预热轮次
 不计入报告。该模式有统计开销，性能比较时应关闭。
 
-`scripts/expert_placement.py` 仅依赖 Python 3.9+ 标准库，可从统计报告生成静态配置，
-并自动比较相同显存预算下的均匀放置与热点放置，输出 `comparison.json`。
-Windows 使用 `python` 运行同一脚本。完整命令和配置格式见
-[静态专家放置 benchmark](docs/static-expert-placement.md)。
+统计格式及预算口径见[专家路由统计](docs/expert-profiling.md)。
+固定缓存预算下的在线换入换出见[在线专家替换](docs/online-expert-placement.md)，
+使用 `--expert-adapt-every N` 开启，默认关闭。
 
 计时口径：
 
@@ -350,7 +350,7 @@ x[T,H] → Router Linear → logits[T,E]
 权重可通过 `Module::named_parameters()` 初始化；测试展示了完整的运行方式。
 
 全部 routed 专家权重保存在 RAM 中的 `ExpertStore`，模型参数名仍为
-`experts.N.gate_proj.weight` 等。GPU 的 `ExpertCache` 只分配固定名单对应的
+`experts.N.gate_proj.weight` 等。GPU 的 `ExpertCache` 只分配初始名单对应数量的
 专家槽位，缓存副本不注册为额外模型参数。Router 在 GPU 上计算，命中的专家
 在 GPU 槽位上执行，未命中的专家在 CPU 上执行；CPU 输出复制回 GPU 后统一
 combine。Router 的整批专家编号一次下载到 CPU，构造稳定的专家分组；有 CPU
@@ -394,8 +394,9 @@ CPU 构造只创建参考权重。`MoEOutput` 的 `gpu_experts`、`cpu_experts` 
 token 选中会分别计数；`expert_cache().num_slots()`
 和 `size_bytes()` 只统计 routed 缓存槽位和权重，不包含 Router、共享专家及工作区。
 
-当前支持多 token、FP32 激活与 FP8 专家、1..1024 个专家、`1 <= top_k <= E`。缓存名单固定，
-populate/forward 同步传入的 stream，调用需串行。动态换入换出作为后续步骤；
+当前支持多 token、FP32 激活与 FP8 专家、1..1024 个专家、`1 <= top_k <= E`。
+populate/forward/replace 同步传入的 stream，调用需串行。缓存槽位数固定，
+开启在线策略后会按 decode 路由热度更新槽位中的专家；
 文本生成支持 Qwen3 与 Qwen3.5 MoE，后者使用下面的 FP8 RAM store。
 
 ### FP8 专家在 RAM 和 GPU 中存储

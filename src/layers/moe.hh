@@ -18,6 +18,13 @@
 
 namespace nanovllm {
 
+struct ExpertUsage;
+
+struct ExpertCacheReplacement {
+  std::size_t slot;
+  std::int32_t expert_id;
+};
+
 struct FP8ExpertWorkspace {
   Tensor gate;
   Tensor up;
@@ -88,6 +95,11 @@ class ExpertCache final {
   ExpertCache& operator=(ExpertCache&&) = delete;
 
   void populate(cudaStream_t stream = nullptr);
+  // Call only between forwards. Reuses existing device allocations and publishes
+  // the new mapping after all weights and scales have finished copying.
+  [[nodiscard]] std::size_t replace(
+      std::span<const ExpertCacheReplacement> replacements,
+      cudaStream_t stream = nullptr);
   void invalidate() noexcept;
 
   [[nodiscard]] int slot_of(std::size_t expert_id) const;
@@ -169,7 +181,12 @@ class MoE final : public Module {
 
   [[nodiscard]] MoEOutput forward(ConstTensorView hidden_states,
                                   cudaStream_t stream = nullptr,
-                                  MoEPhaseProfile* profile = nullptr) const;
+                                  MoEPhaseProfile* profile = nullptr,
+                                  ExpertUsage* usage = nullptr) const;
+
+  [[nodiscard]] std::size_t replace_experts(
+      std::span<const ExpertCacheReplacement> replacements,
+      cudaStream_t stream = nullptr) const;
 
   [[nodiscard]] const MoEConfig& config() const noexcept;
 

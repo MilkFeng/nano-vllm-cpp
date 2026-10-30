@@ -6,7 +6,7 @@
 
 #include "common/cuda_utils.hh"
 #include "core/device.hh"
-#include "core/expert_placement.hh"
+#include "core/expert_policy.hh"
 #include "core/forward_context.hh"
 #include "kernels/cuda/kernels.hh"
 
@@ -36,8 +36,8 @@ ModelRunner::ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
   }
 
   // Reject malformed lists before allocating model weights or CUDA resources.
-  const auto placement = resolve_expert_placement(
-      config_, params_.gpu_expert_ids, params_.gpu_expert_ids_by_layer);
+  const auto placement =
+      resolve_expert_placement(config_, params_.gpu_expert_ids);
   if (params_.profile_experts
       && config_.architecture != ModelArchitecture::Qwen35Moe) {
     throw std::invalid_argument("expert profiling requires Qwen3.5 MoE");
@@ -50,8 +50,8 @@ ModelRunner::ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
     // load model ckpt
     if (config_.architecture == ModelArchitecture::Qwen35Moe) {
       model_ = std::make_unique<Qwen35ForCausalLM>(
-          config_, Device::cuda(0), std::vector<std::int32_t>{},
-          params_.cpu_threads, placement, params_.profile_experts);
+          config_, Device::cuda(0), params_.cpu_threads, placement,
+          params_.profile_experts, params_.expert_adaptation);
     } else {
       model_ = std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda(0));
     }
@@ -99,11 +99,19 @@ std::size_t ModelRunner::state_cache_size_bytes() const {
 }
 
 void ModelRunner::reset_expert_profile() {
-  if (params_.profile_experts) {
+  if (config_.architecture == ModelArchitecture::Qwen35Moe) {
     static_cast<Qwen35ForCausalLM&>(*model_)
         .transformer()
         .reset_expert_profile();
   }
+}
+
+ExpertAdaptationStats ModelRunner::expert_adaptation_stats() const {
+  return params_.expert_adaptation.every != 0
+             ? static_cast<Qwen35ForCausalLM&>(*model_)
+                   .transformer()
+                   .expert_adaptation_stats()
+             : ExpertAdaptationStats{};
 }
 
 std::vector<MoELayerProfile> ModelRunner::expert_profile() const {

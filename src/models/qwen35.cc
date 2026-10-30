@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <format>
@@ -330,7 +331,8 @@ Qwen35DecoderLayer::Qwen35DecoderLayer(
     const ModelConfig& config, std::size_t index, Device device,
     const std::vector<std::int32_t>& gpu_expert_ids, ThreadPool& cpu_pool,
     MoEExecutionWorkspace& workspace)
-    : mlp_(qwen35_moe_config(config), cpu_pool, device, gpu_expert_ids, &workspace),
+    : mlp_(qwen35_moe_config(config), cpu_pool, device, gpu_expert_ids,
+           &workspace),
       input_layernorm_(config.hidden_size, config.rms_norm_eps,
                        DataType::Float32, device, true),
       post_attention_layernorm_(config.hidden_size, config.rms_norm_eps,
@@ -349,8 +351,8 @@ Qwen35DecoderLayer::Qwen35DecoderLayer(
 
 Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
     ConstTensorView positions, ConstTensorView hidden_states,
-    std::optional<ConstTensorView> residual,
-    const ForwardContext& context, MoEPhaseProfile* profile) const {
+    std::optional<ConstTensorView> residual, const ForwardContext& context,
+    MoEPhaseProfile* profile, ExpertUsage* usage) const {
   RMSNormOutput before;
   auto residual_view = hidden_states;
   if (residual) {
@@ -369,9 +371,8 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
                                   context);
   auto after = post_attention_layernorm_.forward(attention.view().as_const(),
                                                  residual_view, context.stream);
-  auto output =
-      mlp_.forward(after.hidden_states.view().as_const(), context.stream,
-                   profile);
+  auto output = mlp_.forward(after.hidden_states.view().as_const(),
+                             context.stream, profile, usage);
 
   return {std::move(output.hidden_states), std::move(after.residual)};
 }
@@ -388,34 +389,56 @@ MoE& Qwen35DecoderLayer::mlp() noexcept {
   return mlp_;
 }
 
+const MoE& Qwen35DecoderLayer::mlp() const noexcept {
+  return mlp_;
+}
+
 Qwen35Model::Qwen35Model(const ModelConfig& config, Device device,
-                         const std::vector<std::int32_t>& gpu_expert_ids,
                          std::size_t cpu_threads,
                          const ExpertPlacement& gpu_expert_ids_by_layer,
-                         bool profile_experts)
+                         bool profile_experts,
+                         ExpertAdaptationParams expert_adaptation)
     : cpu_pool_(cpu_threads),
       embed_tokens_(config.vocab_size, config.hidden_size, DataType::Float32,
                     device),
       norm_(config.hidden_size, config.rms_norm_eps, DataType::Float32, device,
-            true) {
+            true),
+      expert_adaptation_(config.num_hidden_layers, config.num_experts,
+                         expert_adaptation) {
   register_module("embed_tokens", embed_tokens_);
   register_module("layers", layers_);
   register_module("norm", norm_);
-  const auto placement = resolve_expert_placement(config, gpu_expert_ids,
-                                                 gpu_expert_ids_by_layer);
   for (std::size_t i = 0; i < config.num_hidden_layers; ++i) {
-    layers_.emplace_back<Qwen35DecoderLayer>(config, i, device, placement[i],
+    layers_.emplace_back<Qwen35DecoderLayer>(config, i, device,
+                                             gpu_expert_ids_by_layer[i],
                                              cpu_pool_, moe_workspace_);
   }
-  if (profile_experts) expert_profile_.resize(config.num_hidden_layers);
+  if (profile_experts) {
+    expert_profile_.resize(config.num_hidden_layers);
+  }
 }
 
 void Qwen35Model::reset_expert_profile() {
   for (auto& layer : expert_profile_) layer = {};
+  adaptation_stats_ = {};
+  expert_adaptation_.reset_assignment_stats();
 }
 
-const std::vector<MoELayerProfile>& Qwen35Model::expert_profile() const noexcept {
+const std::vector<MoELayerProfile>& Qwen35Model::expert_profile()
+    const noexcept {
   return expert_profile_;
+}
+
+ExpertAdaptationStats Qwen35Model::expert_adaptation_stats() const {
+  auto stats = adaptation_stats_;
+  if (expert_adaptation_.enabled()) {
+    expert_adaptation_.add_assignment_stats(stats);
+    for (std::size_t i = 0; i < layers_.size(); ++i) {
+      const auto ids = layer(i).mlp().expert_cache().resident_ids();
+      stats.resident_ids_by_layer.emplace_back(ids.begin(), ids.end());
+    }
+  }
+  return stats;
 }
 
 Tensor Qwen35Model::forward(ConstTensorView input_ids,
@@ -429,15 +452,42 @@ Tensor Qwen35Model::forward(ConstTensorView input_ids,
       residual_view = residual.view().as_const();
     }
 
-    auto* profile = expert_profile_.empty()
-                        ? nullptr
-                        : context.is_prefill ? &expert_profile_[i].prefill
-                                             : &expert_profile_[i].decode;
+    auto* profile = expert_profile_.empty() ? nullptr
+                    : context.is_prefill    ? &expert_profile_[i].prefill
+                                            : &expert_profile_[i].decode;
+    auto* usage = context.is_prefill ? nullptr : expert_adaptation_.usage(i);
     auto output = layer(i).forward(positions, hidden.view().as_const(),
-                                   residual_view, context, profile);
+                                   residual_view, context, profile, usage);
 
     hidden = std::move(output.hidden_states);
     residual = std::move(output.residual);
+  }
+
+  // Each MoE has completed its CPU tasks and synchronized this stream. Slots
+  // can now be overwritten without racing kernels from the current step.
+  if (!context.is_prefill && expert_adaptation_.advance()) {
+    const auto started = std::chrono::steady_clock::now();
+    ExpertPlacement placement;
+    for (std::size_t i = 0; i < layers_.size(); ++i) {
+      const auto ids = layer(i).mlp().expert_cache().resident_ids();
+      placement.emplace_back(ids.begin(), ids.end());
+    }
+    const auto swaps = expert_adaptation_.plan(placement);
+    for (std::size_t i = 0; i < layers_.size(); ++i) {
+      std::vector<ExpertCacheReplacement> replacements;
+      for (const auto& swap : swaps)
+        if (swap.layer == i) replacements.push_back({swap.slot, swap.new_id});
+      if (!replacements.empty()) {
+        adaptation_stats_.bytes_uploaded +=
+            layer(i).mlp().replace_experts(replacements, context.stream);
+        adaptation_stats_.swaps += replacements.size();
+      }
+    }
+    expert_adaptation_.decay();
+    ++adaptation_stats_.rounds;
+    adaptation_stats_.seconds += std::chrono::duration<double>(
+                                     std::chrono::steady_clock::now() - started)
+                                     .count();
   }
 
   auto normalized = norm_.forward(hidden.view().as_const(),
@@ -484,15 +534,14 @@ const Qwen35DecoderLayer& Qwen35Model::layer(std::size_t i) const {
   return static_cast<const Qwen35DecoderLayer&>(layers_.at(i));
 }
 
-Qwen35ForCausalLM::Qwen35ForCausalLM(const ModelConfig& config, Device device,
-                                     std::vector<std::int32_t> gpu_expert_ids,
-                                     std::size_t cpu_threads,
-                                     const ExpertPlacement& gpu_expert_ids_by_layer,
-                                     bool profile_experts)
+Qwen35ForCausalLM::Qwen35ForCausalLM(
+    const ModelConfig& config, Device device, std::size_t cpu_threads,
+    const ExpertPlacement& gpu_expert_ids_by_layer, bool profile_experts,
+    ExpertAdaptationParams expert_adaptation)
     : config_(config),
       device_(device),
-      model_(config_, device_, gpu_expert_ids, cpu_threads,
-             gpu_expert_ids_by_layer, profile_experts),
+      model_(config_, device_, cpu_threads, gpu_expert_ids_by_layer,
+             profile_experts, expert_adaptation),
       lm_head_(
           config_.vocab_size, config_.hidden_size, DataType::Float32, device_,
           config_.tie_word_embeddings ? &model_.embed_tokens().weight().tensor()

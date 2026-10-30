@@ -6,9 +6,9 @@
 #include <optional>
 #include <vector>
 
+#include "core/expert_policy.hh"
 #include "core/model.hh"
 #include "core/model_config.hh"
-#include "core/expert_placement.hh"
 #include "layers/embedding.hh"
 #include "layers/gated_delta_net.hh"
 #include "layers/lm_head.hh"
@@ -77,12 +77,13 @@ class Qwen35DecoderLayer final : public Module {
 
   [[nodiscard]] Qwen35DecoderLayerOutput forward(
       ConstTensorView positions, ConstTensorView hidden_states,
-      std::optional<ConstTensorView> residual,
-      const ForwardContext& context, MoEPhaseProfile* profile = nullptr) const;
+      std::optional<ConstTensorView> residual, const ForwardContext& context,
+      MoEPhaseProfile* profile = nullptr, ExpertUsage* usage = nullptr) const;
 
   [[nodiscard]] Qwen35Attention* self_attention() noexcept;
   [[nodiscard]] GatedDeltaNet* linear_attention() noexcept;
   [[nodiscard]] MoE& mlp() noexcept;
+  [[nodiscard]] const MoE& mlp() const noexcept;
 
  private:
   std::unique_ptr<Qwen35Attention> self_attn_;
@@ -94,10 +95,10 @@ class Qwen35DecoderLayer final : public Module {
 class Qwen35Model final : public Module {
  public:
   Qwen35Model(const ModelConfig& config, Device device,
-              const std::vector<std::int32_t>& gpu_expert_ids,
               std::size_t cpu_threads = 8,
               const ExpertPlacement& gpu_expert_ids_by_layer = {},
-              bool profile_experts = false);
+              bool profile_experts = false,
+              ExpertAdaptationParams expert_adaptation = {});
 
   [[nodiscard]] Tensor forward(ConstTensorView input_ids,
                                ConstTensorView positions,
@@ -113,6 +114,7 @@ class Qwen35Model final : public Module {
   void reset_expert_profile();
   [[nodiscard]] const std::vector<MoELayerProfile>& expert_profile()
       const noexcept;
+  [[nodiscard]] ExpertAdaptationStats expert_adaptation_stats() const;
 
  private:
   // Workers and scratch storage outlive every executor.
@@ -122,16 +124,18 @@ class Qwen35Model final : public Module {
   ModuleList layers_;
   RMSNorm norm_;
   mutable std::vector<MoELayerProfile> expert_profile_;
+  mutable ExpertAdaptationPolicy expert_adaptation_;
+  mutable ExpertAdaptationStats adaptation_stats_;
 };
 
 class Qwen35ForCausalLM final : public Model {
  public:
-  explicit Qwen35ForCausalLM(const ModelConfig& config,
-                             Device device = Device::cpu(),
-                             std::vector<std::int32_t> gpu_expert_ids = {},
-                             std::size_t cpu_threads = 8,
-                             const ExpertPlacement& gpu_expert_ids_by_layer = {},
-                             bool profile_experts = false);
+  explicit Qwen35ForCausalLM(
+      const ModelConfig& config, Device device = Device::cpu(),
+      std::size_t cpu_threads = 8,
+      const ExpertPlacement& gpu_expert_ids_by_layer = {},
+      bool profile_experts = false,
+      ExpertAdaptationParams expert_adaptation = {});
 
   ModelLoadResult load_ckpt(const std::filesystem::path& path) override;
 

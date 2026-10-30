@@ -29,6 +29,14 @@ struct SamplingParams {
   bool ignore_eos = false;
 };
 
+struct ExpertAdaptationParams {
+  std::size_t every = 0; // Decode scheduling steps; 0 keeps static placement.
+  std::size_t max_swaps = 8; // Across all layers per adjustment.
+  double decay = 0.7;
+  double min_usage = 2.0;
+  double min_gain = 1.5;
+};
+
 struct EngineParams {
   std::size_t max_num_batched_tokens = 16384;
   std::size_t max_num_seqs = 512;
@@ -38,11 +46,10 @@ struct EngineParams {
   std::uint64_t seed = 0;
 
   std::vector<std::int32_t> gpu_expert_ids;
-  std::vector<std::vector<std::int32_t>> gpu_expert_ids_by_layer;
-  std::filesystem::path gpu_expert_config;
   std::size_t cpu_threads = 8;
   bool profile_experts = false;
   bool enable_prefix_cache = true; // Qwen3.5 always disables prefix reuse.
+  ExpertAdaptationParams expert_adaptation;
 };
 
 struct ModelInfo {
@@ -56,9 +63,6 @@ struct ModelInfo {
   std::size_t expert_size_bytes = 0;
   std::vector<std::vector<std::int32_t>> gpu_expert_ids_by_layer;
 };
-
-[[nodiscard]] ModelInfo inspect_model(const std::filesystem::path& model_path,
-                                      const EngineParams& params = {});
 
 struct GPUInfo {
   std::string name;
@@ -125,6 +129,16 @@ struct MoELayerProfile {
   MoEPhaseProfile decode;
 };
 
+struct ExpertAdaptationStats {
+  std::size_t rounds = 0;
+  std::size_t swaps = 0;
+  std::size_t bytes_uploaded = 0;
+  std::size_t gpu_assignments = 0; // Decode only.
+  std::size_t cpu_assignments = 0;
+  double seconds = 0; // Selection and synchronous uploads.
+  std::vector<std::vector<std::int32_t>> resident_ids_by_layer;
+};
+
 struct GenerationMetrics {
   std::size_t input_tokens = 0;
   std::size_t output_tokens = 0;
@@ -143,6 +157,7 @@ struct GenerationMetrics {
   double total_seconds = 0;
   std::vector<RequestMetrics> requests;
   std::vector<MoELayerProfile> expert_profile;
+  ExpertAdaptationStats expert_adaptation;
 };
 
 class LLMEngine {
@@ -156,6 +171,10 @@ class LLMEngine {
 
   LLMEngine(LLMEngine&&) noexcept;
   LLMEngine& operator=(LLMEngine&&) noexcept;
+
+ public:
+  [[nodiscard]] static ModelInfo inspect(
+      const std::filesystem::path& model_path, const EngineParams& params = {});
 
  public:
   // Render text messages using the checkpoint's tokenizer chat template.

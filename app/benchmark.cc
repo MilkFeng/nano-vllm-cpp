@@ -1,4 +1,3 @@
-#include <CLI/CLI.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -7,7 +6,6 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
-#include <limits>
 #include <map>
 #include <nlohmann/json.hpp>
 #include <numeric>
@@ -17,6 +15,7 @@
 #include <thread>
 #include <vector>
 
+#include "common.hh"
 #include "nanovllm/nanovllm.hh"
 
 namespace {
@@ -124,6 +123,20 @@ Json serialize(const nanovllm::GenerationMetrics& metrics) {
                          {"decode", serialize(entry.decode)}});
     }
   }
+  if (!metrics.expert_adaptation.resident_ids_by_layer.empty()) {
+    const auto& adapted = metrics.expert_adaptation;
+    result["expert_adaptation"] = {
+        {"rounds", adapted.rounds},
+        {"swaps", adapted.swaps},
+        {"bytes_uploaded", adapted.bytes_uploaded},
+        {"ms", adapted.seconds * 1000},
+        {"gpu_assignments", adapted.gpu_assignments},
+        {"cpu_assignments", adapted.cpu_assignments},
+        {"gpu_assignment_ratio",
+         ratio(adapted.gpu_assignments,
+               adapted.gpu_assignments + adapted.cpu_assignments)},
+        {"resident_ids_by_layer", adapted.resident_ids_by_layer}};
+  }
   return result;
 }
 
@@ -134,6 +147,13 @@ Json summarize(const Json& runs) {
     if (value.is_number()) values.push_back(value.get<double>());
   };
   for (const auto& run : runs) {
+    if (run.contains("expert_adaptation")) {
+      for (const auto* key :
+           {"swaps", "bytes_uploaded", "ms", "gpu_assignment_ratio"}) {
+        add(std::string("expert_adaptation_") + key,
+            run["expert_adaptation"][key]);
+      }
+    }
     add("prefill_ms", run["prefill"]["ms"]);
     add("prefill_input_tokens_per_second",
         run["prefill"]["input_tokens_per_second"]);
@@ -176,105 +196,25 @@ void save(const std::filesystem::path& path, const Json& report) {
 } // namespace
 
 int main(int argc, char** argv) {
-  CLI::App app{
-      "Prefill/decode benchmark with exact-length synthetic token inputs"};
-  std::string model_path, output_path = "benchmark.json";
-  std::string expert_config_path, prompts_path;
-  std::string seed_text =
-      "The quick brown fox jumps over the lazy dog. "
-      "Explain how computers process information. ";
-  std::vector<std::size_t> input_lengths{128}, output_lengths{128},
-      batch_sizes{1};
-  std::size_t warmup = 1, repeat = 3;
-  nanovllm::EngineParams params;
-  params.seed = 42;
-  params.enable_prefix_cache = false;
-  params.max_num_batched_tokens = 1024;
-  app.add_option("-m,--model", model_path, "Model directory")->required();
-  app.add_option("--input-tokens", input_lengths,
-                 "Exact input lengths, comma-separated")
-      ->delimiter(',')
-      ->check(CLI::PositiveNumber);
-  app.add_option("--output-tokens", output_lengths,
-                 "Output lengths, comma-separated")
-      ->delimiter(',')
-      ->check(CLI::PositiveNumber);
-  app.add_option("--batch-sizes", batch_sizes,
-                 "Request counts, comma-separated")
-      ->delimiter(',')
-      ->check(CLI::PositiveNumber);
-  app.add_option("--warmup", warmup,
-                 "Unmeasured generations per case (default: 1)")
-      ->check(CLI::NonNegativeNumber);
-  app.add_option("--repeat", repeat,
-                 "Measured generations per case (default: 3)")
-      ->check(CLI::PositiveNumber);
-  auto* prompt_option =
-      app.add_option("--prompt", seed_text,
-                     "Seed text whose token IDs are cycled to fill inputs");
-  app.add_option(
-         "--prompts-file", prompts_path,
-         "JSON array of seed texts, rotated across requests and repeats")
-      ->check(CLI::ExistingFile)
-      ->excludes(prompt_option);
-  app.add_option("--num-blocks", params.num_kvcache_blocks,
-                 "Shared KV cache block count")
-      ->required()
-      ->check(CLI::PositiveNumber);
-  app.add_option("--block-size", params.kvcache_block_size,
-                 "Tokens per KV cache block")
-      ->check(CLI::PositiveNumber);
-  app.add_option(
-         "--max-batched-tokens", params.max_num_batched_tokens,
-         "Per-step token budget, including chunked prefill (default: 1024)")
-      ->check(CLI::PositiveNumber);
-  app.add_option("--cpu-threads", params.cpu_threads,
-                 "Qwen3.5 CPU expert workers")
-      ->check(CLI::PositiveNumber);
-  auto* expert_ids_option =
-      app.add_option("--gpu-expert-ids", params.gpu_expert_ids,
-                     "Qwen3.5 fixed GPU expert IDs, comma-separated")
-          ->delimiter(',');
-  app.add_option("--gpu-expert-config", expert_config_path,
-                 "Qwen3.5 per-layer static GPU expert JSON")
-      ->check(CLI::ExistingFile)
-      ->excludes(expert_ids_option);
-  app.add_flag("--profile-experts", params.profile_experts,
-               "Collect per-layer prefill/decode routing counts and group "
-               "sizes; adds overhead");
-  app.add_option("--seed", params.seed,
-                 "Random seed recorded with the run (default: 42)");
-  app.add_option("-o,--output", output_path,
-                 "JSON report (default: benchmark.json)");
-  argv = app.ensure_utf8(argv);
-  CLI11_PARSE(app, argc, argv);
+  int exit_code = 0;
+  auto parsed = nanovllm::app::parse_args(
+      argc, argv, nanovllm::app::Mode::Benchmark, exit_code);
+  if (!parsed) return exit_code;
+  auto& options = *parsed;
+  auto& params = options.params;
 
   try {
-    const auto max_input =
-        *std::max_element(input_lengths.begin(), input_lengths.end());
-    const auto max_output =
-        *std::max_element(output_lengths.begin(), output_lengths.end());
-    if (max_input > std::numeric_limits<std::size_t>::max() - max_output) {
-      throw std::invalid_argument("input + output length overflows size_t");
-    }
-    params.max_model_len = max_input + max_output;
-    params.max_num_seqs =
-        *std::max_element(batch_sizes.begin(), batch_sizes.end());
-    params.gpu_expert_config = expert_config_path;
-    const auto config = nanovllm::inspect_model(model_path, params);
+    const auto config =
+        nanovllm::LLMEngine::inspect(options.model_path, params);
     const auto& placement = config.gpu_expert_ids_by_layer;
-    if (!expert_config_path.empty()) {
-      params.gpu_expert_ids_by_layer = placement;
-      params.gpu_expert_config.clear();
-    }
     // Validate before allocating the model or constructing large input vectors.
     if (params.max_model_len > config.max_position_embeddings) {
       throw std::invalid_argument(
           "input + output length exceeds model context limit");
     }
-    std::vector<std::string> seed_texts{seed_text};
-    if (!prompts_path.empty()) {
-      std::ifstream input(prompts_path);
+    std::vector<std::string> seed_texts{options.seed_text};
+    if (!options.prompts_path.empty()) {
+      std::ifstream input(options.prompts_path);
       const auto document = Json::parse(input);
       if (!document.is_array() || document.empty())
         throw std::invalid_argument(
@@ -289,7 +229,7 @@ int main(int argc, char** argv) {
         {"schema_version", 2},
         {"completed", false},
         {"started_at_utc", timestamp.str()},
-        {"model", std::filesystem::absolute(model_path).string()},
+        {"model", std::filesystem::absolute(options.model_path).string()},
         {"model_type", config.model_type},
         {"build_type", NANOVLLM_BENCH_BUILD_TYPE},
         {"gpu",
@@ -302,18 +242,25 @@ int main(int argc, char** argv) {
           {"cuda_driver_version", properties.cuda_driver_version}}},
         {"cpu_logical_threads", std::thread::hardware_concurrency()},
         {"settings",
-         {{"input_tokens", input_lengths},
-          {"output_tokens", output_lengths},
-          {"batch_sizes", batch_sizes},
-          {"warmup", warmup},
-          {"repeat", repeat},
+         {{"input_tokens", options.input_lengths},
+          {"output_tokens", options.output_lengths},
+          {"batch_sizes", options.batch_sizes},
+          {"warmup", options.warmup},
+          {"repeat", options.repeat},
           {"prefix_cache", false},
           {"temperature", 0},
           {"ignore_eos", true},
           {"seed", params.seed},
-          {"seed_text", prompts_path.empty() ? Json(seed_text) : Json(nullptr)},
+          {"seed_text", options.prompts_path.empty() ? Json(options.seed_text)
+                                                     : Json(nullptr)},
           {"prompt_texts", seed_texts},
           {"profile_experts", params.profile_experts},
+          {"expert_adaptation",
+           {{"every", params.expert_adaptation.every},
+            {"max_swaps", params.expert_adaptation.max_swaps},
+            {"decay", params.expert_adaptation.decay},
+            {"min_usage", params.expert_adaptation.min_usage},
+            {"min_gain", params.expert_adaptation.min_gain}}},
           {"max_model_len", params.max_model_len},
           {"max_seqs", params.max_num_seqs},
           {"max_batched_tokens", params.max_num_batched_tokens},
@@ -339,21 +286,17 @@ int main(int argc, char** argv) {
           {"expert_size_bytes", config.expert_size_bytes},
           {"gpu_slots", slots},
           {"cache_bytes", slots * config.expert_size_bytes},
-          {"config_file",
-           expert_config_path.empty()
-               ? Json(nullptr)
-               : Json(std::filesystem::absolute(expert_config_path).string())},
           {"layers", std::move(layers)}};
     }
-    save(output_path, report);
-    std::cout << "Loading " << model_path << " on " << properties.name
+    save(options.output_path, report);
+    std::cout << "Loading " << options.model_path << " on " << properties.name
               << "...\n"
               << "Synthetic token inputs; prefix cache disabled; times exclude "
                  "model load, "
                  "chat templates and tokenization.\n"
               << std::flush;
     const auto load_start = std::chrono::steady_clock::now();
-    nanovllm::LLMEngine engine(model_path, params);
+    nanovllm::LLMEngine engine(options.model_path, params);
     report["model_load_seconds"] =
         std::chrono::duration<double>(std::chrono::steady_clock::now()
                                       - load_start)
@@ -376,9 +319,9 @@ int main(int argc, char** argv) {
               << "TTFT p50 ms" << std::setw(13) << "TTFT p95 ms"
               << std::setw(14) << "Decode tok/s" << std::setw(13)
               << "TPOT p50 ms" << '\n';
-    for (const auto input_length : input_lengths) {
-      for (const auto output_length : output_lengths) {
-        for (const auto batch_size : batch_sizes) {
+    for (const auto input_length : options.input_lengths) {
+      for (const auto output_length : options.output_lengths) {
+        for (const auto batch_size : options.batch_sizes) {
           const nanovllm::SamplingParams sampling{.temperature = 0,
                                                   .max_tokens = output_length,
                                                   .ignore_eos = true};
@@ -400,9 +343,9 @@ int main(int argc, char** argv) {
               }
             }
           };
-          for (std::size_t i = 0; i < warmup; ++i) run(i, nullptr);
+          for (std::size_t i = 0; i < options.warmup; ++i) run(i, nullptr);
           Json runs = Json::array();
-          for (std::size_t i = 0; i < repeat; ++i) {
+          for (std::size_t i = 0; i < options.repeat; ++i) {
             nanovllm::GenerationMetrics metrics;
             run(i, &metrics);
             runs.push_back(serialize(metrics));
@@ -424,13 +367,13 @@ int main(int argc, char** argv) {
                                      {"batch_size", batch_size},
                                      {"runs", std::move(runs)},
                                      {"summary", std::move(summary)}});
-          save(output_path, report);
+          save(options.output_path, report);
         }
       }
     }
     report["completed"] = true;
-    save(output_path, report);
-    std::cout << "Report: " << output_path << '\n';
+    save(options.output_path, report);
+    std::cout << "Report: " << options.output_path << '\n';
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "Error: " << error.what() << '\n';

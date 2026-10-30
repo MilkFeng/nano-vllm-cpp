@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "common/cuda_utils.hh"
+#include "core/expert_policy.hh"
 #include "kernels/cpu/expert.hh"
 #include "kernels/cuda/kernels.hh"
 
@@ -195,6 +196,53 @@ void ExpertCache::populate(cudaStream_t stream) {
     expert_to_slot_[resident_ids_[slot]] = slot;
   }
   ready_ = true;
+}
+
+std::size_t ExpertCache::replace(
+    std::span<const ExpertCacheReplacement> replacements, cudaStream_t stream) {
+  if (!ready_) throw std::logic_error("populate expert cache before replacement");
+  if (replacements.empty()) return 0;
+
+  std::vector<bool> used_slots(slots_.size(), false);
+  std::vector<bool> used_ids(source_.num_experts(), false);
+  for (const auto& [slot, id] : replacements) {
+    if (slot >= slots_.size() || id < 0
+        || std::size_t(id) >= source_.num_experts() || used_slots[slot]
+        || used_ids[id] || expert_to_slot_[id] >= 0) {
+      throw std::invalid_argument("invalid or duplicate expert cache replacement");
+    }
+    used_slots[slot] = true;
+    used_ids[id] = true;
+  }
+
+  // A partially overwritten slot must never be consumed after a failed copy.
+  ready_ = false;
+  std::size_t bytes = 0;
+  try {
+    for (const auto& [slot, id] : replacements) {
+      for (const auto& [name, parameter] : source_.expert_at(id).named_parameters()) {
+        const auto source = parameter->view();
+        const auto destination = slots_[slot]->parameter(name).view();
+        check_cuda(cudaMemcpyAsync(destination.data(), source.data(),
+                                   source.size_bytes(), cudaMemcpyHostToDevice,
+                                   stream),
+                   "replace GPU expert weights");
+        bytes += source.size_bytes();
+      }
+    }
+    check_cuda(cudaStreamSynchronize(stream), "complete expert replacements");
+  } catch (...) {
+    cudaStreamSynchronize(stream);
+    invalidate();
+    throw;
+  }
+  for (const auto& [slot, id] : replacements) {
+    expert_to_slot_[resident_ids_[slot]] = -1;
+    resident_ids_[slot] = id;
+    expert_to_slot_[id] = static_cast<int>(slot);
+  }
+  ready_ = true;
+  return bytes;
 }
 
 int ExpertCache::slot_of(std::size_t expert_id) const {
@@ -550,7 +598,8 @@ void MoE::populate_expert_cache(cudaStream_t stream) {
 }
 
 MoEOutput MoE::forward(ConstTensorView hidden_states,
-                       cudaStream_t stream, MoEPhaseProfile* profile) const {
+                       cudaStream_t stream, MoEPhaseProfile* profile,
+                       ExpertUsage* usage) const {
   const auto started = profile ? std::chrono::steady_clock::now()
                                : std::chrono::steady_clock::time_point{};
   if (!cache_ || !cache_->ready()) {
@@ -566,6 +615,9 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
   }
 
   const auto tokens = hidden_states.shape()[0];
+  if (usage && usage->counts.size() != config_.num_experts) {
+    throw std::invalid_argument("expert usage must contain every expert");
+  }
   const auto device = hidden_states.device();
   if (config_.top_k == 0
       || tokens > std::numeric_limits<std::int32_t>::max() / config_.top_k) {
@@ -616,6 +668,11 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
     cudaStreamSynchronize(stream);
     throw;
   }
+  if (usage) {
+    for (const auto id : host_ids) ++usage->counts[id];
+    usage->gpu_assignments += stats.gpu_experts;
+    usage->cpu_assignments += stats.cpu_experts;
+  }
   if (profile) {
     profile->seconds += std::chrono::duration<double>(
         std::chrono::steady_clock::now() - started).count();
@@ -645,6 +702,13 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
       std::move(shared_output),
       std::move(shared_gate_logits),
   };
+}
+
+std::size_t MoE::replace_experts(
+    std::span<const ExpertCacheReplacement> replacements,
+    cudaStream_t stream) const {
+  if (!cache_) throw std::logic_error("CPU MoE has no CUDA expert cache");
+  return cache_->replace(replacements, stream);
 }
 
 const MoEConfig& MoE::config() const noexcept {
