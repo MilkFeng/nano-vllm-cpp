@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "status": "ok",
+  "library_sha256": "f65094a18ab1df8ce6f337ae657ee8b0d4d2b5f6e1408262484f37556103d691",
+  "production_kernel_sha256": "1ec77210027d361c904e41227d0bae0e5b4c233244945a4785bf1bd530f8141b",
+  "native_driver_sha256": "d55250630e3c5847914881bb53cbe4258d0534f8c80ceaa04be2050ecf5fefa9",
+  "numerical": {
+    "command": [
+      "build/attn-venv/bin/python",
+      "exp/attn/run_attn.py",
+      "--check-only",
+      "--output",
+      "build/attn-results/full-production-20261031/correctness.json"
+    ],
+    "result": {
+      "status": "ok",
+      "checks": 212,
+      "max_abs_error": 0.9473876953125,
+      "per_dtype": {
+        "float32": {
+          "max_abs_error": 3.0517578125e-05,
+          "max_tolerance_ratio": 0.004110959658438196
+        },
+        "float16": {
+          "max_abs_error": 0.0002421736717224121,
+          "max_tolerance_ratio": 0.034226282411965125
+        },
+        "bfloat16": {
+          "max_abs_error": 0.9473876953125,
+          "max_tolerance_ratio": 0.1283697047496791
+        }
+      },
+      "note": "Deterministic V includes KV-head offsets up to 448; BF16 absolute error reflects that scale."
+    },
+    "artifact": "correctness.json"
+  },
+  "sanitizers": {
+    "memcheck": {
+      "command": [
+        "/usr/local/cuda-13.3/bin/compute-sanitizer",
+        "--tool",
+        "memcheck",
+        "--error-exitcode",
+        "1",
+        "--log-file",
+        "build/attn-results/validation/memcheck-native.txt",
+        "./build/nano-vllm-cpp-attn-check"
+      ],
+      "native_cases": 36,
+      "artifact": "memcheck.txt",
+      "log_modified_utc": "2026-10-31T07:39:33.361137+00:00",
+      "sha256": "a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425"
+    },
+    "racecheck": {
+      "command": [
+        "/usr/local/cuda-13.3/bin/compute-sanitizer",
+        "--tool",
+        "racecheck",
+        "--error-exitcode",
+        "1",
+        "--log-file",
+        "build/attn-results/validation/racecheck-native.txt",
+        "./build/nano-vllm-cpp-attn-check"
+      ],
+      "native_cases": 36,
+      "artifact": "racecheck.txt",
+      "log_modified_utc": "2026-10-31T07:39:42.601272+00:00",
+      "sha256": "91dbb142f8feb8786cd6fde6ac035e816b67db14e4b7b400a01386ec106b75c4"
+    }
+  },
+  "archive_report_regeneration": "summary.json, summary.csv and report.md are byte-identical to the original report"
+}

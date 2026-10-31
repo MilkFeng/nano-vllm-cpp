@@ -163,3 +163,27 @@ target_compile_definitions(nano-vllm-cpp-comp-gemm PRIVATE
   NANOVLLM_GEMM_BUILD_TYPE="$<CONFIG>"
   NANOVLLM_GEMM_CUDA_COMPILER="${CMAKE_CUDA_COMPILER_VERSION}"
 )
+
+add_library(nano-vllm-cpp-attn-exp SHARED EXCLUDE_FROM_ALL
+  exp/attn/attn_bridge.cc
+  src/kernels/cuda/attention.cu
+  src/core/device.cc
+  src/core/tensor_layout.cc
+  src/core/tensor_view.cc
+)
+
+target_include_directories(nano-vllm-cpp-attn-exp PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(nano-vllm-cpp-attn-exp PRIVATE CUDA::cudart)
+target_compile_options(nano-vllm-cpp-attn-exp PRIVATE
+  "$<$<COMPILE_LANGUAGE:CUDA>:--generate-line-info>"
+)
+target_compile_definitions(nano-vllm-cpp-attn-exp PRIVATE
+  NANOVLLM_ATTN_BUILD_TYPE="$<CONFIG>"
+)
+
+add_executable(nano-vllm-cpp-attn-check EXCLUDE_FROM_ALL exp/attn/check_native.cc)
+target_include_directories(nano-vllm-cpp-attn-check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(nano-vllm-cpp-attn-check PRIVATE nano-vllm-cpp-attn-exp CUDA::cudart)

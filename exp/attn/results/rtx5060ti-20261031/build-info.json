@@ -1,0 +1,19 @@
+{
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "cpu": "AMD Ryzen 7 9700X 8-Core Processor",
+  "cuda_compiler": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Tue_Jun_09_02:43:40_PM_PDT_2026\nCuda compilation tools, release 13.3, V13.3.73\nBuild cuda_13.3.r13.3/compiler.38244171_0\n",
+  "measurement_build_commands": [
+    {
+      "directory": "/home/feng/nano-vllm-cpp/build",
+      "command": "/usr/bin/c++ -DNANOVLLM_ATTN_BUILD_TYPE=\\\"Release\\\" -Dnano_vllm_cpp_attn_exp_EXPORTS -I/home/feng/nano-vllm-cpp/src -isystem /usr/local/cuda-13.3/targets/x86_64-linux/include -O3 -DNDEBUG -std=c++20 -fPIC -o CMakeFiles/nano-vllm-cpp-attn-exp.dir/exp/attn/attn_bridge.cc.o -c /home/feng/nano-vllm-cpp/exp/attn/attn_bridge.cc",
+      "file": "/home/feng/nano-vllm-cpp/exp/attn/attn_bridge.cc",
+      "output": "CMakeFiles/nano-vllm-cpp-attn-exp.dir/exp/attn/attn_bridge.cc.o"
+    },
+    {
+      "directory": "/home/feng/nano-vllm-cpp/build",
+      "command": "/usr/local/cuda-13.3/bin/nvcc -forward-unknown-to-host-compiler -DNANOVLLM_ATTN_BUILD_TYPE=\\\"Release\\\" -Dnano_vllm_cpp_attn_exp_EXPORTS -I/home/feng/nano-vllm-cpp/src -isystem /usr/local/cuda-13.3/targets/x86_64-linux/include -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --generate-line-info -x cu -c /home/feng/nano-vllm-cpp/src/kernels/cuda/attention.cu -o CMakeFiles/nano-vllm-cpp-attn-exp.dir/src/kernels/cuda/attention.cu.o",
+      "file": "/home/feng/nano-vllm-cpp/src/kernels/cuda/attention.cu",
+      "output": "CMakeFiles/nano-vllm-cpp-attn-exp.dir/src/kernels/cuda/attention.cu.o"
+    }
+  ]
+}

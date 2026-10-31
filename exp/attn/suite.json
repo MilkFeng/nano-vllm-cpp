@@ -1,0 +1,276 @@
+{
+  "schema_version": 1,
+  "status": "implemented",
+  "operation": "paged GQA attention with optional KV append",
+  "profiles": {
+    "qwen3_0p6b": {
+      "query_heads": 16,
+      "kv_heads": 8,
+      "head_dim": 128
+    },
+    "qwen35_full_attention": {
+      "query_heads": 16,
+      "kv_heads": 2,
+      "head_dim": 256
+    }
+  },
+  "dtypes": [
+    "float32",
+    "float16",
+    "bfloat16"
+  ],
+  "contract": {
+    "query_output_layout": "packed_tokens,Hq,D",
+    "kv_cache_layout": "separate K/V; pages,page_size,Hkv,D; NHD",
+    "new_kv_layout": "packed_tokens,Hkv,D",
+    "lengths": "kv_length includes new tokens; prefix_length=kv_length-query_length",
+    "causal_rule": "key_index <= prefix_length + local_query_index",
+    "gqa_rule": "kv_head = query_head // (Hq // Hkv)",
+    "softmax_scale": "1/sqrt(head_dim)",
+    "dropout": 0,
+    "rope_in_operator": false,
+    "alibi": false,
+    "soft_cap": false,
+    "window": "full",
+    "default_page_size": 16
+  },
+  "primary_task": {
+    "name": "paged_append_attention",
+    "custom": "production fused append + attention",
+    "baseline": "FlashInfer append_paged_kv_cache + paged attention run",
+    "counts_append": true,
+    "counts_layout_conversion": true,
+    "counts_plan": false,
+    "page_assignment": "seeded random permutation; no shared writable pages"
+  },
+  "full": {
+    "logical_shapes_per_profile": 28,
+    "logical_shapes_total": 56,
+    "primary_cases_per_cache_mode": 168,
+    "grids": [
+      {
+        "name": "prefill",
+        "batch_sizes": [
+          1,
+          4
+        ],
+        "query_lengths": [
+          128,
+          512,
+          2048
+        ],
+        "prefix_lengths": [
+          0
+        ],
+        "kv_length": "prefix_length+query_length",
+        "cases_per_profile": 6
+      },
+      {
+        "name": "decode",
+        "batch_sizes": [
+          1,
+          4,
+          16
+        ],
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          128,
+          512,
+          2048,
+          8192
+        ],
+        "prefix_length": "kv_length-1",
+        "cases_per_profile": 12
+      },
+      {
+        "name": "chunked_prefill",
+        "batch_sizes": [
+          1,
+          4
+        ],
+        "query_lengths": [
+          16,
+          128
+        ],
+        "prefix_lengths": [
+          512,
+          2048
+        ],
+        "kv_length": "prefix_length+query_length",
+        "cases_per_profile": 8
+      }
+    ],
+    "ragged": [
+      {
+        "name": "ragged_decode",
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          127,
+          513,
+          2047,
+          8191
+        ]
+      },
+      {
+        "name": "ragged_chunked_prefill",
+        "query_lengths": [
+          1,
+          3,
+          17,
+          65
+        ],
+        "prefix_lengths": [
+          0,
+          15,
+          511,
+          2047
+        ]
+      }
+    ]
+  },
+  "secondary_tasks": [
+    {
+      "name": "dense_prefill_append_attention",
+      "runner_task": "prefill",
+      "custom": "same production API in src/kernels/cuda/attention.cu",
+      "shapes": "full.prefill",
+      "page_assignment": "identity; dense K/V are zero-copy views of the same cache",
+      "baselines": [
+        "torch_index_copy_append+sdpa_math+NHD_output",
+        "torch_index_copy_append+sdpa_flash+NHD_output",
+        "torch_index_copy_append+sdpa_cudnn+NHD_output",
+        "flash_attention_optional"
+      ],
+      "counts_append": true,
+      "counts_output_packing": true
+    }
+  ],
+  "correctness": {
+    "input_distribution": "normal(0,0.5), cast to target dtype before FP64 reference",
+    "tolerances": {
+      "float32": {
+        "atol": 2e-05,
+        "rtol": 0.0002
+      },
+      "float16": {
+        "atol": 0.002,
+        "rtol": 0.01
+      },
+      "bfloat16": {
+        "atol": 0.01,
+        "rtol": 0.03
+      }
+    },
+    "query_length_edges": [
+      0,
+      1,
+      3,
+      4,
+      5,
+      15,
+      16,
+      17,
+      65
+    ],
+    "prefix_length_edges": [
+      0,
+      15,
+      16,
+      17,
+      255,
+      256,
+      257
+    ],
+    "additional_head_shapes": [
+      [
+        8,
+        8,
+        64
+      ],
+      [
+        8,
+        1,
+        80
+      ],
+      [
+        8,
+        2,
+        96
+      ]
+    ],
+    "causal_values": [
+      true,
+      false
+    ],
+    "check_output": true,
+    "check_full_cache_mutation": true,
+    "check_padding_and_unused_page_sentinels": true,
+    "check_repeat_is_idempotent": true,
+    "non_default_stream": true,
+    "forbidden_inputs": [
+      "kv_length<query_length",
+      "shared writable pages",
+      "invalid page ids"
+    ]
+  },
+  "sampling": {
+    "processes": 3,
+    "seeds": [
+      42,
+      43,
+      44
+    ],
+    "samples_per_implementation": 15,
+    "warmup_calls": 20,
+    "target_ms": 10,
+    "max_calls_per_graph": 1024,
+    "modes": [
+      "reuse",
+      "rotating"
+    ],
+    "rotating_target_bytes": "max(64 MiB,2*device_L2)",
+    "rotating_max_banks": 32,
+    "bank_memory_limit": "25% of free VRAM after runtime initialization",
+    "replay_lengths": "fixed; overwrite same new-token slots each replay",
+    "comparison_statuses": [
+      "ok",
+      "not_installed",
+      "unsupported",
+      "memory_limit",
+      "incorrect",
+      "error"
+    ],
+    "flashinfer_workspace_mib": 256,
+    "note": "128 MiB is insufficient for the largest FA2 prefill; all cases use the same 256 MiB limit"
+  },
+  "optional_stress": {
+    "in_primary_aggregate": false,
+    "prefill_8192": {
+      "batch_sizes": [
+        1
+      ],
+      "query_lengths": [
+        8192
+      ],
+      "prefix_lengths": [
+        0
+      ]
+    },
+    "alternative_page_sizes": [
+      64,
+      256
+    ],
+    "page_order_ablation": [
+      "identity",
+      "permuted"
+    ],
+    "shared_read_only_prefix": true
+  }
+}

@@ -1,0 +1,782 @@
+{
+  "schema_version": 1,
+  "purpose": "capability checks only; not performance results",
+  "created_at_utc": "2026-10-31T06:35:34.394368+00:00",
+  "python_executable": "/home/feng/cs336/assignment2-systems/.venv/bin/python",
+  "torch": "2.11.0+cu130",
+  "torch_cuda": "13.0",
+  "cudnn": 91900,
+  "optional_packages": {
+    "flash-attn": {
+      "version": null,
+      "status": "not_installed",
+      "note": "Paged-cache capability requires a separate package-specific probe."
+    },
+    "flashinfer-python": {
+      "version": null,
+      "status": "not_installed",
+      "note": "Paged-cache capability requires a separate package-specific probe."
+    }
+  },
+  "trials": [
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float32",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [
+        "Warning: Profiler clears events at the end of each cycle.Only events from the current cycle will be reported.To keep events across cycles, set acc_events=True."
+      ],
+      "max_abs_error": 2.2232547997047547e-07,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float32",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "flash",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float32",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "cudnn",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float32",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 5.05775892278848e-08,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float32",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "flash",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float32",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "cudnn",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float32",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 1.1118769727147537e-07,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float32",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "flash",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float32",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "cudnn",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float16",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0009751258161712073,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float16",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "flash",
+      "observed_ops": [
+        "aten::_scaled_dot_product_flash_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0010657467666179699,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float16",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "cudnn",
+      "observed_ops": [
+        "aten::_scaled_dot_product_cudnn_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0010657467666179699,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float16",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 5.341934618297017e-05,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float16",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "flash",
+      "observed_ops": [
+        "aten::_scaled_dot_product_flash_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 7.011364880052384e-05,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float16",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "cudnn",
+      "observed_ops": [
+        "aten::_scaled_dot_product_cudnn_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 6.865096631702983e-05,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float16",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0002408031622217477,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float16",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "flash",
+      "observed_ops": [
+        "aten::_scaled_dot_product_flash_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.00030645870205203707,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.float16",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "cudnn",
+      "observed_ops": [
+        "aten::_scaled_dot_product_cudnn_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.00030645870205203707,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.bfloat16",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.007353812166305929,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.bfloat16",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "flash",
+      "observed_ops": [
+        "aten::_scaled_dot_product_flash_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.007353812166305929,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.bfloat16",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "cudnn",
+      "observed_ops": [
+        "aten::_scaled_dot_product_cudnn_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.007353812166305929,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.bfloat16",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.00047834970551555167,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.bfloat16",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "flash",
+      "observed_ops": [
+        "aten::_scaled_dot_product_flash_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0005638514639520475,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.bfloat16",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "cudnn",
+      "observed_ops": [
+        "aten::_scaled_dot_product_cudnn_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.00047834970551555167,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.bfloat16",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0019483770375527953,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.bfloat16",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "flash",
+      "observed_ops": [
+        "aten::_scaled_dot_product_flash_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0027261105518869844,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen3",
+      "dtype": "torch.bfloat16",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "cudnn",
+      "observed_ops": [
+        "aten::_scaled_dot_product_cudnn_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0027261105518869844,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float32",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 3.5396123510000876e-07,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float32",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "flash",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float32",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "cudnn",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float32",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 5.5335147831903075e-08,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float32",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "flash",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float32",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "cudnn",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float32",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 1.1332171390154855e-07,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float32",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "flash",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float32",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "cudnn",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float16",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0009726113140198223,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float16",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "flash",
+      "observed_ops": [
+        "aten::_scaled_dot_product_flash_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0010400761227282729,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float16",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "cudnn",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float16",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 6.092968011375821e-05,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float16",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "flash",
+      "observed_ops": [
+        "aten::_scaled_dot_product_flash_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 8.186718425082229e-05,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float16",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "cudnn",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float16",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0002427859904738927,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float16",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "flash",
+      "observed_ops": [
+        "aten::_scaled_dot_product_flash_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.00038400727064402673,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.float16",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "cudnn",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.bfloat16",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.007570854617413136,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.bfloat16",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "flash",
+      "observed_ops": [
+        "aten::_scaled_dot_product_flash_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.010405175440704184,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.bfloat16",
+      "phase": "prefill",
+      "query_length": 128,
+      "kv_length": 128,
+      "requested_backend": "cudnn",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.bfloat16",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.00046569248467967506,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.bfloat16",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "flash",
+      "observed_ops": [
+        "aten::_scaled_dot_product_flash_attention",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0005729884427113641,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.bfloat16",
+      "phase": "decode",
+      "query_length": 1,
+      "kv_length": 512,
+      "requested_backend": "cudnn",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.bfloat16",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "math",
+      "observed_ops": [
+        "aten::_scaled_dot_product_attention_math",
+        "aten::scaled_dot_product_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0019396035908021414,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.bfloat16",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "flash",
+      "observed_ops": [
+        "aten::_scaled_dot_product_flash_attention"
+      ],
+      "warnings": [],
+      "max_abs_error": 0.0028312895551224626,
+      "correct": true,
+      "status": "ok"
+    },
+    {
+      "profile": "qwen35_full",
+      "dtype": "torch.bfloat16",
+      "phase": "chunked",
+      "query_length": 3,
+      "kv_length": 20,
+      "requested_backend": "cudnn",
+      "status": "unsupported",
+      "error": "No available kernel. Aborting execution."
+    }
+  ],
+  "gpu": "NVIDIA GeForce RTX 5060 Ti",
+  "capability": [
+    12,
+    0
+  ]
+}
