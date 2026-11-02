@@ -184,3 +184,36 @@ RTX 5060 Ti、BF16、地址复用、包含 KV 追加，吞吐比几何平均如�
 | Qwen3.5 full attention | 1.84% | 2.14% |
 
 完整报告、曲线与原始数据 (exp/attn/results/rtx5060ti-20261031/report.md)已归档。当前性能差距较大，建议先优化生产 attention，再作为简历上的性能亮点。
+
+我建议先做 decode 专用 kernel，再做 Tensor Core prefill。当前代码已经实现在线 softmax 和融合 KV 更新，接下来最有价值的是调整并行方式。
+
+下面是结合源码和测量结果的判断，具体瓶颈占比还需要 Nsight Compute 验证。
+
+1. Decode：沿 KV 长度并行，加入自适应 Split-KV，优先级最高。
+
+   当前一个 block 处理 4 个 query，每个 warp 负责一个 query。Decode 的 Q=1 时，只有一个 warp 计算输出，其他 warp 参与加载；B=1、Hq=16 总共只有 16 个 block，每个 block 串行遍历整个 KV。对应代码 (src/kernels/cuda/attention.cu:284)
+
+   可以先让多个 warp 协同处理同一个 query，再把长 KV 分给多个 block。每个分片保存局部 softmax 状态和加权输出，最后稳定归并。这也是 Flash-Decoding 的核心思路。分片数应根据 batch、head 数和 KV 长度选择，短序列保留单阶段路径。
+
+   这项值得先做：BF16、B=1、KV=8192 的 Qwen3 配置，目前约 7.23 ms，FlashInfer 约 40 μs。
+2. GQA：让多个 query head 共享同一份 KV tile。
+
+   现在每个 query head 单独启动 block。同组 query head 使用相同 KV head，却分别加载、处理相同数据。Qwen3.5 的 Hq/Hkv=16/2，每个 KV head 对应 8 个 query head。
+
+   可以把同组的若干 query head 放进一个 block，共享 KV tile。它需要和 Split-KV 一起设计，兼顾数据复用和 block 数量；实际显存流量收益还要考虑缓存命中。
+3. Prefill：把 QKᵀ 和 PV 改成 Tensor Core 矩阵运算。
+
+   当前计算循环 (src/kernels/cuda/attention.cu:207)逐个 key 做 FP32 标量点积，每个点积都进行 warp reduction。FP16/BF16 输入也走这条计算路径。
+
+   建议扩大 query tile，让更多 query 复用 KV，并用 mma.sync 完成 QKᵀ、PV，softmax 和累加保持 FP32。这对应 FlashAttention-2 强调的矩阵计算效率和 warp 工作划分，是 prefill 的主要优化方向。
+4. 随后优化搬运、同步和特化。
+   - KV shared memory 保留 FP16/BF16，减少容量占用。
+   - 配合向量化加载、cp.async 和双缓冲，重叠搬运与计算。NVIDIA 数据流说明
+   - 对 D=128/256、decode/prefill 做模板特化。
+   - 根据 profiler 结果再调整 shared memory 布局和 swizzle。
+
+   注意：当前 score 每个 lane 只保存一个值，不能直接把 kKeyTile 从 16 改成 64，需要同时重写分数存储和归约布局。
+
+实施顺序我会选：decode 协同计算 → 自适应 Split-KV → GQA 复用 → Tensor Core prefill → 搬运流水线。每一步单独测消融，保留这次结果作为改前 baseline。这样简历可以同时写“相较原实现提升 X 倍”和“达到 FlashInfer/SDPA Flash 的 Y%”。
+
+所有优化都应写进 src/kernels/cuda，exp/attn 继续只调用生产接口做比较。

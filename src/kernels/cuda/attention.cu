@@ -105,6 +105,150 @@ AttentionShape attn_shape(ConstTensorView query, TensorView key_cache,
   return shape;
 }
 
+template <typename T, int W, int E>
+__global__ void flash_attn_with_kvcache_kernel_decode(
+    const T* __restrict__ query, T* __restrict__ key_cache,
+    T* __restrict__ value_cache, const T* __restrict__ key,
+    const T* __restrict__ value, const std::int32_t* __restrict__ cu_seqlens_q,
+    const std::int32_t* __restrict__ cu_seqlens_k,
+    const std::int32_t* __restrict__ block_table, T* __restrict__ output,
+    AttentionShape shape, bool causal) {
+  constexpr int kThreads = W * 32;
+
+  const std::size_t query_local_idx = blockIdx.x;
+  const std::size_t query_head_idx = blockIdx.y;
+  const std::size_t batch = blockIdx.z;
+
+  const int query_start = cu_seqlens_q[batch];
+  const int query_length = cu_seqlens_q[batch + 1] - query_start;
+  const int key_length = cu_seqlens_k[batch + 1] - cu_seqlens_k[batch];
+  const int cached_length = key_length - query_length;
+
+  if (query_local_idx >= query_length) {
+    return;
+  }
+
+  const int lane = threadIdx.x & 31;
+  const int warp = threadIdx.x >> 5;
+
+  const int head_dim = shape.head_dim;
+  const int query_idx = query_start + query_local_idx;
+  const std::size_t group_size = shape.query_heads / shape.key_heads;
+  const std::size_t key_head = query_head_idx / group_size;
+
+  const std::size_t query_offset =
+      (query_idx * shape.query_heads + query_head_idx) * head_dim;
+  const int key_end =
+      causal ? min(key_length,
+                   static_cast<int>(cached_length + query_local_idx + 1))
+             : key_length;
+  const float scale = rsqrtf(head_dim);
+
+  extern __shared__ float s_mem[];
+  float* s_out = s_mem;
+  float* s_m = s_out + head_dim;
+  float* s_l = s_m + W;
+
+  for (int k = threadIdx.x; k < head_dim; k += kThreads) {
+    s_out[k] = 0.0f;
+  }
+
+  float q[E] = {};
+  float acc[E] = {};
+#pragma unroll
+  for (int c = 0; c < E; ++c) {
+    const int d = lane + c * 32;
+    if (d < head_dim) {
+      q[c] = detail::to_float(query[query_offset + d]);
+    }
+  }
+
+  float m = -CUDART_INF_F;
+  float l = 0.0f;
+
+  for (int j = warp; j < key_end; j += W) {
+    const auto page =
+        block_table[batch * shape.max_blocks + j / shape.block_tokens];
+    const auto cache_token = page * shape.block_tokens + j % shape.block_tokens;
+    const auto cache_offset =
+        (cache_token * shape.key_heads + key_head) * head_dim;
+    float v[E] = {};
+    float dot = 0.0f;
+
+#pragma unroll
+    for (int c = 0; c < E; ++c) {
+      const int d = lane + c * 32;
+      if (d < head_dim) {
+        T kj, vj;
+        if (j < cached_length) {
+          kj = key_cache[cache_offset + d];
+          vj = value_cache[cache_offset + d];
+        } else {
+          const int new_pos = j - cached_length;
+          const auto input_offset =
+              ((query_start + new_pos) * shape.key_heads + key_head) * head_dim
+              + d;
+
+          kj = key[input_offset];
+          vj = value[input_offset];
+
+          if (query_head_idx % group_size == 0 && new_pos == query_local_idx) {
+            key_cache[cache_offset + d] = kj;
+            value_cache[cache_offset + d] = vj;
+          }
+        }
+        dot += q[c] * detail::to_float(kj);
+        v[c] = detail::to_float(vj);
+      }
+    }
+
+    const float score = detail::warp_sum_reduce(dot) * scale;
+    const float next_m = fmaxf(m, score);
+    const float alpha = __expf(m - next_m);
+    const float beta = __expf(score - next_m);
+    l = l * alpha + beta;
+    m = next_m;
+#pragma unroll
+    for (int c = 0; c < E; ++c) {
+      acc[c] = acc[c] * alpha + beta * v[c];
+    }
+  }
+
+  if (lane == 0) {
+    s_m[warp] = m;
+    s_l[warp] = l;
+  }
+  __syncthreads();
+
+  float g_m = -CUDART_INF_F;
+  float g_l = 0.0f;
+#pragma unroll
+  for (int w = 0; w < W; ++w) {
+    g_m = fmaxf(g_m, s_m[w]);
+  }
+#pragma unroll
+  for (int w = 0; w < W; ++w) {
+    if (s_l[w] > 0.0f) {
+      g_l += s_l[w] * expf(s_m[w] - g_m);
+    }
+  }
+
+  const float warp_scale = l > 0.0f ? expf(m - g_m) : 0.0f;
+#pragma unroll
+  for (int c = 0; c < E; ++c) {
+    const int d = lane + c * 32;
+    if (d < head_dim) {
+      atomicAdd(&s_out[d], acc[c] * warp_scale);
+    }
+  }
+  __syncthreads();
+
+  const float inv_l = g_l > 0.0f ? 1.0f / g_l : 0.0f;
+  for (int d = threadIdx.x; d < head_dim; d += kThreads) {
+    output[query_offset + d] = detail::from_float<T>(s_out[d] * inv_l);
+  }
+}
+
 template <typename T>
 __global__ void flash_attn_with_kvcache_kernel(
     const T* __restrict__ query, T* __restrict__ key_cache,
@@ -281,16 +425,30 @@ void flash_attn_with_kvcache(ConstTensorView query, TensorView key_cache,
     return;
   }
 
-  const dim3 grid((max_seqlen_q + kQueryTile - 1) / kQueryTile,
-                  shape.query_heads, shape.batch);
-  const auto shared_bytes = 2 * kKeyTile * shape.head_dim * sizeof(float);
-
   detail::dispatch_float(query.dtype(), [&]<typename T>() {
-    flash_attn_with_kvcache_kernel<T><<<grid, kThreads, shared_bytes, stream>>>(
-        query.data<T>(), key_cache.data<T>(), value_cache.data<T>(),
-        key.data<T>(), value.data<T>(), cu_seqlens_q.data<std::int32_t>(),
-        cu_seqlens_k.data<std::int32_t>(), block_table.data<std::int32_t>(),
-        output.data<T>(), shape, causal);
+    if (max_seqlen_q == 1) {
+      constexpr int warps = 4;
+      const dim3 grid(max_seqlen_q, shape.query_heads, shape.batch);
+      const auto shared_bytes = (shape.head_dim + 2 * warps) * sizeof(float);
+      flash_attn_with_kvcache_kernel_decode<T, warps, kHeadElements>
+          <<<grid, warps * 32, shared_bytes, stream>>>(
+              query.data<T>(), key_cache.data<T>(), value_cache.data<T>(),
+              key.data<T>(), value.data<T>(), cu_seqlens_q.data<std::int32_t>(),
+              cu_seqlens_k.data<std::int32_t>(),
+              block_table.data<std::int32_t>(), output.data<T>(), shape,
+              causal);
+    } else {
+      const dim3 grid((max_seqlen_q + kQueryTile - 1) / kQueryTile,
+                      shape.query_heads, shape.batch);
+      const auto shared_bytes = 2 * kKeyTile * shape.head_dim * sizeof(float);
+      flash_attn_with_kvcache_kernel<T>
+          <<<grid, kThreads, shared_bytes, stream>>>(
+              query.data<T>(), key_cache.data<T>(), value_cache.data<T>(),
+              key.data<T>(), value.data<T>(), cu_seqlens_q.data<std::int32_t>(),
+              cu_seqlens_k.data<std::int32_t>(),
+              block_table.data<std::int32_t>(), output.data<T>(), shape,
+              causal);
+    }
   });
   check_cuda(cudaGetLastError(), "launch flash_attn_with_kvcache");
 }
