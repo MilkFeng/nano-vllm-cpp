@@ -1,0 +1,53 @@
+{
+  "status": "ok",
+  "runs": 3,
+  "cases_per_run": 408,
+  "total_cases": 1224,
+  "source_and_library_unchanged_during_measurement": true,
+  "source_sha256": "3cc28b0e3a465a8d3df145b91e5dbfccd7ac63812174edd168cdd9925a9a9bd9",
+  "library_sha256": "e08c4047fb454a3487ef6bc3ad56a4c9ea75505463dcc242874ca4b782c0af58",
+  "numerical": {
+    "status": "ok",
+    "checks": 212,
+    "max_abs_error": 0.9473876953125,
+    "per_dtype": {
+      "float32": {
+        "max_abs_error": 3.0517578125e-05,
+        "max_tolerance_ratio": 0.004110959658438196
+      },
+      "float16": {
+        "max_abs_error": 0.0002421736717224121,
+        "max_tolerance_ratio": 0.034226282411965125
+      },
+      "bfloat16": {
+        "max_abs_error": 0.9473876953125,
+        "max_tolerance_ratio": 0.1283697047496791
+      }
+    },
+    "note": "Deterministic V includes KV-head offsets up to 448; BF16 absolute error reflects that scale."
+  },
+  "max_performance_case_tolerance_ratio": 0.09680245825717111,
+  "sanitizers": {
+    "memcheck": {
+      "native_cases": 36,
+      "errors": 0,
+      "artifact": "memcheck.txt",
+      "log_sha256": "a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425"
+    },
+    "racecheck": {
+      "native_cases": 36,
+      "errors": 0,
+      "artifact": "racecheck.txt",
+      "log_sha256": "91dbb142f8feb8786cd6fde6ac035e816b67db14e4b7b400a01386ec106b75c4"
+    }
+  },
+  "same_environment_as_previous": {
+    "hardware": true,
+    "software": true
+  },
+  "changed_sources_since_previous": [
+    "src/kernels/cuda/attention.cu"
+  ],
+  "comparison_script_sha256": "1a202061bb521421000fb62d64e5b33c47ba3d50a9e4b41f7b7666bbbf904503",
+  "note": "contract.production_optimized in the unchanged runner is a historical constant; the source hash identifies this decode revision."
+}

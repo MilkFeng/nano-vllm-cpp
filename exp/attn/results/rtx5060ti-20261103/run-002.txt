@@ -1,0 +1,816 @@
+[1/408] pipeline qwen3_0p6b_decode_b4_q1_k512 float16 reuse
+  custom 151.259 us; baselines {'flashinfer': 13.070545035235222}
+[2/408] pipeline qwen3_0p6b_prefill_b1_q2048_k2048 bfloat16 reuse
+  custom 41928.001 us; baselines {'flashinfer': 708.14757876926}
+[3/408] pipeline qwen3_0p6b_decode_b16_q1_k512 float32 reuse
+  custom 520.260 us; baselines {}
+[4/408] pipeline qwen35_full_attention_decode_b1_q1_k2048 float16 reuse
+  custom 1039.589 us; baselines {'flashinfer': 12.520808852120732}
+[5/408] pipeline qwen35_full_attention_chunked_prefill_b1_q16_k528 bfloat16 rotating
+  custom 798.187 us; baselines {'flashinfer': 29.28869311626141}
+[6/408] pipeline qwen3_0p6b_decode_b1_q1_k8192 float16 reuse
+  custom 3812.597 us; baselines {'flashinfer': 32.322936101790965}
+[7/408] pipeline qwen3_0p6b_prefill_b1_q128_k128 bfloat16 reuse
+  custom 221.623 us; baselines {'flashinfer': 26.448101937016354}
+[8/408] pipeline qwen3_0p6b_prefill_b4_q128_k128 float32 rotating
+  custom 743.213 us; baselines {}
+[9/408] pipeline qwen35_full_attention_chunked_prefill_b4_q16_k2064 bfloat16 rotating
+  custom 9220.272 us; baselines {'flashinfer': 89.04470415676342}
+[10/408] pipeline qwen3_0p6b_decode_b4_q1_k512 float32 reuse
+  custom 152.768 us; baselines {}
+[11/408] pipeline qwen35_full_attention_decode_b4_q1_k2048 bfloat16 rotating
+  custom 1666.496 us; baselines {'flashinfer': 60.543999379994915}
+[12/408] pipeline qwen3_0p6b_decode_b4_q1_k512 float32 rotating
+  custom 256.093 us; baselines {}
+[13/408] pipeline qwen35_full_attention_decode_b4_q1_k8192 float16 reuse
+  custom 6776.656 us; baselines {'flashinfer': 213.19916373804995}
+[14/408] prefill qwen3_0p6b_prefill_b1_q2048_k2048 float32 reuse
+  custom 41536.865 us; baselines {'sdpa_math': 13386.591911315918}
+[15/408] pipeline qwen3_0p6b_chunked_prefill_b1_q128_k640 bfloat16 reuse
+  custom 1514.041 us; baselines {'flashinfer': 46.98801687939674}
+[16/408] prefill qwen35_full_attention_prefill_b1_q512_k512 bfloat16 rotating
+  custom 6606.670 us; baselines {'sdpa_math': 1038.633142198835, 'sdpa_flash': 127.36947195870536}
+[17/408] pipeline qwen3_0p6b_decode_b4_q1_k2048 bfloat16 reuse
+  custom 800.280 us; baselines {'flashinfer': 37.253695450643626}
+[18/408] pipeline qwen35_full_attention_chunked_prefill_b1_q16_k2064 float32 rotating
+  custom 3122.424 us; baselines {}
+[19/408] pipeline qwen35_full_attention_decode_b16_q1_k2048 float32 reuse
+  custom 3359.320 us; baselines {}
+[20/408] pipeline qwen35_full_attention_chunked_prefill_b4_q16_k528 float32 reuse
+  custom 1981.453 us; baselines {}
+[21/408] pipeline qwen35_full_attention_prefill_b4_q2048_k2048 float32 reuse
+  custom 390003.571 us; baselines {}
+[22/408] pipeline qwen35_full_attention_chunked_prefill_b1_q16_k528 bfloat16 reuse
+  custom 611.682 us; baselines {'flashinfer': 27.990140141667545}
+[23/408] pipeline qwen3_0p6b_decode_b4_q1_k128 float32 rotating
+  custom 67.123 us; baselines {}
+[24/408] pipeline qwen3_0p6b_decode_b16_q1_k8192 bfloat16 reuse
+  custom 8203.248 us; baselines {'flashinfer': 1612.2440099716187}
+[25/408] pipeline qwen35_full_attention_decode_b4_q1_k512 float32 rotating
+  custom 422.818 us; baselines {}
+[26/408] pipeline qwen35_full_attention_decode_b16_q1_k128 float32 rotating
+  custom 223.130 us; baselines {}
+[27/408] pipeline qwen35_full_attention_ragged_decode bfloat16 rotating
+  custom 6670.016 us; baselines {'flashinfer': 77.23761012411525}
+[28/408] pipeline qwen3_0p6b_decode_b1_q1_k8192 bfloat16 reuse
+  custom 3865.131 us; baselines {'flashinfer': 36.973977911061255}
+[29/408] prefill qwen35_full_attention_prefill_b4_q2048_k2048 float32 rotating
+  custom 391193.024 us; baselines {'sdpa_math': 78155.42602539062}
+[30/408] pipeline qwen3_0p6b_chunked_prefill_b1_q128_k640 bfloat16 rotating
+  custom 1712.572 us; baselines {'flashinfer': 50.371201833089195}
+[31/408] pipeline qwen3_0p6b_chunked_prefill_b4_q16_k2064 bfloat16 reuse
+  custom 3670.936 us; baselines {'flashinfer': 159.2177814907498}
+[32/408] pipeline qwen3_0p6b_decode_b16_q1_k8192 bfloat16 rotating
+  custom 8094.960 us; baselines {'flashinfer': 1612.7760410308838}
+[33/408] pipeline qwen35_full_attention_decode_b4_q1_k2048 float32 reuse
+  custom 1389.990 us; baselines {}
+[34/408] pipeline qwen35_full_attention_decode_b1_q1_k512 bfloat16 reuse
+  custom 239.360 us; baselines {'flashinfer': 12.064730780465263}
+[35/408] pipeline qwen35_full_attention_prefill_b4_q128_k128 float32 rotating
+  custom 1679.928 us; baselines {}
+[36/408] pipeline qwen3_0p6b_chunked_prefill_b4_q16_k528 float32 reuse
+  custom 815.404 us; baselines {}
+[37/408] prefill qwen35_full_attention_prefill_b4_q128_k128 bfloat16 reuse
+  custom 1629.715 us; baselines {'sdpa_math': 482.371826171875, 'sdpa_flash': 56.24593656087659}
+[38/408] pipeline qwen35_full_attention_decode_b1_q1_k512 float32 rotating
+  custom 432.923 us; baselines {}
+[39/408] pipeline qwen35_full_attention_decode_b1_q1_k512 bfloat16 rotating
+  custom 436.361 us; baselines {'flashinfer': 14.144499714557941}
+[40/408] pipeline qwen3_0p6b_decode_b1_q1_k2048 bfloat16 rotating
+  custom 985.924 us; baselines {'flashinfer': 35.988971993729876}
+[41/408] pipeline qwen3_0p6b_prefill_b1_q512_k512 float16 reuse
+  custom 2828.410 us; baselines {'flashinfer': 92.80842228939659}
+[42/408] pipeline qwen35_full_attention_chunked_prefill_b1_q128_k640 float16 rotating
+  custom 3979.509 us; baselines {'flashinfer': 69.60835456848145}
+[43/408] pipeline qwen35_full_attention_prefill_b1_q512_k512 bfloat16 reuse
+  custom 6707.232 us; baselines {'flashinfer': 126.62106144184969}
+[44/408] pipeline qwen3_0p6b_decode_b4_q1_k128 float16 reuse
+  custom 41.732 us; baselines {'flashinfer': 7.653946897624868}
+[45/408] pipeline qwen35_full_attention_chunked_prefill_b4_q16_k528 float16 rotating
+  custom 2290.119 us; baselines {'flashinfer': 38.528616611774154}
+[46/408] pipeline qwen3_0p6b_chunked_prefill_b1_q16_k528 bfloat16 rotating
+  custom 460.689 us; baselines {'flashinfer': 21.99662173235858}
+[47/408] pipeline qwen3_0p6b_chunked_prefill_b4_q16_k2064 float32 rotating
+  custom 3712.184 us; baselines {}
+[48/408] prefill qwen3_0p6b_prefill_b1_q128_k128 float32 rotating
+  custom 235.531 us; baselines {'sdpa_math': 78.77860069274902}
+[49/408] prefill qwen3_0p6b_prefill_b4_q2048_k2048 bfloat16 reuse
+  custom 164060.135 us; baselines {'sdpa_math': 60951.744079589844, 'sdpa_flash': 2632.175922393799, 'sdpa_cudnn': 2535.288095474243}
+[50/408] pipeline qwen3_0p6b_decode_b1_q1_k128 float16 reuse
+  custom 38.330 us; baselines {'flashinfer': 8.877441183416503}
+[51/408] prefill qwen35_full_attention_prefill_b1_q128_k128 bfloat16 rotating
+  custom 510.912 us; baselines {'sdpa_math': 122.87679672241211, 'sdpa_flash': 37.117341848520134}
+[52/408] pipeline qwen3_0p6b_prefill_b4_q128_k128 bfloat16 reuse
+  custom 719.989 us; baselines {'flashinfer': 39.55738632767289}
+[53/408] pipeline qwen3_0p6b_ragged_chunked_prefill bfloat16 reuse
+  custom 3577.472 us; baselines {'flashinfer': 109.97977346744177}
+[54/408] pipeline qwen3_0p6b_decode_b16_q1_k8192 float16 rotating
+  custom 8254.880 us; baselines {'flashinfer': 1628.3440589904785}
+[55/408] prefill qwen3_0p6b_prefill_b1_q512_k512 float16 reuse
+  custom 2799.648 us; baselines {'sdpa_math': 691.4745130037006, 'sdpa_flash': 67.8272008895874, 'sdpa_cudnn': 80.88423224056469}
+[56/408] pipeline qwen35_full_attention_chunked_prefill_b1_q128_k2176 float16 rotating
+  custom 14738.092 us; baselines {'flashinfer': 174.39862659999304}
+[57/408] pipeline qwen3_0p6b_chunked_prefill_b1_q16_k2064 float32 reuse
+  custom 1521.478 us; baselines {}
+[58/408] pipeline qwen3_0p6b_decode_b1_q1_k128 float32 reuse
+  custom 38.697 us; baselines {}
+[59/408] pipeline qwen3_0p6b_prefill_b1_q128_k128 bfloat16 rotating
+  custom 248.622 us; baselines {'flashinfer': 33.795441350629254}
+[60/408] prefill qwen35_full_attention_prefill_b1_q128_k128 float32 rotating
+  custom 507.572 us; baselines {'sdpa_math': 110.56369084578294}
+[61/408] pipeline qwen35_full_attention_prefill_b1_q2048_k2048 float16 reuse
+  custom 99522.301 us; baselines {'flashinfer': 1183.9650760997426}
+[62/408] pipeline qwen35_full_attention_decode_b4_q1_k8192 float16 rotating
+  custom 6817.328 us; baselines {'flashinfer': 217.86133448282877}
+[63/408] pipeline qwen3_0p6b_chunked_prefill_b4_q16_k528 bfloat16 rotating
+  custom 942.456 us; baselines {'flashinfer': 58.63876984669612}
+[64/408] prefill qwen3_0p6b_prefill_b1_q128_k128 bfloat16 reuse
+  custom 225.490 us; baselines {'sdpa_math': 83.95659569466468, 'sdpa_flash': 20.53511142730713, 'sdpa_cudnn': 19.963005974552225}
+[65/408] pipeline qwen3_0p6b_prefill_b1_q128_k128 float32 reuse
+  custom 222.049 us; baselines {}
+[66/408] prefill qwen3_0p6b_prefill_b4_q128_k128 float16 rotating
+  custom 755.376 us; baselines {'sdpa_math': 282.5007915496826, 'sdpa_flash': 57.22847938537598, 'sdpa_cudnn': 57.043260998196075}
+[67/408] pipeline qwen3_0p6b_chunked_prefill_b4_q128_k640 bfloat16 reuse
+  custom 6008.512 us; baselines {'flashinfer': 106.00971324103219}
+[68/408] pipeline qwen35_full_attention_prefill_b1_q128_k128 bfloat16 reuse
+  custom 486.397 us; baselines {'flashinfer': 28.288827545341405}
+[69/408] pipeline qwen3_0p6b_decode_b16_q1_k512 float16 reuse
+  custom 369.548 us; baselines {'flashinfer': 35.48153776388902}
+[70/408] prefill qwen35_full_attention_prefill_b1_q128_k128 bfloat16 reuse
+  custom 492.068 us; baselines {'sdpa_math': 120.4363601376312, 'sdpa_flash': 32.27791233339171}
+[71/408] pipeline qwen35_full_attention_prefill_b1_q128_k128 float32 rotating
+  custom 511.390 us; baselines {}
+[72/408] pipeline qwen35_full_attention_prefill_b1_q512_k512 float16 reuse
+  custom 6345.568 us; baselines {'flashinfer': 117.7613337834676}
+[73/408] pipeline qwen35_full_attention_prefill_b1_q128_k128 float32 reuse
+  custom 485.888 us; baselines {}
+[74/408] prefill qwen35_full_attention_prefill_b4_q2048_k2048 float16 rotating
+  custom 392906.616 us; baselines {'sdpa_math': 83958.11462402344, 'sdpa_flash': 4697.567939758301}
+[75/408] pipeline qwen35_full_attention_ragged_chunked_prefill bfloat16 reuse
+  custom 8768.496 us; baselines {'flashinfer': 104.73989151619575}
+[76/408] pipeline qwen35_full_attention_decode_b1_q1_k512 float16 reuse
+  custom 236.298 us; baselines {'flashinfer': 11.939185781465316}
+[77/408] pipeline qwen35_full_attention_chunked_prefill_b4_q128_k2176 float16 rotating
+  custom 57194.519 us; baselines {'flashinfer': 644.8700768607004}
+[78/408] pipeline qwen3_0p6b_chunked_prefill_b1_q128_k2176 float16 reuse
+  custom 5817.472 us; baselines {'flashinfer': 97.88181401100479}
+[79/408] pipeline qwen35_full_attention_chunked_prefill_b4_q128_k2176 float32 rotating
+  custom 52541.950 us; baselines {}
+[80/408] prefill qwen35_full_attention_prefill_b4_q128_k128 float32 reuse
+  custom 1677.448 us; baselines {'sdpa_math': 473.65907522348255}
+[81/408] pipeline qwen3_0p6b_decode_b4_q1_k128 bfloat16 rotating
+  custom 66.178 us; baselines {'flashinfer': 13.994335306101831}
+[82/408] prefill qwen35_full_attention_prefill_b1_q128_k128 float16 rotating
+  custom 510.929 us; baselines {'sdpa_math': 123.05983543395996, 'sdpa_flash': 36.775580186110275}
+[83/408] prefill qwen35_full_attention_prefill_b1_q512_k512 float16 rotating
+  custom 6646.889 us; baselines {'sdpa_math': 1043.5199737548828, 'sdpa_flash': 128.1133087313905}
+[84/408] prefill qwen3_0p6b_prefill_b4_q2048_k2048 bfloat16 rotating
+  custom 164823.013 us; baselines {'sdpa_math': 60613.121032714844, 'sdpa_flash': 2594.265556335449, 'sdpa_cudnn': 2551.016092300415}
+[85/408] pipeline qwen35_full_attention_decode_b16_q1_k128 float16 reuse
+  custom 125.637 us; baselines {'flashinfer': 12.876612716637679}
+[86/408] pipeline qwen35_full_attention_prefill_b1_q2048_k2048 float32 rotating
+  custom 98850.883 us; baselines {}
+[87/408] pipeline qwen35_full_attention_prefill_b4_q128_k128 float16 rotating
+  custom 1827.063 us; baselines {'flashinfer': 58.21583708938287}
+[88/408] pipeline qwen35_full_attention_prefill_b4_q2048_k2048 float16 reuse
+  custom 393328.278 us; baselines {'flashinfer': 4480.885187784831}
+[89/408] pipeline qwen35_full_attention_decode_b16_q1_k8192 float32 reuse
+  custom 13572.928 us; baselines {}
+[90/408] pipeline qwen35_full_attention_decode_b1_q1_k2048 bfloat16 reuse
+  custom 1066.423 us; baselines {'flashinfer': 13.155091000797498}
+[91/408] pipeline qwen3_0p6b_chunked_prefill_b1_q128_k2176 bfloat16 reuse
+  custom 6167.024 us; baselines {'flashinfer': 104.38179147654566}
+[92/408] pipeline qwen35_full_attention_prefill_b1_q2048_k2048 float32 reuse
+  custom 104475.037 us; baselines {}
+[93/408] pipeline qwen3_0p6b_ragged_chunked_prefill float16 reuse
+  custom 3592.712 us; baselines {'flashinfer': 110.6593203994463}
+[94/408] pipeline qwen35_full_attention_decode_b1_q1_k2048 float16 rotating
+  custom 1746.606 us; baselines {'flashinfer': 24.21860098838806}
+[95/408] pipeline qwen3_0p6b_decode_b16_q1_k128 bfloat16 rotating
+  custom 134.691 us; baselines {'flashinfer': 33.267442570176236}
+[96/408] pipeline qwen3_0p6b_decode_b16_q1_k512 bfloat16 reuse
+  custom 376.093 us; baselines {'flashinfer': 40.82685708999634}
+[97/408] pipeline qwen35_full_attention_ragged_chunked_prefill float32 reuse
+  custom 8887.824 us; baselines {}
+[98/408] pipeline qwen35_full_attention_ragged_decode float32 rotating
+  custom 6797.712 us; baselines {}
+[99/408] pipeline qwen3_0p6b_chunked_prefill_b1_q16_k2064 bfloat16 reuse
+  custom 1507.851 us; baselines {'flashinfer': 26.892615055692367}
+[100/408] pipeline qwen35_full_attention_ragged_chunked_prefill float16 reuse
+  custom 8808.256 us; baselines {'flashinfer': 112.09336506951716}
+[101/408] pipeline qwen35_full_attention_decode_b4_q1_k512 bfloat16 reuse
+  custom 239.937 us; baselines {'flashinfer': 13.525924394352911}
+[102/408] pipeline qwen3_0p6b_chunked_prefill_b1_q128_k640 float16 reuse
+  custom 1569.924 us; baselines {'flashinfer': 46.4684757185571}
+[103/408] pipeline qwen3_0p6b_chunked_prefill_b4_q128_k2176 bfloat16 rotating
+  custom 22322.176 us; baselines {'flashinfer': 326.7262246873644}
+[104/408] pipeline qwen3_0p6b_decode_b16_q1_k512 float16 rotating
+  custom 526.535 us; baselines {'flashinfer': 115.58487632057883}
+[105/408] pipeline qwen3_0p6b_chunked_prefill_b1_q128_k2176 float32 reuse
+  custom 6151.888 us; baselines {}
+[106/408] pipeline qwen3_0p6b_decode_b16_q1_k2048 float16 rotating
+  custom 2004.722 us; baselines {'flashinfer': 413.5492259058459}
+[107/408] prefill qwen35_full_attention_prefill_b4_q512_k512 float32 reuse
+  custom 24250.431 us; baselines {'sdpa_math': 5289.103984832764}
+[108/408] prefill qwen35_full_attention_prefill_b1_q2048_k2048 bfloat16 rotating
+  custom 99648.125 us; baselines {'sdpa_math': 20805.16815185547, 'sdpa_flash': 1209.1168403625488}
+[109/408] pipeline qwen35_full_attention_chunked_prefill_b1_q128_k640 bfloat16 rotating
+  custom 3981.052 us; baselines {'flashinfer': 70.19786834716797}
+[110/408] pipeline qwen35_full_attention_decode_b16_q1_k8192 bfloat16 reuse
+  custom 13366.912 us; baselines {'flashinfer': 811.2300038337708}
+[111/408] pipeline qwen35_full_attention_prefill_b4_q512_k512 float16 reuse
+  custom 25071.968 us; baselines {'flashinfer': 409.26612218221027}
+[112/408] pipeline qwen35_full_attention_chunked_prefill_b1_q128_k2176 bfloat16 reuse
+  custom 13792.544 us; baselines {'flashinfer': 174.36963420803264}
+[113/408] prefill qwen35_full_attention_prefill_b4_q128_k128 float32 rotating
+  custom 1679.712 us; baselines {'sdpa_math': 479.87600167592365}
+[114/408] pipeline qwen35_full_attention_chunked_prefill_b1_q16_k2064 bfloat16 reuse
+  custom 2760.768 us; baselines {'flashinfer': 30.128313825021383}
+[115/408] pipeline qwen3_0p6b_prefill_b1_q2048_k2048 float32 reuse
+  custom 42035.198 us; baselines {}
+[116/408] pipeline qwen3_0p6b_decode_b4_q1_k8192 float16 reuse
+  custom 3978.976 us; baselines {'flashinfer': 402.09706624348956}
+[117/408] pipeline qwen3_0p6b_chunked_prefill_b4_q128_k640 float32 rotating
+  custom 5972.128 us; baselines {}
+[118/408] pipeline qwen35_full_attention_ragged_decode float32 reuse
+  custom 6765.936 us; baselines {}
+[119/408] pipeline qwen3_0p6b_decode_b16_q1_k512 bfloat16 rotating
+  custom 504.023 us; baselines {'flashinfer': 112.73033420244853}
+[120/408] pipeline qwen3_0p6b_chunked_prefill_b1_q16_k528 bfloat16 reuse
+  custom 371.303 us; baselines {'flashinfer': 18.883105571762922}
+[121/408] pipeline qwen3_0p6b_decode_b16_q1_k128 float32 reuse
+  custom 75.159 us; baselines {}
+[122/408] pipeline qwen3_0p6b_decode_b1_q1_k2048 bfloat16 reuse
+  custom 615.258 us; baselines {'flashinfer': 14.725164410575303}
+[123/408] pipeline qwen3_0p6b_chunked_prefill_b4_q16_k528 float16 reuse
+  custom 834.484 us; baselines {'flashinfer': 53.80816312180352}
+[124/408] pipeline qwen35_full_attention_decode_b1_q1_k2048 float32 rotating
+  custom 1718.720 us; baselines {}
+[125/408] pipeline qwen35_full_attention_decode_b1_q1_k8192 bfloat16 reuse
+  custom 6382.112 us; baselines {'flashinfer': 28.573208077009333}
+[126/408] pipeline qwen35_full_attention_chunked_prefill_b1_q128_k2176 bfloat16 rotating
+  custom 14696.896 us; baselines {'flashinfer': 173.7421716962542}
+[127/408] prefill qwen35_full_attention_prefill_b4_q128_k128 float16 rotating
+  custom 1724.974 us; baselines {'sdpa_math': 491.5138880411784, 'sdpa_flash': 68.52079223800492}
+[128/408] pipeline qwen35_full_attention_prefill_b4_q512_k512 float32 reuse
+  custom 24718.592 us; baselines {}
+[129/408] pipeline qwen3_0p6b_decode_b16_q1_k2048 float16 reuse
+  custom 1987.589 us; baselines {'flashinfer': 421.92709887469255}
+[130/408] pipeline qwen3_0p6b_decode_b16_q1_k2048 bfloat16 reuse
+  custom 1990.441 us; baselines {'flashinfer': 418.0458704630534}
+[131/408] pipeline qwen35_full_attention_prefill_b4_q512_k512 bfloat16 rotating
+  custom 25008.112 us; baselines {'flashinfer': 416.427739461263}
+[132/408] pipeline qwen35_full_attention_decode_b4_q1_k128 bfloat16 reuse
+  custom 61.352 us; baselines {'flashinfer': 12.404676584097055}
+[133/408] pipeline qwen3_0p6b_prefill_b4_q2048_k2048 float32 rotating
+  custom 165000.153 us; baselines {}
+[134/408] pipeline qwen35_full_attention_decode_b4_q1_k2048 bfloat16 reuse
+  custom 1052.736 us; baselines {'flashinfer': 29.832873724203193}
+[135/408] pipeline qwen3_0p6b_decode_b1_q1_k128 bfloat16 rotating
+  custom 46.482 us; baselines {'flashinfer': 9.425687603652477}
+[136/408] pipeline qwen35_full_attention_decode_b1_q1_k128 float32 rotating
+  custom 85.461 us; baselines {}
+[137/408] prefill qwen3_0p6b_prefill_b4_q128_k128 bfloat16 reuse
+  custom 716.953 us; baselines {'sdpa_math': 279.9664679027739, 'sdpa_flash': 42.026085612374985, 'sdpa_cudnn': 41.79026078486788}
+[138/408] pipeline qwen35_full_attention_prefill_b4_q128_k128 float32 reuse
+  custom 1683.880 us; baselines {}
+[139/408] pipeline qwen35_full_attention_prefill_b1_q512_k512 float16 rotating
+  custom 6619.122 us; baselines {'flashinfer': 140.2220953078497}
+[140/408] pipeline qwen35_full_attention_chunked_prefill_b4_q128_k640 float32 reuse
+  custom 14013.376 us; baselines {}
+[141/408] pipeline qwen3_0p6b_decode_b1_q1_k512 float32 rotating
+  custom 260.646 us; baselines {}
+[142/408] pipeline qwen3_0p6b_decode_b1_q1_k512 bfloat16 rotating
+  custom 247.571 us; baselines {'flashinfer': 14.617295492263068}
+[143/408] prefill qwen35_full_attention_prefill_b4_q128_k128 bfloat16 rotating
+  custom 1736.110 us; baselines {'sdpa_math': 503.4514381771996, 'sdpa_flash': 68.06564331054688}
+[144/408] pipeline qwen35_full_attention_decode_b1_q1_k512 float16 rotating
+  custom 431.019 us; baselines {'flashinfer': 13.8155711548669}
+[145/408] pipeline qwen35_full_attention_chunked_prefill_b1_q16_k528 float16 rotating
+  custom 806.798 us; baselines {'flashinfer': 30.23253954373873}
+[146/408] pipeline qwen35_full_attention_chunked_prefill_b1_q128_k2176 float32 rotating
+  custom 15757.018 us; baselines {}
+[147/408] pipeline qwen35_full_attention_decode_b16_q1_k2048 float16 reuse
+  custom 3317.419 us; baselines {'flashinfer': 226.77934820001775}
+[148/408] pipeline qwen35_full_attention_decode_b1_q1_k128 float32 reuse
+  custom 63.947 us; baselines {}
+[149/408] pipeline qwen35_full_attention_chunked_prefill_b4_q16_k528 bfloat16 reuse
+  custom 2041.495 us; baselines {'flashinfer': 33.54189745802115}
+[150/408] pipeline qwen35_full_attention_prefill_b1_q2048_k2048 float16 rotating
+  custom 98923.538 us; baselines {'flashinfer': 1168.2751655578613}
+[151/408] prefill qwen3_0p6b_prefill_b1_q2048_k2048 bfloat16 rotating
+  custom 41644.127 us; baselines {'sdpa_math': 15068.991661071777, 'sdpa_flash': 696.3484552171495, 'sdpa_cudnn': 666.8623924255371}
+[152/408] pipeline qwen3_0p6b_decode_b16_q1_k512 float32 rotating
+  custom 529.744 us; baselines {}
+[153/408] pipeline qwen35_full_attention_prefill_b1_q512_k512 float32 reuse
+  custom 6427.392 us; baselines {}
+[154/408] pipeline qwen35_full_attention_chunked_prefill_b4_q128_k640 bfloat16 rotating
+  custom 13980.782 us; baselines {'flashinfer': 201.20372772216797}
+[155/408] pipeline qwen3_0p6b_decode_b4_q1_k8192 float16 rotating
+  custom 3954.485 us; baselines {'flashinfer': 410.76587041219074}
+[156/408] pipeline qwen3_0p6b_decode_b1_q1_k2048 float16 rotating
+  custom 977.648 us; baselines {'flashinfer': 33.10217287229455}
+[157/408] pipeline qwen3_0p6b_prefill_b1_q512_k512 bfloat16 reuse
+  custom 2799.693 us; baselines {'flashinfer': 84.71455574035645}
+[158/408] pipeline qwen3_0p6b_ragged_decode float32 rotating
+  custom 3975.595 us; baselines {}
+[159/408] pipeline qwen3_0p6b_decode_b4_q1_k512 bfloat16 rotating
+  custom 249.279 us; baselines {'flashinfer': 33.63209269767584}
+[160/408] pipeline qwen3_0p6b_decode_b4_q1_k8192 bfloat16 reuse
+  custom 4010.560 us; baselines {'flashinfer': 407.69065221150714}
+[161/408] pipeline qwen3_0p6b_chunked_prefill_b4_q128_k2176 float32 rotating
+  custom 22489.408 us; baselines {}
+[162/408] prefill qwen3_0p6b_prefill_b4_q128_k128 float32 rotating
+  custom 760.004 us; baselines {'sdpa_math': 257.68067439397174}
+[163/408] pipeline qwen35_full_attention_decode_b4_q1_k2048 float16 rotating
+  custom 1669.176 us; baselines {'flashinfer': 60.02299984296163}
+[164/408] pipeline qwen3_0p6b_prefill_b1_q512_k512 float16 rotating
+  custom 2861.244 us; baselines {'flashinfer': 103.31226984659831}
+[165/408] pipeline qwen3_0p6b_chunked_prefill_b4_q128_k640 float16 reuse
+  custom 5956.304 us; baselines {'flashinfer': 107.22578013384783}
+[166/408] pipeline qwen35_full_attention_chunked_prefill_b1_q128_k2176 float32 reuse
+  custom 14600.672 us; baselines {}
+[167/408] pipeline qwen3_0p6b_prefill_b4_q512_k512 float16 reuse
+  custom 10640.128 us; baselines {'flashinfer': 283.06379073705426}
+[168/408] pipeline qwen35_full_attention_chunked_prefill_b1_q16_k528 float32 rotating
+  custom 798.135 us; baselines {}
+[169/408] prefill qwen3_0p6b_prefill_b4_q512_k512 bfloat16 rotating
+  custom 10695.728 us; baselines {'sdpa_math': 4013.7600898742676, 'sdpa_flash': 284.9694598804821, 'sdpa_cudnn': 279.5309153470126}
+[170/408] pipeline qwen35_full_attention_decode_b1_q1_k128 bfloat16 rotating
+  custom 81.377 us; baselines {'flashinfer': 11.929343454539776}
+[171/408] prefill qwen3_0p6b_prefill_b1_q512_k512 bfloat16 reuse
+  custom 2771.181 us; baselines {'sdpa_math': 687.2202220715975, 'sdpa_flash': 81.84026133629584, 'sdpa_cudnn': 81.02209176590193}
+[172/408] pipeline qwen35_full_attention_decode_b4_q1_k8192 bfloat16 reuse
+  custom 6798.080 us; baselines {'flashinfer': 215.7473647803591}
+[173/408] prefill qwen35_full_attention_prefill_b1_q2048_k2048 float32 rotating
+  custom 98628.830 us; baselines {'sdpa_math': 19044.191360473633}
+[174/408] pipeline qwen35_full_attention_chunked_prefill_b1_q16_k2064 float32 reuse
+  custom 2653.344 us; baselines {}
+[175/408] prefill qwen3_0p6b_prefill_b1_q128_k128 float32 reuse
+  custom 221.067 us; baselines {'sdpa_math': 70.14102159544478}
+[176/408] pipeline qwen3_0p6b_chunked_prefill_b1_q16_k2064 bfloat16 rotating
+  custom 1765.472 us; baselines {'flashinfer': 39.80933397244184}
+[177/408] prefill qwen35_full_attention_prefill_b4_q128_k128 float16 reuse
+  custom 1687.397 us; baselines {'sdpa_math': 486.2274916275688, 'sdpa_flash': 48.447998794349466}
+[178/408] pipeline qwen35_full_attention_prefill_b4_q2048_k2048 float32 rotating
+  custom 391702.026 us; baselines {}
+[179/408] pipeline qwen35_full_attention_chunked_prefill_b4_q128_k2176 bfloat16 reuse
+  custom 52119.778 us; baselines {'flashinfer': 594.9851444789341}
+[180/408] pipeline qwen35_full_attention_decode_b16_q1_k512 float16 rotating
+  custom 837.104 us; baselines {'flashinfer': 61.719333132108055}
+[181/408] prefill qwen35_full_attention_prefill_b1_q128_k128 float32 reuse
+  custom 488.256 us; baselines {'sdpa_math': 99.30245918140076}
+[182/408] pipeline qwen35_full_attention_decode_b16_q1_k2048 float16 rotating
+  custom 3269.288 us; baselines {'flashinfer': 214.00436054576528}
+[183/408] pipeline qwen35_full_attention_chunked_prefill_b1_q128_k2176 float16 reuse
+  custom 13581.088 us; baselines {'flashinfer': 167.20234646516687}
+[184/408] pipeline qwen3_0p6b_decode_b4_q1_k2048 float16 rotating
+  custom 983.373 us; baselines {'flashinfer': 110.5434157631614}
+[185/408] pipeline qwen3_0p6b_decode_b4_q1_k2048 float32 rotating
+  custom 991.266 us; baselines {}
+[186/408] pipeline qwen3_0p6b_chunked_prefill_b1_q128_k640 float32 reuse
+  custom 1512.444 us; baselines {}
+[187/408] pipeline qwen35_full_attention_decode_b16_q1_k8192 float16 reuse
+  custom 13233.952 us; baselines {'flashinfer': 810.8879923820496}
+[188/408] pipeline qwen3_0p6b_decode_b16_q1_k128 bfloat16 reuse
+  custom 79.570 us; baselines {'flashinfer': 12.947741288405199}
+[189/408] pipeline qwen35_full_attention_ragged_decode float16 rotating
+  custom 6778.870 us; baselines {'flashinfer': 79.40049074134048}
+[190/408] pipeline qwen35_full_attention_decode_b4_q1_k2048 float32 rotating
+  custom 1766.421 us; baselines {}
+[191/408] pipeline qwen3_0p6b_ragged_decode float16 reuse
+  custom 3776.240 us; baselines {'flashinfer': 139.7315779728676}
+[192/408] pipeline qwen35_full_attention_decode_b16_q1_k128 float16 rotating
+  custom 218.373 us; baselines {'flashinfer': 22.0360000928243}
+[193/408] pipeline qwen35_full_attention_decode_b4_q1_k8192 bfloat16 rotating
+  custom 6647.248 us; baselines {'flashinfer': 217.35040491277522}
+[194/408] pipeline qwen3_0p6b_decode_b1_q1_k128 bfloat16 reuse
+  custom 39.393 us; baselines {'flashinfer': 9.066592953541933}
+[195/408] pipeline qwen35_full_attention_decode_b16_q1_k2048 bfloat16 rotating
+  custom 3295.384 us; baselines {'flashinfer': 212.88145238702947}
+[196/408] pipeline qwen3_0p6b_chunked_prefill_b4_q16_k528 float16 rotating
+  custom 938.696 us; baselines {'flashinfer': 63.07257073266165}
+[197/408] pipeline qwen3_0p6b_chunked_prefill_b1_q16_k528 float32 rotating
+  custom 463.883 us; baselines {}
+[198/408] pipeline qwen35_full_attention_ragged_chunked_prefill float32 rotating
+  custom 9019.718 us; baselines {}
+[199/408] prefill qwen35_full_attention_prefill_b1_q512_k512 float32 rotating
+  custom 6572.736 us; baselines {'sdpa_math': 1036.0026359558105}
+[200/408] pipeline qwen35_full_attention_decode_b16_q1_k512 bfloat16 rotating
+  custom 831.292 us; baselines {'flashinfer': 62.4680000802745}
+[201/408] pipeline qwen3_0p6b_decode_b16_q1_k128 float32 rotating
+  custom 137.135 us; baselines {}
+[202/408] pipeline qwen3_0p6b_prefill_b4_q512_k512 bfloat16 rotating
+  custom 10387.168 us; baselines {'flashinfer': 276.03782307017934}
+[203/408] pipeline qwen3_0p6b_chunked_prefill_b4_q128_k2176 float32 reuse
+  custom 22548.737 us; baselines {}
+[204/408] pipeline qwen3_0p6b_prefill_b1_q128_k128 float16 reuse
+  custom 222.341 us; baselines {'flashinfer': 26.64753321485599}
+[205/408] prefill qwen35_full_attention_prefill_b4_q512_k512 float16 rotating
+  custom 24954.288 us; baselines {'sdpa_math': 5898.191928863525, 'sdpa_flash': 433.5622787475586}
+[206/408] pipeline qwen3_0p6b_decode_b1_q1_k512 float16 rotating
+  custom 242.011 us; baselines {'flashinfer': 14.15000491672092}
+[207/408] pipeline qwen35_full_attention_decode_b16_q1_k128 bfloat16 reuse
+  custom 121.424 us; baselines {'flashinfer': 12.872503631876343}
+[208/408] pipeline qwen3_0p6b_decode_b1_q1_k2048 float16 reuse
+  custom 602.624 us; baselines {'flashinfer': 13.180379661268086}
+[209/408] pipeline qwen3_0p6b_chunked_prefill_b4_q128_k640 float32 reuse
+  custom 6003.808 us; baselines {}
+[210/408] pipeline qwen3_0p6b_decode_b16_q1_k128 float16 rotating
+  custom 134.231 us; baselines {'flashinfer': 33.34855756094289}
+[211/408] prefill qwen3_0p6b_prefill_b1_q512_k512 float32 reuse
+  custom 2747.507 us; baselines {'sdpa_math': 639.9951934814453}
+[212/408] pipeline qwen35_full_attention_chunked_prefill_b4_q128_k640 float16 rotating
+  custom 14038.963 us; baselines {'flashinfer': 199.49706395467123}
+[213/408] pipeline qwen3_0p6b_chunked_prefill_b1_q128_k2176 float16 rotating
+  custom 6042.290 us; baselines {'flashinfer': 100.18488717457605}
+[214/408] prefill qwen3_0p6b_prefill_b4_q2048_k2048 float16 rotating
+  custom 164256.775 us; baselines {'sdpa_math': 61025.665283203125, 'sdpa_flash': 2611.9359970092773, 'sdpa_cudnn': 2543.8027381896973}
+[215/408] pipeline qwen35_full_attention_prefill_b4_q128_k128 bfloat16 reuse
+  custom 1657.048 us; baselines {'flashinfer': 48.6527681350708}
+[216/408] pipeline qwen3_0p6b_decode_b16_q1_k128 float16 reuse
+  custom 77.850 us; baselines {'flashinfer': 12.59947714404525}
+[217/408] prefill qwen3_0p6b_prefill_b4_q2048_k2048 float16 reuse
+  custom 165918.106 us; baselines {'sdpa_math': 61204.31900024414, 'sdpa_flash': 2671.001625061035, 'sdpa_cudnn': 2575.3706296284995}
+[218/408] prefill qwen3_0p6b_prefill_b1_q512_k512 bfloat16 rotating
+  custom 2863.248 us; baselines {'sdpa_math': 702.1560072898865, 'sdpa_flash': 96.54106299082439, 'sdpa_cudnn': 94.98050063848495}
+[219/408] prefill qwen3_0p6b_prefill_b1_q128_k128 bfloat16 rotating
+  custom 236.967 us; baselines {'sdpa_math': 87.92223981631699, 'sdpa_flash': 23.64561250132899, 'sdpa_cudnn': 23.835161039906165}
+[220/408] pipeline qwen35_full_attention_decode_b1_q1_k8192 float16 rotating
+  custom 6898.000 us; baselines {'flashinfer': 62.00240135192871}
+[221/408] prefill qwen35_full_attention_prefill_b1_q2048_k2048 bfloat16 reuse
+  custom 98671.425 us; baselines {'sdpa_math': 20280.41648864746, 'sdpa_flash': 1202.6297829367898}
+[222/408] pipeline qwen3_0p6b_prefill_b4_q2048_k2048 float16 reuse
+  custom 165417.374 us; baselines {'flashinfer': 2628.5247802734375}
+[223/408] pipeline qwen35_full_attention_decode_b1_q1_k128 float16 rotating
+  custom 72.131 us; baselines {'flashinfer': 11.974312365055084}
+[224/408] pipeline qwen3_0p6b_prefill_b4_q128_k128 float16 reuse
+  custom 711.168 us; baselines {'flashinfer': 35.20706412080047}
+[225/408] pipeline qwen3_0p6b_chunked_prefill_b1_q16_k528 float16 rotating
+  custom 467.017 us; baselines {'flashinfer': 22.08308113945855}
+[226/408] pipeline qwen3_0p6b_decode_b16_q1_k8192 float32 reuse
+  custom 8251.712 us; baselines {}
+[227/408] prefill qwen3_0p6b_prefill_b1_q2048_k2048 bfloat16 reuse
+  custom 43144.482 us; baselines {'sdpa_math': 15530.400276184082, 'sdpa_flash': 729.8998079801861, 'sdpa_cudnn': 681.355777539705}
+[228/408] pipeline qwen35_full_attention_chunked_prefill_b1_q16_k528 float16 reuse
+  custom 648.288 us; baselines {'flashinfer': 28.010602377675063}
+[229/408] prefill qwen3_0p6b_prefill_b4_q2048_k2048 float32 reuse
+  custom 164143.494 us; baselines {'sdpa_math': 55170.49789428711}
+[230/408] pipeline qwen3_0p6b_decode_b1_q1_k512 float16 reuse
+  custom 148.606 us; baselines {'flashinfer': 9.860931469972414}
+[231/408] pipeline qwen35_full_attention_chunked_prefill_b1_q16_k2064 bfloat16 rotating
+  custom 3159.917 us; baselines {'flashinfer': 32.709119160970054}
+[232/408] pipeline qwen35_full_attention_chunked_prefill_b4_q16_k2064 bfloat16 reuse
+  custom 8862.128 us; baselines {'flashinfer': 84.05920028686523}
+[233/408] prefill qwen35_full_attention_prefill_b1_q2048_k2048 float16 rotating
+  custom 100631.279 us; baselines {'sdpa_math': 20697.311401367188, 'sdpa_flash': 1231.1519622802734}
+[234/408] pipeline qwen35_full_attention_decode_b1_q1_k2048 float32 reuse
+  custom 1021.733 us; baselines {}
+[235/408] pipeline qwen3_0p6b_prefill_b1_q128_k128 float16 rotating
+  custom 231.430 us; baselines {'flashinfer': 32.711741744831045}
+[236/408] pipeline qwen35_full_attention_prefill_b4_q128_k128 bfloat16 rotating
+  custom 1749.120 us; baselines {'flashinfer': 63.879618569025915}
+[237/408] pipeline qwen3_0p6b_decode_b4_q1_k2048 float32 reuse
+  custom 1012.552 us; baselines {}
+[238/408] pipeline qwen35_full_attention_prefill_b4_q2048_k2048 bfloat16 reuse
+  custom 393247.162 us; baselines {'flashinfer': 4445.173263549805}
+[239/408] pipeline qwen3_0p6b_prefill_b4_q512_k512 float16 rotating
+  custom 10567.616 us; baselines {'flashinfer': 274.30035851218486}
+[240/408] pipeline qwen3_0p6b_decode_b4_q1_k512 bfloat16 reuse
+  custom 152.521 us; baselines {'flashinfer': 13.566188992194409}
+[241/408] pipeline qwen3_0p6b_chunked_prefill_b1_q128_k640 float16 rotating
+  custom 1671.678 us; baselines {'flashinfer': 49.95213349660238}
+[242/408] pipeline qwen3_0p6b_chunked_prefill_b1_q16_k528 float32 reuse
+  custom 361.790 us; baselines {}
+[243/408] prefill qwen35_full_attention_prefill_b4_q512_k512 float16 reuse
+  custom 24870.144 us; baselines {'sdpa_math': 6034.592151641846, 'sdpa_flash': 439.1224567706768}
+[244/408] pipeline qwen35_full_attention_decode_b16_q1_k128 float32 reuse
+  custom 117.000 us; baselines {}
+[245/408] pipeline qwen3_0p6b_chunked_prefill_b4_q16_k2064 bfloat16 rotating
+  custom 3687.008 us; baselines {'flashinfer': 159.58356857299805}
+[246/408] pipeline qwen3_0p6b_prefill_b1_q2048_k2048 float16 rotating
+  custom 41920.448 us; baselines {'flashinfer': 717.0303821563721}
+[247/408] pipeline qwen35_full_attention_decode_b4_q1_k128 float16 rotating
+  custom 112.027 us; baselines {'flashinfer': 14.93626947586353}
+[248/408] pipeline qwen35_full_attention_decode_b4_q1_k128 float32 rotating
+  custom 107.066 us; baselines {}
+[249/408] pipeline qwen35_full_attention_ragged_chunked_prefill float16 rotating
+  custom 9079.690 us; baselines {'flashinfer': 115.62111854553223}
+[250/408] pipeline qwen3_0p6b_decode_b4_q1_k128 bfloat16 reuse
+  custom 38.128 us; baselines {'flashinfer': 9.324179359929479}
+[251/408] pipeline qwen3_0p6b_ragged_decode float16 rotating
+  custom 3839.184 us; baselines {'flashinfer': 143.50127010810667}
+[252/408] pipeline qwen3_0p6b_decode_b4_q1_k8192 float32 reuse
+  custom 4041.451 us; baselines {}
+[253/408] prefill qwen3_0p6b_prefill_b1_q2048_k2048 float16 rotating
+  custom 41610.161 us; baselines {'sdpa_math': 15263.407707214355, 'sdpa_flash': 700.5937894185384, 'sdpa_cudnn': 664.9007797241211}
+[254/408] prefill qwen3_0p6b_prefill_b4_q512_k512 float16 reuse
+  custom 10818.560 us; baselines {'sdpa_math': 4219.287872314453, 'sdpa_flash': 283.3520065654408, 'sdpa_cudnn': 286.67534229367277}
+[255/408] prefill qwen3_0p6b_prefill_b4_q2048_k2048 float32 rotating
+  custom 163957.504 us; baselines {'sdpa_math': 55158.17642211914}
+[256/408] pipeline qwen35_full_attention_prefill_b4_q2048_k2048 bfloat16 rotating
+  custom 392290.375 us; baselines {'flashinfer': 4508.458773295085}
+[257/408] prefill qwen3_0p6b_prefill_b4_q512_k512 float16 rotating
+  custom 10537.328 us; baselines {'sdpa_math': 4016.655921936035, 'sdpa_flash': 285.3051367260161, 'sdpa_cudnn': 281.5422597138778}
+[258/408] pipeline qwen3_0p6b_prefill_b1_q512_k512 float32 reuse
+  custom 2731.181 us; baselines {}
+[259/408] pipeline qwen3_0p6b_prefill_b1_q512_k512 float32 rotating
+  custom 2849.808 us; baselines {}
+[260/408] pipeline qwen35_full_attention_chunked_prefill_b4_q16_k528 bfloat16 rotating
+  custom 2286.422 us; baselines {'flashinfer': 38.42584597758758}
+[261/408] pipeline qwen35_full_attention_chunked_prefill_b4_q128_k2176 float16 reuse
+  custom 52158.718 us; baselines {'flashinfer': 601.5709096735173}
+[262/408] pipeline qwen35_full_attention_prefill_b4_q512_k512 bfloat16 reuse
+  custom 24925.377 us; baselines {'flashinfer': 412.59428433009555}
+[263/408] pipeline qwen35_full_attention_decode_b16_q1_k8192 float16 rotating
+  custom 13461.440 us; baselines {'flashinfer': 811.1960291862488}
+[264/408] pipeline qwen35_full_attention_chunked_prefill_b1_q16_k528 float32 reuse
+  custom 619.590 us; baselines {}
+[265/408] pipeline qwen3_0p6b_decode_b4_q1_k8192 float32 rotating
+  custom 4013.856 us; baselines {}
+[266/408] pipeline qwen3_0p6b_ragged_chunked_prefill float32 rotating
+  custom 3839.360 us; baselines {}
+[267/408] pipeline qwen3_0p6b_ragged_decode bfloat16 reuse
+  custom 3874.357 us; baselines {'flashinfer': 143.58321531319325}
+[268/408] pipeline qwen3_0p6b_decode_b4_q1_k2048 float16 reuse
+  custom 773.354 us; baselines {'flashinfer': 38.03221599475758}
+[269/408] pipeline qwen35_full_attention_decode_b16_q1_k128 bfloat16 rotating
+  custom 226.243 us; baselines {'flashinfer': 23.162595960828995}
+[270/408] pipeline qwen3_0p6b_chunked_prefill_b4_q16_k2064 float16 reuse
+  custom 3736.501 us; baselines {'flashinfer': 160.09557088216147}
+[271/408] pipeline qwen3_0p6b_decode_b4_q1_k2048 bfloat16 rotating
+  custom 1015.149 us; baselines {'flashinfer': 111.86052718252506}
+[272/408] pipeline qwen3_0p6b_chunked_prefill_b1_q16_k2064 float16 rotating
+  custom 1799.124 us; baselines {'flashinfer': 40.81102641853126}
+[273/408] pipeline qwen3_0p6b_decode_b4_q1_k8192 bfloat16 rotating
+  custom 3962.336 us; baselines {'flashinfer': 413.93753790086316}
+[274/408] pipeline qwen35_full_attention_decode_b1_q1_k128 float16 reuse
+  custom 60.634 us; baselines {'flashinfer': 11.279646204321423}
+[275/408] pipeline qwen3_0p6b_decode_b4_q1_k128 float32 reuse
+  custom 39.661 us; baselines {}
+[276/408] pipeline qwen3_0p6b_decode_b1_q1_k8192 float32 rotating
+  custom 4008.384 us; baselines {}
+[277/408] prefill qwen35_full_attention_prefill_b4_q2048_k2048 bfloat16 rotating
+  custom 393862.579 us; baselines {'sdpa_math': 84152.13012695312, 'sdpa_flash': 4686.997413635254}
+[278/408] pipeline qwen35_full_attention_decode_b16_q1_k512 float32 reuse
+  custom 678.774 us; baselines {}
+[279/408] pipeline qwen3_0p6b_prefill_b1_q2048_k2048 float16 reuse
+  custom 42090.561 us; baselines {'flashinfer': 699.6675597296821}
+[280/408] pipeline qwen3_0p6b_chunked_prefill_b4_q16_k2064 float16 rotating
+  custom 3615.552 us; baselines {'flashinfer': 159.66010738063503}
+[281/408] pipeline qwen3_0p6b_ragged_chunked_prefill bfloat16 rotating
+  custom 3834.880 us; baselines {'flashinfer': 112.88118362426758}
+[282/408] pipeline qwen3_0p6b_chunked_prefill_b1_q128_k2176 bfloat16 rotating
+  custom 6031.950 us; baselines {'flashinfer': 101.04497540898684}
+[283/408] pipeline qwen35_full_attention_prefill_b1_q128_k128 bfloat16 rotating
+  custom 517.605 us; baselines {'flashinfer': 34.31250163487026}
+[284/408] pipeline qwen3_0p6b_decode_b16_q1_k2048 float32 rotating
+  custom 2037.192 us; baselines {}
+[285/408] pipeline qwen35_full_attention_prefill_b1_q128_k128 float16 reuse
+  custom 486.529 us; baselines {'flashinfer': 27.763719318293724}
+[286/408] pipeline qwen3_0p6b_decode_b4_q1_k128 float16 rotating
+  custom 67.064 us; baselines {'flashinfer': 14.020190920148577}
+[287/408] pipeline qwen35_full_attention_prefill_b1_q128_k128 float16 rotating
+  custom 518.902 us; baselines {'flashinfer': 34.64036669049944}
+[288/408] pipeline qwen3_0p6b_decode_b4_q1_k512 float16 rotating
+  custom 266.236 us; baselines {'flashinfer': 35.23572101149448}
+[289/408] prefill qwen3_0p6b_prefill_b4_q128_k128 bfloat16 rotating
+  custom 782.080 us; baselines {'sdpa_math': 289.56799507141113, 'sdpa_flash': 58.33288916835078, 'sdpa_cudnn': 59.09688825960512}
+[290/408] pipeline qwen3_0p6b_prefill_b1_q512_k512 bfloat16 rotating
+  custom 2834.728 us; baselines {'flashinfer': 105.81342663083758}
+[291/408] pipeline qwen35_full_attention_decode_b4_q1_k2048 float16 reuse
+  custom 1001.704 us; baselines {'flashinfer': 30.0070114350051}
+[292/408] pipeline qwen3_0p6b_ragged_decode bfloat16 rotating
+  custom 3827.920 us; baselines {'flashinfer': 143.93716905175185}
+[293/408] pipeline qwen3_0p6b_chunked_prefill_b4_q16_k2064 float32 reuse
+  custom 3733.208 us; baselines {}
+[294/408] pipeline qwen35_full_attention_prefill_b1_q2048_k2048 bfloat16 rotating
+  custom 99331.100 us; baselines {'flashinfer': 1171.782398223877}
+[295/408] pipeline qwen3_0p6b_decode_b16_q1_k2048 float32 reuse
+  custom 2083.227 us; baselines {}
+[296/408] pipeline qwen35_full_attention_chunked_prefill_b4_q128_k2176 bfloat16 rotating
+  custom 53081.217 us; baselines {'flashinfer': 607.9542977469308}
+[297/408] prefill qwen35_full_attention_prefill_b4_q2048_k2048 float16 reuse
+  custom 392801.270 us; baselines {'sdpa_math': 83601.57012939453, 'sdpa_flash': 4691.989262898763}
+[298/408] pipeline qwen3_0p6b_prefill_b4_q2048_k2048 float32 reuse
+  custom 175303.452 us; baselines {}
+[299/408] pipeline qwen3_0p6b_chunked_prefill_b4_q16_k528 bfloat16 reuse
+  custom 821.642 us; baselines {'flashinfer': 53.42083166141321}
+[300/408] prefill qwen3_0p6b_prefill_b1_q128_k128 float16 reuse
+  custom 224.270 us; baselines {'sdpa_math': 84.21054784802423, 'sdpa_flash': 16.600544012865974, 'sdpa_cudnn': 20.824521780014038}
+[301/408] pipeline qwen35_full_attention_decode_b16_q1_k2048 float32 rotating
+  custom 3438.752 us; baselines {}
+[302/408] pipeline qwen35_full_attention_chunked_prefill_b4_q16_k2064 float16 reuse
+  custom 9217.280 us; baselines {'flashinfer': 86.0031975640191}
+[303/408] pipeline qwen35_full_attention_chunked_prefill_b4_q16_k2064 float16 rotating
+  custom 9130.960 us; baselines {'flashinfer': 89.98957547274503}
+[304/408] pipeline qwen3_0p6b_prefill_b1_q128_k128 float32 rotating
+  custom 237.937 us; baselines {}
+[305/408] pipeline qwen3_0p6b_decode_b1_q1_k128 float16 rotating
+  custom 44.407 us; baselines {'flashinfer': 9.411968290805817}
+[306/408] pipeline qwen35_full_attention_ragged_chunked_prefill bfloat16 rotating
+  custom 9066.492 us; baselines {'flashinfer': 115.6544017791748}
+[307/408] pipeline qwen35_full_attention_decode_b4_q1_k128 float32 reuse
+  custom 59.625 us; baselines {}
+[308/408] prefill qwen35_full_attention_prefill_b1_q512_k512 bfloat16 reuse
+  custom 6495.360 us; baselines {'sdpa_math': 1075.7146676381428, 'sdpa_flash': 109.92481887981455}
+[309/408] pipeline qwen35_full_attention_prefill_b1_q512_k512 float32 rotating
+  custom 6479.688 us; baselines {}
+[310/408] prefill qwen35_full_attention_prefill_b4_q2048_k2048 bfloat16 reuse
+  custom 393849.884 us; baselines {'sdpa_math': 84128.57818603516, 'sdpa_flash': 4824.960072835286}
+[311/408] prefill qwen3_0p6b_prefill_b4_q512_k512 float32 rotating
+  custom 10704.080 us; baselines {'sdpa_math': 3743.7920570373535}
+[312/408] pipeline qwen3_0p6b_chunked_prefill_b1_q128_k640 float32 rotating
+  custom 1688.676 us; baselines {}
+[313/408] pipeline qwen35_full_attention_decode_b1_q1_k2048 bfloat16 rotating
+  custom 1742.670 us; baselines {'flashinfer': 32.214869623598844}
+[314/408] pipeline qwen35_full_attention_chunked_prefill_b4_q16_k2064 float32 reuse
+  custom 9232.752 us; baselines {}
+[315/408] prefill qwen3_0p6b_prefill_b4_q128_k128 float16 reuse
+  custom 721.316 us; baselines {'sdpa_math': 274.9020939781552, 'sdpa_flash': 40.39943845648514, 'sdpa_cudnn': 39.666326636942024}
+[316/408] pipeline qwen35_full_attention_chunked_prefill_b4_q16_k528 float32 rotating
+  custom 2328.078 us; baselines {}
+[317/408] pipeline qwen3_0p6b_chunked_prefill_b4_q128_k640 float16 rotating
+  custom 6074.608 us; baselines {'flashinfer': 123.28243255615234}
+[318/408] prefill qwen3_0p6b_prefill_b4_q128_k128 float32 reuse
+  custom 713.414 us; baselines {'sdpa_math': 257.26911544799805}
+[319/408] pipeline qwen35_full_attention_decode_b4_q1_k512 float16 reuse
+  custom 243.626 us; baselines {'flashinfer': 13.708414441367056}
+[320/408] prefill qwen35_full_attention_prefill_b1_q128_k128 float16 reuse
+  custom 495.556 us; baselines {'sdpa_math': 121.35946881640088, 'sdpa_flash': 32.05738211036625}
+[321/408] pipeline qwen35_full_attention_prefill_b4_q128_k128 float16 reuse
+  custom 1665.616 us; baselines {'flashinfer': 46.490845264204395}
+[322/408] prefill qwen3_0p6b_prefill_b1_q512_k512 float16 rotating
+  custom 2833.256 us; baselines {'sdpa_math': 702.9079794883728, 'sdpa_flash': 95.88500112295151, 'sdpa_cudnn': 92.7330031991005}
+[323/408] pipeline qwen35_full_attention_chunked_prefill_b4_q128_k640 float32 rotating
+  custom 13915.723 us; baselines {}
+[324/408] pipeline qwen3_0p6b_chunked_prefill_b4_q128_k640 bfloat16 rotating
+  custom 5990.256 us; baselines {'flashinfer': 121.86400413513184}
+[325/408] pipeline qwen35_full_attention_chunked_prefill_b4_q16_k528 float16 reuse
+  custom 1987.696 us; baselines {'flashinfer': 34.42955679363675}
+[326/408] pipeline qwen3_0p6b_chunked_prefill_b1_q16_k2064 float16 reuse
+  custom 1482.944 us; baselines {'flashinfer': 27.207998581874516}
+[327/408] prefill qwen3_0p6b_prefill_b4_q512_k512 bfloat16 reuse
+  custom 10484.512 us; baselines {'sdpa_math': 4193.583965301514, 'sdpa_flash': 282.8836441040039, 'sdpa_cudnn': 278.9432614348656}
+[328/408] pipeline qwen35_full_attention_decode_b1_q1_k512 float32 reuse
+  custom 235.369 us; baselines {}
+[329/408] pipeline qwen3_0p6b_prefill_b4_q128_k128 float32 reuse
+  custom 711.097 us; baselines {}
+[330/408] pipeline qwen35_full_attention_decode_b4_q1_k512 float16 rotating
+  custom 420.304 us; baselines {'flashinfer': 24.37480092048645}
+[331/408] pipeline qwen35_full_attention_chunked_prefill_b1_q128_k640 float32 rotating
+  custom 3963.904 us; baselines {}
+[332/408] pipeline qwen3_0p6b_chunked_prefill_b4_q128_k2176 float16 reuse
+  custom 22389.984 us; baselines {'flashinfer': 321.12345824370516}
+[333/408] pipeline qwen3_0p6b_decode_b16_q1_k2048 bfloat16 rotating
+  custom 1963.136 us; baselines {'flashinfer': 409.14026896158856}
+[334/408] pipeline qwen35_full_attention_decode_b4_q1_k128 float16 reuse
+  custom 60.504 us; baselines {'flashinfer': 12.23744830212216}
+[335/408] pipeline qwen35_full_attention_chunked_prefill_b1_q128_k640 bfloat16 reuse
+  custom 3710.880 us; baselines {'flashinfer': 64.3949122787211}
+[336/408] pipeline qwen3_0p6b_chunked_prefill_b1_q128_k2176 float32 rotating
+  custom 5993.544 us; baselines {}
+[337/408] pipeline qwen3_0p6b_prefill_b4_q128_k128 bfloat16 rotating
+  custom 758.758 us; baselines {'flashinfer': 55.351572377341135}
+[338/408] pipeline qwen3_0p6b_prefill_b4_q2048_k2048 bfloat16 reuse
+  custom 174275.040 us; baselines {'flashinfer': 2694.175910949707}
+[339/408] pipeline qwen3_0p6b_decode_b1_q1_k2048 float32 rotating
+  custom 1004.805 us; baselines {}
+[340/408] prefill qwen35_full_attention_prefill_b1_q512_k512 float16 reuse
+  custom 6524.160 us; baselines {'sdpa_math': 1085.378646850586, 'sdpa_flash': 112.88425590418562}
+[341/408] pipeline qwen35_full_attention_decode_b16_q1_k2048 bfloat16 reuse
+  custom 3414.704 us; baselines {'flashinfer': 208.1113624572754}
+[342/408] prefill qwen35_full_attention_prefill_b4_q2048_k2048 float32 reuse
+  custom 392519.348 us; baselines {'sdpa_math': 78346.68731689453}
+[343/408] pipeline qwen35_full_attention_ragged_decode bfloat16 reuse
+  custom 5880.688 us; baselines {'flashinfer': 34.044869449160515}
+[344/408] pipeline qwen3_0p6b_chunked_prefill_b4_q16_k528 float32 rotating
+  custom 984.123 us; baselines {}
+[345/408] pipeline qwen35_full_attention_decode_b16_q1_k512 float32 rotating
+  custom 868.222 us; baselines {}
+[346/408] prefill qwen35_full_attention_prefill_b1_q2048_k2048 float32 reuse
+  custom 99208.160 us; baselines {'sdpa_math': 19060.03189086914}
+[347/408] pipeline qwen35_full_attention_decode_b4_q1_k8192 float32 reuse
+  custom 6780.000 us; baselines {}
+[348/408] pipeline qwen3_0p6b_prefill_b4_q512_k512 float32 reuse
+  custom 10722.272 us; baselines {}
+[349/408] pipeline qwen35_full_attention_chunked_prefill_b1_q128_k640 float32 reuse
+  custom 3925.000 us; baselines {}
+[350/408] pipeline qwen35_full_attention_decode_b16_q1_k8192 bfloat16 rotating
+  custom 14341.824 us; baselines {'flashinfer': 849.6874491373698}
+[351/408] pipeline qwen35_full_attention_decode_b16_q1_k512 float16 reuse
+  custom 490.535 us; baselines {'flashinfer': 30.128617668717833}
+[352/408] pipeline qwen35_full_attention_decode_b16_q1_k512 bfloat16 reuse
+  custom 486.048 us; baselines {'flashinfer': 30.065665642420452}
+[353/408] pipeline qwen35_full_attention_decode_b1_q1_k8192 bfloat16 rotating
+  custom 7025.112 us; baselines {'flashinfer': 62.95851219532101}
+[354/408] pipeline qwen3_0p6b_prefill_b4_q512_k512 bfloat16 reuse
+  custom 10490.656 us; baselines {'flashinfer': 277.75785658094617}
+[355/408] pipeline qwen35_full_attention_chunked_prefill_b4_q128_k640 bfloat16 reuse
+  custom 13488.768 us; baselines {'flashinfer': 186.48102975660754}
+[356/408] pipeline qwen35_full_attention_prefill_b4_q2048_k2048 float16 rotating
+  custom 393313.843 us; baselines {'flashinfer': 4455.7545979817705}
+[357/408] pipeline qwen3_0p6b_prefill_b4_q128_k128 float16 rotating
+  custom 754.728 us; baselines {'flashinfer': 54.99057258878435}
+[358/408] pipeline qwen3_0p6b_decode_b16_q1_k8192 float16 reuse
+  custom 8100.288 us; baselines {'flashinfer': 1613.111972808838}
+[359/408] pipeline qwen3_0p6b_chunked_prefill_b1_q16_k2064 float32 rotating
+  custom 1786.728 us; baselines {}
+[360/408] pipeline qwen3_0p6b_decode_b1_q1_k2048 float32 reuse
+  custom 612.895 us; baselines {}
+[361/408] pipeline qwen35_full_attention_chunked_prefill_b1_q128_k640 float16 reuse
+  custom 3754.923 us; baselines {'flashinfer': 63.53794494805308}
+[362/408] pipeline qwen3_0p6b_decode_b1_q1_k8192 bfloat16 rotating
+  custom 3883.440 us; baselines {'flashinfer': 109.26785292448821}
+[363/408] prefill qwen3_0p6b_prefill_b1_q2048_k2048 float32 rotating
+  custom 44060.577 us; baselines {'sdpa_math': 13889.504432678223}
+[364/408] pipeline qwen35_full_attention_decode_b1_q1_k8192 float16 reuse
+  custom 6447.024 us; baselines {'flashinfer': 29.690724450188714}
+[365/408] pipeline qwen3_0p6b_prefill_b1_q2048_k2048 float32 rotating
+  custom 42153.313 us; baselines {}
+[366/408] prefill qwen3_0p6b_prefill_b1_q2048_k2048 float16 reuse
+  custom 41772.034 us; baselines {'sdpa_math': 15175.071716308594, 'sdpa_flash': 703.5733328925239, 'sdpa_cudnn': 653.217601776123}
+[367/408] pipeline qwen35_full_attention_chunked_prefill_b4_q16_k2064 float32 rotating
+  custom 9405.488 us; baselines {}
+[368/408] pipeline qwen3_0p6b_decode_b1_q1_k8192 float16 rotating
+  custom 3898.400 us; baselines {'flashinfer': 110.1884400403058}
+[369/408] pipeline qwen35_full_attention_decode_b1_q1_k8192 float32 reuse
+  custom 6868.608 us; baselines {}
+[370/408] pipeline qwen3_0p6b_decode_b16_q1_k8192 float32 rotating
+  custom 8328.272 us; baselines {}
+[371/408] prefill qwen35_full_attention_prefill_b4_q512_k512 float32 rotating
+  custom 24786.848 us; baselines {'sdpa_math': 5754.576206207275}
+[372/408] pipeline qwen35_full_attention_decode_b4_q1_k128 bfloat16 rotating
+  custom 107.827 us; baselines {'flashinfer': 14.411999629094051}
+[373/408] pipeline qwen3_0p6b_ragged_chunked_prefill float32 reuse
+  custom 3792.469 us; baselines {}
+[374/408] pipeline qwen3_0p6b_prefill_b4_q2048_k2048 bfloat16 rotating
+  custom 165570.816 us; baselines {'flashinfer': 2594.9759483337402}
+[375/408] pipeline qwen35_full_attention_prefill_b4_q512_k512 float32 rotating
+  custom 24813.919 us; baselines {}
+[376/408] prefill qwen35_full_attention_prefill_b4_q512_k512 bfloat16 reuse
+  custom 25283.297 us; baselines {'sdpa_math': 6147.952079772949, 'sdpa_flash': 439.2177793714735}
+[377/408] pipeline qwen3_0p6b_decode_b1_q1_k512 bfloat16 reuse
+  custom 150.915 us; baselines {'flashinfer': 10.445826008634747}
+[378/408] pipeline qwen35_full_attention_ragged_decode float16 reuse
+  custom 5680.176 us; baselines {'flashinfer': 32.0822375637668}
+[379/408] pipeline qwen3_0p6b_decode_b1_q1_k512 float32 reuse
+  custom 142.380 us; baselines {}
+[380/408] pipeline qwen3_0p6b_ragged_decode float32 reuse
+  custom 3916.587 us; baselines {}
+[381/408] pipeline qwen3_0p6b_prefill_b4_q2048_k2048 float16 rotating
+  custom 165193.756 us; baselines {'flashinfer': 2616.044807434082}
+[382/408] prefill qwen3_0p6b_prefill_b4_q512_k512 float32 reuse
+  custom 10936.800 us; baselines {'sdpa_math': 3736.5360260009766}
+[383/408] pipeline qwen3_0p6b_prefill_b1_q2048_k2048 bfloat16 rotating
+  custom 42047.215 us; baselines {'flashinfer': 713.4684456719292}
+[384/408] pipeline qwen3_0p6b_decode_b1_q1_k8192 float32 reuse
+  custom 4018.677 us; baselines {}
+[385/408] pipeline qwen3_0p6b_ragged_chunked_prefill float16 rotating
+  custom 3816.064 us; baselines {'flashinfer': 113.57570577550817}
+[386/408] prefill qwen35_full_attention_prefill_b1_q512_k512 float32 reuse
+  custom 6449.024 us; baselines {'sdpa_math': 1055.6209270770732}
+[387/408] pipeline qwen35_full_attention_chunked_prefill_b4_q128_k640 float16 reuse
+  custom 13849.216 us; baselines {'flashinfer': 184.56671314854776}
+[388/408] pipeline qwen35_full_attention_decode_b1_q1_k128 bfloat16 reuse
+  custom 60.125 us; baselines {'flashinfer': 11.785048604662952}
+[389/408] pipeline qwen35_full_attention_decode_b4_q1_k8192 float32 rotating
+  custom 7169.328 us; baselines {}
+[390/408] pipeline qwen3_0p6b_chunked_prefill_b4_q128_k2176 bfloat16 reuse
+  custom 23252.960 us; baselines {'flashinfer': 326.68281245876005}
+[391/408] pipeline qwen35_full_attention_decode_b1_q1_k8192 float32 rotating
+  custom 6892.720 us; baselines {}
+[392/408] pipeline qwen35_full_attention_prefill_b1_q512_k512 bfloat16 rotating
+  custom 6628.882 us; baselines {'flashinfer': 141.62132853553408}
+[393/408] prefill qwen35_full_attention_prefill_b4_q512_k512 bfloat16 rotating
+  custom 26021.408 us; baselines {'sdpa_math': 6005.807876586914, 'sdpa_flash': 452.80912944248746}
+[394/408] prefill qwen3_0p6b_prefill_b1_q128_k128 float16 rotating
+  custom 234.566 us; baselines {'sdpa_math': 86.15157424762685, 'sdpa_flash': 24.455347368794104, 'sdpa_cudnn': 22.46064524496755}
+[395/408] pipeline qwen35_full_attention_decode_b4_q1_k512 bfloat16 rotating
+  custom 422.510 us; baselines {'flashinfer': 24.222999811172485}
+[396/408] pipeline qwen35_full_attention_prefill_b4_q512_k512 float16 rotating
+  custom 25066.383 us; baselines {'flashinfer': 410.757319132487}
+[397/408] pipeline qwen35_full_attention_decode_b4_q1_k512 float32 reuse
+  custom 243.697 us; baselines {}
+[398/408] pipeline qwen35_full_attention_prefill_b1_q2048_k2048 bfloat16 reuse
+  custom 99069.473 us; baselines {'flashinfer': 1157.725074074485}
+[399/408] pipeline qwen3_0p6b_prefill_b4_q512_k512 float32 rotating
+  custom 10729.792 us; baselines {}
+[400/408] pipeline qwen35_full_attention_chunked_prefill_b1_q16_k2064 float16 rotating
+  custom 3201.945 us; baselines {'flashinfer': 33.03014373779297}
+[401/408] pipeline qwen35_full_attention_decode_b16_q1_k8192 float32 rotating
+  custom 13687.360 us; baselines {}
+[402/408] pipeline qwen3_0p6b_chunked_prefill_b4_q128_k2176 float16 rotating
+  custom 22502.031 us; baselines {'flashinfer': 326.1423110961914}
+[403/408] prefill qwen35_full_attention_prefill_b1_q2048_k2048 float16 reuse
+  custom 99532.990 us; baselines {'sdpa_math': 20394.336700439453, 'sdpa_flash': 1172.1105575561523}
+[404/408] pipeline qwen3_0p6b_decode_b1_q1_k128 float32 rotating
+  custom 62.315 us; baselines {}
+[405/408] pipeline qwen35_full_attention_chunked_prefill_b4_q128_k2176 float32 reuse
+  custom 52701.954 us; baselines {}
+[406/408] pipeline qwen35_full_attention_chunked_prefill_b1_q16_k2064 float16 reuse
+  custom 2570.427 us; baselines {'flashinfer': 30.570700764656067}
+[407/408] pipeline qwen3_0p6b_chunked_prefill_b1_q16_k528 float16 reuse
+  custom 385.487 us; baselines {'flashinfer': 15.427556302812365}
+[408/408] prefill qwen3_0p6b_prefill_b1_q512_k512 float32 rotating
+  custom 2959.656 us; baselines {'sdpa_math': 696.4259743690491}

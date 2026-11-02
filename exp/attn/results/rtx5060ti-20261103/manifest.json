@@ -1,0 +1,207 @@
+{
+  "started_at_utc": "2026-11-02T17:51:05.848903+00:00",
+  "git_head": {
+    "exit_code": 0,
+    "stdout": "159e84a09efb03f7d9821a58fb4023b753e9413d",
+    "stderr": ""
+  },
+  "git_status": {
+    "exit_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "source_sha256": {
+    "CMakeLists.txt": "e9291c8e0df9d39982270c24015fa6e18ee406df7bb5725244a6e7a029b934d8",
+    "src/kernels/cuda/attention.cu": "3cc28b0e3a465a8d3df145b91e5dbfccd7ac63812174edd168cdd9925a9a9bd9",
+    "src/kernels/cuda/common.cuh": "0fabb906b8bf8c6cbdfe4255efe376082497c26675a347588fa52e4ae11165ee",
+    "src/kernels/cuda/reduce.cuh": "a1cea6f3d8b6123e55de6db033ffa1a2ce140697820c5f5eff00d4c5a69ee859",
+    "exp/attn/baselines.py": "0a93631a851791689ba986aea763b000f90d7b79069d7955c0fee0bf89cc377d",
+    "exp/attn/bridge.py": "196b16559ddc4b0775156f3a4567a4f5c1bb0ce5e6e22edf4241debd75611629",
+    "exp/attn/cases.py": "dae173837a67adeeb214250ad420bc7838b4db31bb76125e4f52c008bcd4b7b0",
+    "exp/attn/correctness.py": "c86fdf70dc2bfa582d2958b7a2cd95cf852be7f363de7ef19ac05a11dcab7fa8",
+    "exp/attn/measure.py": "526d42ac141a35f6c50022db5935423106ee09d1825ecb833a9c5cdbf0579090",
+    "exp/attn/plots.py": "2ea21a21dcb2e3d49c6c93a4a6c4fb2a54a5f9ce09e480a5a5572a3e7f713df1",
+    "exp/attn/probe_backends.py": "6dc363cbc052226d734654c5cd0031d93d188dd2e675e5ff97711240f4804690",
+    "exp/attn/report.py": "834ca2b2eeff46be50c7632de6acd60e66d96eede986d9c891a57d4ff86d4c25",
+    "exp/attn/run_attn.py": "74c71ef0e0970643eb1983565d6318a4bd93533a7702d1d62c4b23ee125fc606",
+    "exp/attn/setup_env.py": "b1cef684661d2abcd7ec473ab8dfe9913a1f9c117fc0530cc6ecb7fcc5b27ab3",
+    "exp/attn/test_attn.py": "7e8055f80fdcfd79de59b949404a97d5c75928d71c3df9750b846f10d0aeb71d",
+    "exp/attn/attn_bridge.cc": "ee2260522129bc5a318bd24f03a0ddbe1f8decacc0d448bc5e9f4e6cccc34916",
+    "exp/attn/check_native.cc": "d55250630e3c5847914881bb53cbe4258d0534f8c80ceaa04be2050ecf5fefa9",
+    "exp/attn/attn_bridge.hh": "f6be593c3c9f50db897e01be67895a60ac0f17500264edf9e189fa4c96f628d1",
+    "exp/attn/suite.json": "1d4738d79e96edf95a83051f2c7b6f0cd5015524b8e99847405edbd7723935fe"
+  },
+  "library_sha256": "e08c4047fb454a3487ef6bc3ad56a4c9ea75505463dcc242874ca4b782c0af58",
+  "python": "/home/feng/nano-vllm-cpp/build/attn-venv/bin/python",
+  "gpu_before": {
+    "exit_code": 0,
+    "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1941, 17, 41.70, 43.16, 2242, 14001",
+    "stderr": ""
+  },
+  "processes": [
+    {
+      "command": [
+        "/home/feng/nano-vllm-cpp/build/attn-venv/bin/python",
+        "/home/feng/nano-vllm-cpp/exp/attn/run_attn.py",
+        "--worker",
+        "--library",
+        "/home/feng/nano-vllm-cpp/build/libnano-vllm-cpp-attn-exp.so",
+        "--suite",
+        "full",
+        "--tasks",
+        "pipeline,prefill",
+        "--dtypes",
+        "float32,float16,bfloat16",
+        "--cache",
+        "both",
+        "--seed",
+        "42",
+        "--samples",
+        "15",
+        "--target-ms",
+        "10.0",
+        "--max-calls",
+        "1024",
+        "--max-banks",
+        "32",
+        "--warmup",
+        "20",
+        "--workspace-mib",
+        "256",
+        "--output",
+        "/home/feng/nano-vllm-cpp/build/attn-results/full-production-20261103/run-001.json"
+      ],
+      "gpu_before": {
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1941, 17, 41.70, 43.16, 2242, 14001",
+        "stderr": ""
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 763.5981806829996,
+      "gpu_after": {
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1675, 16, 48.40, 51.02, 2782, 14001",
+        "stderr": ""
+      }
+    },
+    {
+      "command": [
+        "/home/feng/nano-vllm-cpp/build/attn-venv/bin/python",
+        "/home/feng/nano-vllm-cpp/exp/attn/run_attn.py",
+        "--worker",
+        "--library",
+        "/home/feng/nano-vllm-cpp/build/libnano-vllm-cpp-attn-exp.so",
+        "--suite",
+        "full",
+        "--tasks",
+        "pipeline,prefill",
+        "--dtypes",
+        "float32,float16,bfloat16",
+        "--cache",
+        "both",
+        "--seed",
+        "43",
+        "--samples",
+        "15",
+        "--target-ms",
+        "10.0",
+        "--max-calls",
+        "1024",
+        "--max-banks",
+        "32",
+        "--warmup",
+        "20",
+        "--workspace-mib",
+        "256",
+        "--output",
+        "/home/feng/nano-vllm-cpp/build/attn-results/full-production-20261103/run-002.json"
+      ],
+      "gpu_before": {
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1675, 16, 48.40, 51.02, 2782, 14001",
+        "stderr": ""
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 763.4346545769995,
+      "gpu_after": {
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1679, 16, 49.00, 57.33, 2782, 14001",
+        "stderr": ""
+      }
+    },
+    {
+      "command": [
+        "/home/feng/nano-vllm-cpp/build/attn-venv/bin/python",
+        "/home/feng/nano-vllm-cpp/exp/attn/run_attn.py",
+        "--worker",
+        "--library",
+        "/home/feng/nano-vllm-cpp/build/libnano-vllm-cpp-attn-exp.so",
+        "--suite",
+        "full",
+        "--tasks",
+        "pipeline,prefill",
+        "--dtypes",
+        "float32,float16,bfloat16",
+        "--cache",
+        "both",
+        "--seed",
+        "44",
+        "--samples",
+        "15",
+        "--target-ms",
+        "10.0",
+        "--max-calls",
+        "1024",
+        "--max-banks",
+        "32",
+        "--warmup",
+        "20",
+        "--workspace-mib",
+        "256",
+        "--output",
+        "/home/feng/nano-vllm-cpp/build/attn-results/full-production-20261103/run-003.json"
+      ],
+      "gpu_before": {
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1679, 16, 49.00, 51.42, 2782, 14001",
+        "stderr": ""
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 762.297924425,
+      "gpu_after": {
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1688, 16, 48.80, 52.38, 2782, 14001",
+        "stderr": ""
+      }
+    }
+  ],
+  "source_sha256_after": {
+    "CMakeLists.txt": "e9291c8e0df9d39982270c24015fa6e18ee406df7bb5725244a6e7a029b934d8",
+    "src/kernels/cuda/attention.cu": "3cc28b0e3a465a8d3df145b91e5dbfccd7ac63812174edd168cdd9925a9a9bd9",
+    "src/kernels/cuda/common.cuh": "0fabb906b8bf8c6cbdfe4255efe376082497c26675a347588fa52e4ae11165ee",
+    "src/kernels/cuda/reduce.cuh": "a1cea6f3d8b6123e55de6db033ffa1a2ce140697820c5f5eff00d4c5a69ee859",
+    "exp/attn/baselines.py": "0a93631a851791689ba986aea763b000f90d7b79069d7955c0fee0bf89cc377d",
+    "exp/attn/bridge.py": "196b16559ddc4b0775156f3a4567a4f5c1bb0ce5e6e22edf4241debd75611629",
+    "exp/attn/cases.py": "dae173837a67adeeb214250ad420bc7838b4db31bb76125e4f52c008bcd4b7b0",
+    "exp/attn/correctness.py": "c86fdf70dc2bfa582d2958b7a2cd95cf852be7f363de7ef19ac05a11dcab7fa8",
+    "exp/attn/measure.py": "526d42ac141a35f6c50022db5935423106ee09d1825ecb833a9c5cdbf0579090",
+    "exp/attn/plots.py": "2ea21a21dcb2e3d49c6c93a4a6c4fb2a54a5f9ce09e480a5a5572a3e7f713df1",
+    "exp/attn/probe_backends.py": "6dc363cbc052226d734654c5cd0031d93d188dd2e675e5ff97711240f4804690",
+    "exp/attn/report.py": "834ca2b2eeff46be50c7632de6acd60e66d96eede986d9c891a57d4ff86d4c25",
+    "exp/attn/run_attn.py": "74c71ef0e0970643eb1983565d6318a4bd93533a7702d1d62c4b23ee125fc606",
+    "exp/attn/setup_env.py": "b1cef684661d2abcd7ec473ab8dfe9913a1f9c117fc0530cc6ecb7fcc5b27ab3",
+    "exp/attn/test_attn.py": "7e8055f80fdcfd79de59b949404a97d5c75928d71c3df9750b846f10d0aeb71d",
+    "exp/attn/attn_bridge.cc": "ee2260522129bc5a318bd24f03a0ddbe1f8decacc0d448bc5e9f4e6cccc34916",
+    "exp/attn/check_native.cc": "d55250630e3c5847914881bb53cbe4258d0534f8c80ceaa04be2050ecf5fefa9",
+    "exp/attn/attn_bridge.hh": "f6be593c3c9f50db897e01be67895a60ac0f17500264edf9e189fa4c96f628d1",
+    "exp/attn/suite.json": "1d4738d79e96edf95a83051f2c7b6f0cd5015524b8e99847405edbd7723935fe"
+  },
+  "source_changed_during_run": false,
+  "library_sha256_after": "e08c4047fb454a3487ef6bc3ad56a4c9ea75505463dcc242874ca4b782c0af58",
+  "gpu_after": {
+    "exit_code": 0,
+    "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1688, 16, 48.80, 50.47, 2782, 14001",
+    "stderr": ""
+  },
+  "finished_at_utc": "2026-11-02T18:29:15.730180+00:00"
+}

@@ -4,9 +4,30 @@
 `nanovllm::kernels::cuda::flash_attn_with_kvcache()`。
 `attn_bridge.cc` include 项目的 `kernels/cuda/kernels.hh`，CMake 将该原始 `.cu` 与
 TensorView 支持代码构建为实验共享库。`exp/attn` 不包含另一份 CUDA attention
-算法，也没有复制、冻结或改写生产 kernel；本轮不宣称内部优化收益。
+算法，也没有复制、冻结或改写生产 kernel。
 
-## 已测结果：RTX 5060 Ti
+## 最新复测：2026-11-03，RTX 5060 Ti
+
+重新编译 `159e84a` 的生产 kernel（包含 decode 专用分支），沿用上次完整测试设置：
+3 个独立进程、每项每实现 15 组样本，共 1224 项，约 38 分钟。
+测试脚本、用例、软硬件版本与上次一致，记录的源码中仅 `attention.cu` 变化。
+212 个数值边界检查和正式测试的全量输出/cache 检查通过；36 个原生用例分别通过
+memcheck/racecheck，运行前后源码及共享库 SHA256 一致。
+
+以下为 **BF16、reuse、包含 KV 追加**；加速为匹配 shape 的旧延迟/新延迟的等权几何平均：
+
+| 配置 Hq/Hkv/D | Decode 相较旧记录（12 shapes） | Decode / FlashInfer 吞吐比例：旧 → 新 | 连续 prefill / SDPA Flash：旧 → 新（6 shapes） |
+| --- | ---: | ---: | ---: |
+| Qwen3-0.6B：16/8/128 | **2.13×** | 4.35% → **9.03%** | 3.20% → 3.24% |
+| Qwen3.5 full attention：16/2/256 | **2.69×** | 1.84% → **4.78%** | 2.14% → 2.17% |
+
+Prefill 的生产路径未改，延迟约有 3% 的跨日期变化，不归因于 decode 优化。
+完整的新旧对比、长上下文延迟、曲线和限制见
+[复测报告](results/rtx5060ti-20261103/comparison.md)；本轮全部 baseline 分组见
+[性能报告](results/rtx5060ti-20261103/report.md)，原始样本、逐项 CSV、编译记录及验证结果均在同目录。
+下文的 2026-10-31 数据和优化讨论对应旧版 kernel。
+
+## 初测结果：2026-10-31，RTX 5060 Ti
 
 2026-10-31 在 RTX 5060 Ti / WSL2 上完成 **3 个独立进程、1224 个测试项**，
 项目 kernel 全部通过输出与 cache 更新检查。测量期间源码和共享库 SHA256 一致。
