@@ -1,0 +1,35 @@
+{
+  "platform": "Linux-6.18.33.2-microsoft-standard-WSL2-x86_64-with-glibc2.39",
+  "git_head": "14a140ec567ca2406024fde3b8c7c72dba3abe5e",
+  "cuda_compiler": "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2026 NVIDIA Corporation\nBuilt on Tue_Jun_09_02:43:40_PM_PDT_2026\nCuda compilation tools, release 13.3, V13.3.73\nBuild cuda_13.3.r13.3/compiler.38244171_0\n",
+  "source_sha256": "aaa17db1c48f23593ac70f1a7e704839716beb3b0aa934d45445b0d38871e502",
+  "extra_source_sha256": {
+    "src/kernels/cuda/attention.cu": "aaa17db1c48f23593ac70f1a7e704839716beb3b0aa934d45445b0d38871e502",
+    "src/kernels/cuda/kernels.hh": "7ed9ccd5a5dfc5f362ca34df56d98878e2dd757beb9158519a06b3154ce54459",
+    "src/core/forward_context.hh": "432a0d4b14e44d8204a626f575567b7af2580a6cdf2611b123acc5947677a2bc",
+    "src/engine/model_runner.cc": "78d1689f816f27bb8320103420e11e21290c9905da39ed2fcb8b122a46ece57f",
+    "src/engine/model_runner.hh": "d66c8dfb8d7b48427c8a7f3c37d95f9200e908b32fbacb64e626d21a65a9d340",
+    "src/models/qwen3.cc": "bf435ceb69274003764d2d6f0b13ddf03564b7afe009c0b628fd416a057f2a38",
+    "src/models/qwen35.cc": "01e92331faf27bd8a1595c447751a888660762f0b8770b8c5b4734c793db7fb4",
+    "exp/attn/attn_bridge.hh": "202fb334961d29fab9a10ed27f055370ec4e68db7037320cc2fea8511c8187a7",
+    "exp/attn/attn_bridge.cc": "347e663948668e40f5208b3fcc32c00dc04f7bad6a61dfc57a02bd4176560e82",
+    "exp/attn/bridge.py": "04b01fc99bd8cc1f5eb13f0de36614f04556e4b08e4c29f1d57f0b8a185250da"
+  },
+  "library_sha256": "ee32d94ff59b169d05ed41367745efac0c62f10cfa080d9b5f552dc407304a25",
+  "measurement_build_commands": [
+    {
+      "directory": "/home/feng/nano-vllm-cpp/build",
+      "command": "/usr/bin/c++ -DNANOVLLM_ATTN_BUILD_TYPE=\\\"Release\\\" -Dnano_vllm_cpp_attn_exp_EXPORTS -I/home/feng/nano-vllm-cpp/src -isystem /usr/local/cuda-13.3/targets/x86_64-linux/include -O3 -DNDEBUG -std=c++20 -fPIC -o CMakeFiles/nano-vllm-cpp-attn-exp.dir/exp/attn/attn_bridge.cc.o -c /home/feng/nano-vllm-cpp/exp/attn/attn_bridge.cc",
+      "file": "/home/feng/nano-vllm-cpp/exp/attn/attn_bridge.cc",
+      "output": "CMakeFiles/nano-vllm-cpp-attn-exp.dir/exp/attn/attn_bridge.cc.o"
+    },
+    {
+      "directory": "/home/feng/nano-vllm-cpp/build",
+      "command": "/usr/local/cuda-13.3/bin/nvcc -forward-unknown-to-host-compiler -DNANOVLLM_ATTN_BUILD_TYPE=\\\"Release\\\" -Dnano_vllm_cpp_attn_exp_EXPORTS -I/home/feng/nano-vllm-cpp/src -isystem /usr/local/cuda-13.3/targets/x86_64-linux/include -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --generate-line-info -x cu -c /home/feng/nano-vllm-cpp/src/kernels/cuda/attention.cu -o CMakeFiles/nano-vllm-cpp-attn-exp.dir/src/kernels/cuda/attention.cu.o",
+      "file": "/home/feng/nano-vllm-cpp/src/kernels/cuda/attention.cu",
+      "output": "CMakeFiles/nano-vllm-cpp-attn-exp.dir/src/kernels/cuda/attention.cu.o"
+    }
+  ],
+  "previous_full_results": "exp/attn/results/rtx5060ti-20261103",
+  "focused_split_kv_results": "exp/attn/results/rtx5060ti-20261103-split-kv"
+}

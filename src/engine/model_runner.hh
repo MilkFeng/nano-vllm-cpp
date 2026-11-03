@@ -45,6 +45,7 @@ class ModelRunner {
   std::unique_ptr<Model> model_;
   std::unique_ptr<Qwen3Cache> qwen3_cache_;
   std::unique_ptr<Qwen35Cache> hybrid_cache_;
+  Tensor attention_workspace_;
   cudaStream_t stream_ = nullptr;
   std::uint64_t sample_step_ = 0;
 };

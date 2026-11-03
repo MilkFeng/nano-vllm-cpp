@@ -1,0 +1,211 @@
+{
+  "started_at_utc": "2026-11-03T07:59:29.087071+00:00",
+  "git_head": {
+    "exit_code": 0,
+    "stdout": "14a140ec567ca2406024fde3b8c7c72dba3abe5e",
+    "stderr": ""
+  },
+  "git_status": {
+    "exit_code": 0,
+    "stdout": "M  exp/attn/README.md\nM  exp/attn/attn_bridge.cc\nM  exp/attn/attn_bridge.hh\nM  exp/attn/baselines.py\nA  exp/attn/bench_split_kv.py\nM  exp/attn/bridge.py\nM  exp/attn/check_native.cc\nM  exp/attn/report.py\nA  exp/attn/results/rtx5060ti-20261103-split-kv/build-info.json\nA  exp/attn/results/rtx5060ti-20261103-split-kv/correctness.json\nA  exp/attn/results/rtx5060ti-20261103-split-kv/decode_before_after.png\nA  exp/attn/results/rtx5060ti-20261103-split-kv/memcheck.txt\nA  exp/attn/results/rtx5060ti-20261103-split-kv/racecheck.txt\nA  exp/attn/results/rtx5060ti-20261103-split-kv/report.md\nA  exp/attn/results/rtx5060ti-20261103-split-kv/run-001.json\nA  exp/attn/results/rtx5060ti-20261103-split-kv/run-002.json\nA  exp/attn/results/rtx5060ti-20261103-split-kv/run-003.json\nA  exp/attn/results/rtx5060ti-20261103-split-kv/summary.csv\nA  exp/attn/results/rtx5060ti-20261103-split-kv/summary.json\nA  exp/attn/results/rtx5060ti-20261103-split-kv/unit-tests.txt\nA  exp/attn/results/rtx5060ti-20261103-split-kv/validation.json\nM  exp/attn/run_attn.py\nA  exp/attn/test_split_kv.py\nM  src/core/forward_context.hh\nM  src/engine/model_runner.cc\nM  src/engine/model_runner.hh\nM  src/kernels/cuda/attention.cu\nM  src/kernels/cuda/kernels.hh\nM  src/models/qwen3.cc\nM  src/models/qwen35.cc",
+    "stderr": ""
+  },
+  "source_sha256": {
+    "CMakeLists.txt": "e9291c8e0df9d39982270c24015fa6e18ee406df7bb5725244a6e7a029b934d8",
+    "src/kernels/cuda/attention.cu": "aaa17db1c48f23593ac70f1a7e704839716beb3b0aa934d45445b0d38871e502",
+    "src/kernels/cuda/common.cuh": "0fabb906b8bf8c6cbdfe4255efe376082497c26675a347588fa52e4ae11165ee",
+    "src/kernels/cuda/reduce.cuh": "a1cea6f3d8b6123e55de6db033ffa1a2ce140697820c5f5eff00d4c5a69ee859",
+    "exp/attn/baselines.py": "62e1ab7466ff7dbe60b7632319abbfb2d8ed4300511152a7ae424f0a35951d86",
+    "exp/attn/bench_split_kv.py": "6fbf71f280f3a2be11c7ea8dc159ad38e4057f44fce459035e492c9c5f1ce815",
+    "exp/attn/bridge.py": "04b01fc99bd8cc1f5eb13f0de36614f04556e4b08e4c29f1d57f0b8a185250da",
+    "exp/attn/cases.py": "dae173837a67adeeb214250ad420bc7838b4db31bb76125e4f52c008bcd4b7b0",
+    "exp/attn/correctness.py": "c86fdf70dc2bfa582d2958b7a2cd95cf852be7f363de7ef19ac05a11dcab7fa8",
+    "exp/attn/measure.py": "526d42ac141a35f6c50022db5935423106ee09d1825ecb833a9c5cdbf0579090",
+    "exp/attn/plots.py": "2ea21a21dcb2e3d49c6c93a4a6c4fb2a54a5f9ce09e480a5a5572a3e7f713df1",
+    "exp/attn/probe_backends.py": "6dc363cbc052226d734654c5cd0031d93d188dd2e675e5ff97711240f4804690",
+    "exp/attn/report.py": "4711743c77c8ca648a581b798025268dfecc69d5f21e84eeef2c4a0a3219a2d5",
+    "exp/attn/run_attn.py": "0c3d34d2d7d1c79b4b6084b2f0071d03c3d8fb8ad66f38516cdae97b1c37dc60",
+    "exp/attn/setup_env.py": "b1cef684661d2abcd7ec473ab8dfe9913a1f9c117fc0530cc6ecb7fcc5b27ab3",
+    "exp/attn/test_attn.py": "7e8055f80fdcfd79de59b949404a97d5c75928d71c3df9750b846f10d0aeb71d",
+    "exp/attn/test_split_kv.py": "ae9af52ace64caa555861360ecfa71af1d7476c83b85f2aa80beb6a48ae4d714",
+    "exp/attn/attn_bridge.cc": "347e663948668e40f5208b3fcc32c00dc04f7bad6a61dfc57a02bd4176560e82",
+    "exp/attn/check_native.cc": "88de869e8a89ed7cc895497edcf5e6e9d296b87baad1946ddeb75dfd0c4c85b6",
+    "exp/attn/attn_bridge.hh": "202fb334961d29fab9a10ed27f055370ec4e68db7037320cc2fea8511c8187a7",
+    "exp/attn/suite.json": "1d4738d79e96edf95a83051f2c7b6f0cd5015524b8e99847405edbd7723935fe"
+  },
+  "library_sha256": "ee32d94ff59b169d05ed41367745efac0c62f10cfa080d9b5f552dc407304a25",
+  "python": "/home/feng/nano-vllm-cpp/build/attn-venv/bin/python",
+  "gpu_before": {
+    "exit_code": 0,
+    "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1862, 27, 44.90, 50.62, 2505, 14001",
+    "stderr": ""
+  },
+  "processes": [
+    {
+      "command": [
+        "/home/feng/nano-vllm-cpp/build/attn-venv/bin/python",
+        "/home/feng/nano-vllm-cpp/exp/attn/run_attn.py",
+        "--worker",
+        "--library",
+        "/home/feng/nano-vllm-cpp/build/libnano-vllm-cpp-attn-exp.so",
+        "--suite",
+        "full",
+        "--tasks",
+        "pipeline,prefill",
+        "--dtypes",
+        "float32,float16,bfloat16",
+        "--cache",
+        "both",
+        "--seed",
+        "42",
+        "--samples",
+        "15",
+        "--target-ms",
+        "10.0",
+        "--max-calls",
+        "1024",
+        "--max-banks",
+        "32",
+        "--warmup",
+        "20",
+        "--workspace-mib",
+        "256",
+        "--output",
+        "/home/feng/nano-vllm-cpp/build/attn-results/full-split-kv-20261103/run-001.json"
+      ],
+      "gpu_before": {
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1862, 27, 44.90, 50.62, 2497, 14001",
+        "stderr": ""
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 894.542664607,
+      "gpu_after": {
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1837, 31, 48.70, 56.99, 2775, 14001",
+        "stderr": ""
+      }
+    },
+    {
+      "command": [
+        "/home/feng/nano-vllm-cpp/build/attn-venv/bin/python",
+        "/home/feng/nano-vllm-cpp/exp/attn/run_attn.py",
+        "--worker",
+        "--library",
+        "/home/feng/nano-vllm-cpp/build/libnano-vllm-cpp-attn-exp.so",
+        "--suite",
+        "full",
+        "--tasks",
+        "pipeline,prefill",
+        "--dtypes",
+        "float32,float16,bfloat16",
+        "--cache",
+        "both",
+        "--seed",
+        "43",
+        "--samples",
+        "15",
+        "--target-ms",
+        "10.0",
+        "--max-calls",
+        "1024",
+        "--max-banks",
+        "32",
+        "--warmup",
+        "20",
+        "--workspace-mib",
+        "256",
+        "--output",
+        "/home/feng/nano-vllm-cpp/build/attn-results/full-split-kv-20261103/run-002.json"
+      ],
+      "gpu_before": {
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1837, 30, 48.70, 56.93, 2775, 14001",
+        "stderr": ""
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 885.526788229,
+      "gpu_after": {
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1857, 27, 49.10, 56.66, 2775, 14001",
+        "stderr": ""
+      }
+    },
+    {
+      "command": [
+        "/home/feng/nano-vllm-cpp/build/attn-venv/bin/python",
+        "/home/feng/nano-vllm-cpp/exp/attn/run_attn.py",
+        "--worker",
+        "--library",
+        "/home/feng/nano-vllm-cpp/build/libnano-vllm-cpp-attn-exp.so",
+        "--suite",
+        "full",
+        "--tasks",
+        "pipeline,prefill",
+        "--dtypes",
+        "float32,float16,bfloat16",
+        "--cache",
+        "both",
+        "--seed",
+        "44",
+        "--samples",
+        "15",
+        "--target-ms",
+        "10.0",
+        "--max-calls",
+        "1024",
+        "--max-banks",
+        "32",
+        "--warmup",
+        "20",
+        "--workspace-mib",
+        "256",
+        "--output",
+        "/home/feng/nano-vllm-cpp/build/attn-results/full-split-kv-20261103/run-003.json"
+      ],
+      "gpu_before": {
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1857, 27, 49.10, 56.66, 2775, 14001",
+        "stderr": ""
+      },
+      "exit_code": 0,
+      "elapsed_seconds": 883.8043442529997,
+      "gpu_after": {
+        "exit_code": 0,
+        "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1843, 26, 48.80, 55.99, 2775, 14001",
+        "stderr": ""
+      }
+    }
+  ],
+  "source_sha256_after": {
+    "CMakeLists.txt": "e9291c8e0df9d39982270c24015fa6e18ee406df7bb5725244a6e7a029b934d8",
+    "src/kernels/cuda/attention.cu": "aaa17db1c48f23593ac70f1a7e704839716beb3b0aa934d45445b0d38871e502",
+    "src/kernels/cuda/common.cuh": "0fabb906b8bf8c6cbdfe4255efe376082497c26675a347588fa52e4ae11165ee",
+    "src/kernels/cuda/reduce.cuh": "a1cea6f3d8b6123e55de6db033ffa1a2ce140697820c5f5eff00d4c5a69ee859",
+    "exp/attn/baselines.py": "62e1ab7466ff7dbe60b7632319abbfb2d8ed4300511152a7ae424f0a35951d86",
+    "exp/attn/bench_split_kv.py": "6fbf71f280f3a2be11c7ea8dc159ad38e4057f44fce459035e492c9c5f1ce815",
+    "exp/attn/bridge.py": "04b01fc99bd8cc1f5eb13f0de36614f04556e4b08e4c29f1d57f0b8a185250da",
+    "exp/attn/cases.py": "dae173837a67adeeb214250ad420bc7838b4db31bb76125e4f52c008bcd4b7b0",
+    "exp/attn/correctness.py": "c86fdf70dc2bfa582d2958b7a2cd95cf852be7f363de7ef19ac05a11dcab7fa8",
+    "exp/attn/measure.py": "526d42ac141a35f6c50022db5935423106ee09d1825ecb833a9c5cdbf0579090",
+    "exp/attn/plots.py": "2ea21a21dcb2e3d49c6c93a4a6c4fb2a54a5f9ce09e480a5a5572a3e7f713df1",
+    "exp/attn/probe_backends.py": "6dc363cbc052226d734654c5cd0031d93d188dd2e675e5ff97711240f4804690",
+    "exp/attn/report.py": "4711743c77c8ca648a581b798025268dfecc69d5f21e84eeef2c4a0a3219a2d5",
+    "exp/attn/run_attn.py": "0c3d34d2d7d1c79b4b6084b2f0071d03c3d8fb8ad66f38516cdae97b1c37dc60",
+    "exp/attn/setup_env.py": "b1cef684661d2abcd7ec473ab8dfe9913a1f9c117fc0530cc6ecb7fcc5b27ab3",
+    "exp/attn/test_attn.py": "7e8055f80fdcfd79de59b949404a97d5c75928d71c3df9750b846f10d0aeb71d",
+    "exp/attn/test_split_kv.py": "ae9af52ace64caa555861360ecfa71af1d7476c83b85f2aa80beb6a48ae4d714",
+    "exp/attn/attn_bridge.cc": "347e663948668e40f5208b3fcc32c00dc04f7bad6a61dfc57a02bd4176560e82",
+    "exp/attn/check_native.cc": "88de869e8a89ed7cc895497edcf5e6e9d296b87baad1946ddeb75dfd0c4c85b6",
+    "exp/attn/attn_bridge.hh": "202fb334961d29fab9a10ed27f055370ec4e68db7037320cc2fea8511c8187a7",
+    "exp/attn/suite.json": "1d4738d79e96edf95a83051f2c7b6f0cd5015524b8e99847405edbd7723935fe"
+  },
+  "source_changed_during_run": false,
+  "library_sha256_after": "ee32d94ff59b169d05ed41367745efac0c62f10cfa080d9b5f552dc407304a25",
+  "gpu_after": {
+    "exit_code": 0,
+    "stdout": "NVIDIA GeForce RTX 5060 Ti, 621.01, 1843, 26, 48.80, 56.03, 2775, 14001",
+    "stderr": ""
+  },
+  "finished_at_utc": "2026-11-03T08:42:18.924403+00:00"
+}

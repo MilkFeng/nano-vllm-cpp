@@ -6,7 +6,69 @@
 TensorView 支持代码构建为实验共享库。`exp/attn` 不包含另一份 CUDA attention
 算法，也没有复制、冻结或改写生产 kernel。
 
-## 最新复测：2026-11-03，RTX 5060 Ti
+## Split-KV 完整 profile：2026-11-03，RTX 5060 Ti
+
+直接运行原有 `run_attn.py --suite full`，每进程 **408 项**，3 个独立进程共 **1224 项**，
+耗时约 **44 分钟**。覆盖 FP32/FP16/BF16、reuse/rotating、paged decode/prefill/chunked prefill
+及变长请求、连续 prefill；所有项目侧输出和 cache 检查通过，计时前后源码及共享库 SHA256 一致。
+
+以下是 **BF16/reuse** 的吞吐比例几何平均，包含 KV 追加及必要的归并/输出处理：
+
+| 配置 Hq/Hkv/D | Decode / FlashInfer（12 shapes） | Paged prefill / FlashInfer（6 shapes） | 连续 prefill / SDPA Flash（6 shapes） |
+| --- | ---: | ---: | ---: |
+| Qwen3-0.6B：16/8/128 | **16.31%** | 3.36% | 3.03% |
+| Qwen3.5 full attention：16/2/256 | **8.47%** | 2.03% | 2.14% |
+
+100% 表示与对照等速。相较上一份单 block 完整记录，BF16/reuse decode 的项目侧延迟
+几何平均均约改善 **1.67×**；连续 prefill 本轮延迟约高 **10–11%**，其计算路径没有改动。
+这是两次完整测试的对比，测量环境、缓存及 baseline 选择的波动需一并考虑。
+
+[完整分组报告](results/rtx5060ti-20261103-split-kv-full/report.md) ·
+[与上一完整记录对比及曲线](results/rtx5060ti-20261103-split-kv-full/comparison.md) ·
+[全部逐项 CSV](results/rtx5060ti-20261103-split-kv-full/summary.csv)。
+原始样本、日志、编译参数和完整性验证均保存在同目录。下面一节是另外保留的同进程交错消融。
+
+## Split-KV 交错消融：2026-11-03，RTX 5060 Ti
+
+生产 decode 支持多个 block 协作计算一个 query head：每片保存 FP32 的未归一化输出、
+softmax 最大值和分母，第二个 kernel 稳定归并。分片数随 batch、head 数和 KV 长度变化，
+目标约 256 个 block，最多 32 片，限制每片平均至少 256 个 token；短序列或 block 数充足时
+仍走单阶段路径。Prefill 的计算路径保持不变。
+
+`flash_attn_with_kvcache()` 末尾增加可选 FP32 `workspace`；不提供时仍支持原单 block 调用。
+使用 `flash_attn_decode_workspace_elements(max_batch, Hq, D, max_k)` 查询容量，返回的是
+**float 元素数**，覆盖所有不超过 `max_batch` 的 batch，避免只按最大 batch 估算导致小 batch
+分片更多时容量不足。工作区在 capture 外分配，生命周期覆盖 stream/Graph 使用，
+不同并发 stream 使用不同工作区。引擎已预分配并通过 `ForwardContext` 传入，两种 Qwen 模型
+的 full attention 层在同一 stream 上复用它；算子内部不分配显存、不做全局同步。
+
+与修改前的单 block 库在同一进程交错计时，3 个独立进程、每项每实现 15 组样本，
+共 156 个 BF16 decode 比较项，两端均包含 KV 追加，新版本包含归并：
+
+| 配置 | reuse：12 shapes 几何平均 | rotating：12 shapes 几何平均 | B=1、KV=8192、reuse |
+| --- | ---: | ---: | ---: |
+| Qwen3-0.6B | **1.86×** | **1.74×** | 4.401 ms → 0.397 ms，**11.10×** |
+| Qwen3.5 full attention | **1.94×** | **1.82×** | 7.366 ms → 0.517 ms，**14.25×** |
+
+这是相较本次修改前版本的算子加速；本轮没有重测 FlashInfer 或端到端生成。
+完整结果见 [Split-KV 消融报告](results/rtx5060ti-20261103-split-kv/report.md)。
+短序列和大 batch 保留单阶段路径，逐项延迟及波动均保留。
+
+验证包含 212 个既有边界检查、新增 Split-KV/GQA/非二次幂页大小/空分片/极端分数/
+双 stream Graph 重放测试，以及 132 个原生用例的 memcheck/racecheck。
+
+```bash
+cmake --build build --target nano-vllm-cpp-attn-check nano-vllm-cpp --config Release -j 4
+build/attn-venv/bin/python -m unittest discover -s exp/attn -p 'test_*.py' -v
+
+# 先保留修改前的库，再编译新版；两端应使用相同 Release/SM 配置。
+build/attn-venv/bin/python exp/attn/bench_split_kv.py \
+  --before-library /path/to/before/libnano-vllm-cpp-attn-exp.so \
+  --after-library build/libnano-vllm-cpp-attn-exp.so \
+  --output-dir build/attn-results/split-kv-new --runs 3 --samples 15
+```
+
+## 单 block decode 复测：2026-11-03，RTX 5060 Ti
 
 重新编译 `159e84a` 的生产 kernel（包含 decode 专用分支），沿用上次完整测试设置：
 3 个独立进程、每项每实现 15 组样本，共 1224 项，约 38 分钟。

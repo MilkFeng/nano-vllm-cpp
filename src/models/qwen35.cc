@@ -235,7 +235,7 @@ Tensor Qwen35Attention::forward(ConstTensorView positions,
       query.view().as_const(), key_cache_, value_cache_, key.view().as_const(),
       value.view(), context.cu_seqlens_q, context.cu_seqlens_k,
       context.max_seqlen_q, context.max_seqlen_k, context.block_tables,
-      output.view(), true, stream);
+      output.view(), true, stream, context.attention_workspace);
 
   kernels::cuda::apply_sigmoid_gate(output.view(), gate.view().as_const(),
                                     stream);

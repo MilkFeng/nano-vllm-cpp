@@ -258,7 +258,7 @@ def generate_report(directory):
         f"最多 {options['max_calls']} 次调用，预热至少 {options['warmup']} 次。",
         "",
         "自定义侧统一通过 kernels.hh 调用 src/kernels/cuda/attention.cu；实验目录不包含另一份 CUDA attention 算法。"
-        "本轮未修改生产算法，不报告内部优化收益。",
+        "具体 kernel 版本由 manifest 中的源码与共享库 SHA256 标识；历史版本的内部加速需另做匹配对比。",
         "",
         "## 计时与任务边界",
         "",
@@ -337,7 +337,7 @@ def generate_report(directory):
         "[FlashInfer append+attention / Torch append+SDPA Flash+NHD输出] 对照的 Y%，"
         "并通过输出及 cache 更新一致性验证。",
         "",
-        "数值 Y 取上表对应分组的吞吐比例。本轮没有修改生产算法，因此不写“相较原始实现降低 X%”。",
+        "数值 Y 取上表对应分组的吞吐比例。相较历史 kernel 的提升必须来自匹配任务、精度和 shape 的独立对比。",
         "",
     ]
     (directory / "report.md").write_text("\n".join(lines), encoding="utf-8")

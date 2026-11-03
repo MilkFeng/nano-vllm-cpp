@@ -52,13 +52,15 @@ def classify_failure(error):
 
 
 def custom(bridge, banks):
+    launches = [bridge.bind(bank) for bank in banks]
     return Implementation(
         "custom",
-        [bridge.bind(bank) for bank in banks],
+        launches,
         {
             "source": "src/kernels/cuda/attention.cu",
             "append_included": True,
             "output_layout": "NHD",
+            "workspace_bytes": sum(launch.workspace.numel() * 4 for launch in launches),
         },
     )
 

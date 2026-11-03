@@ -139,7 +139,7 @@ def metadata(args, bridge):
             "dropout": 0,
             "timing": "CUDA Graph + CUDA events; fixed lengths per replay",
             "tolerances": SPEC["correctness"]["tolerances"],
-            "production_optimized": False,
+            "split_kv_workspace_available": bridge.workspace_size is not None,
         },
         "source_sha256": source_hashes(),
         "library_sha256": sha256(bridge.path),

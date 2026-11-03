@@ -213,11 +213,13 @@ void apply_sigmoid_gate(TensorView output, ConstTensorView gate,
 void moe_route(ConstTensorView logits, TensorView expert_ids,
                TensorView expert_weights, cudaStream_t stream = nullptr);
 
-// input: [T,H], order: Int32 [G] containing original flattened token/top-k ranks.
-// grouped[q,d] = input[order[q] / top_k,d], grouped: [G,H].
-void moe_gather(ConstTensorView input, ConstTensorView order,
-                std::size_t top_k, TensorView grouped,
-                cudaStream_t stream = nullptr);
+// input:   [T,H]
+// order:   [G] Int32
+// grouped: [G,H]
+//
+// grouped[q,d] = input[order[q] / top_k,d]
+void moe_gather(ConstTensorView input, ConstTensorView order, std::size_t top_k,
+                TensorView grouped, cudaStream_t stream = nullptr);
 
 // grouped/output: [T*K,H], order: Int32 [T*K], a permutation of [0,T*K).
 // output[order[q],d] = grouped[q,d]; unique destinations require no atomics.
@@ -246,13 +248,15 @@ void moe_add_shared(ConstTensorView shared_output, ConstTensorView gate_logits,
 // key/value (new tokens):    [q_tokens, key_heads, head_dim]
 // cu_seqlens_q/cu_seqlens_k: [batch + 1]
 // block_table:               [batch, max_blocks]
-void flash_attn_with_kvcache(ConstTensorView query, TensorView key_cache,
-                             TensorView value_cache, ConstTensorView key,
-                             ConstTensorView value,
-                             ConstTensorView cu_seqlens_q,
-                             ConstTensorView cu_seqlens_k,
-                             std::size_t max_seqlen_q, std::size_t max_seqlen_k,
-                             ConstTensorView block_table, TensorView output,
-                             bool causal, cudaStream_t stream = nullptr);
+void flash_attn_with_kvcache(
+    ConstTensorView query, TensorView key_cache, TensorView value_cache,
+    ConstTensorView key, ConstTensorView value, ConstTensorView cu_seqlens_q,
+    ConstTensorView cu_seqlens_k, std::size_t max_seqlen_q,
+    std::size_t max_seqlen_k, ConstTensorView block_table, TensorView output,
+    bool causal, cudaStream_t stream = nullptr, TensorView workspace = {});
+
+[[nodiscard]] std::size_t flash_attn_decode_workspace_elements(
+    std::size_t max_batch, std::size_t query_heads, std::size_t head_dim,
+    std::size_t max_seqlen_k);
 
 } // namespace nanovllm::kernels::cuda

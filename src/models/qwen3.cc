@@ -94,7 +94,7 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
       query.view().as_const(), key_cache_, value_cache_, key.view().as_const(),
       value.view().as_const(), context.cu_seqlens_q, context.cu_seqlens_k,
       context.max_seqlen_q, context.max_seqlen_k, context.block_tables,
-      attention_output.view(), true, stream);
+      attention_output.view(), true, stream, context.attention_workspace);
 
   const auto flattened = attention_output.reshape(std::array{tokens, q_size_});
   return o_proj_.forward(flattened.view(), stream);

@@ -1,0 +1,19 @@
+{
+  "status": "ok",
+  "runs": 3,
+  "cases_per_run": 408,
+  "total_cases": 1224,
+  "max_custom_tolerance_ratio": 0.09680245825717111,
+  "source_and_library_unchanged": true,
+  "extra_production_sources_match": true,
+  "kernel_sha256": "aaa17db1c48f23593ac70f1a7e704839716beb3b0aa934d45445b0d38871e502",
+  "library_sha256": "ee32d94ff59b169d05ed41367745efac0c62f10cfa080d9b5f552dc407304a25",
+  "matched_previous_cases": 408,
+  "compare_script_sha256": "0f3691bddd0b1222b90bdb8a2af225b177559d90ad117e705cbee07c93c965dd",
+  "artifacts_sha256": {
+    "summary.json": "fc7a682ebf0735b0789e9434207704a0d2146bb4b7ccc3e2fc0f35784ed8ca10",
+    "summary.csv": "a8c2e339818a1feb32c5a206c467570b79f92f92841d2f8fdc5abe54f8f54520",
+    "comparison.json": "314029adf1b892f4ac8c43dee9ebbd74c882c7ab169e580cd08f5bf57c888352",
+    "comparison.csv": "155e0e91288a9611e3b5dfaf3117207d234d9736feff79dd2e4fa7efcdd5aecb"
+  }
+}

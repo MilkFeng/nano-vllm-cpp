@@ -1,0 +1,2282 @@
+{
+  "groups": [
+    {
+      "profile": "qwen3_0p6b",
+      "cache": "reuse",
+      "shapes": 12,
+      "geomean_speedup": 1.858668541781088
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "cache": "rotating",
+      "shapes": 12,
+      "geomean_speedup": 1.7445737724436396
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "cache": "reuse",
+      "shapes": 12,
+      "geomean_speedup": 1.9371597726277585
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "cache": "rotating",
+      "shapes": 12,
+      "geomean_speedup": 1.8186086271945892
+    }
+  ],
+  "cases": [
+    {
+      "name": "qwen35_full_attention_decode_b16_q1_k128",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_decode_b16_q1_k128",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127
+        ]
+      },
+      "before_us": 138.77002012382434,
+      "after_us": 133.95999908447266,
+      "speedup": 1.0359063979712226
+    },
+    {
+      "name": "qwen35_full_attention_decode_b16_q1_k128",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_decode_b16_q1_k128",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127
+        ]
+      },
+      "before_us": 242.87075466579861,
+      "after_us": 239.5775900946723,
+      "speedup": 1.013745712066913
+    },
+    {
+      "name": "qwen35_full_attention_decode_b16_q1_k2048",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_decode_b16_q1_k2048",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047
+        ]
+      },
+      "before_us": 3800.640106201172,
+      "after_us": 3715.264002482096,
+      "speedup": 1.0229798215314005
+    },
+    {
+      "name": "qwen35_full_attention_decode_b16_q1_k2048",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_decode_b16_q1_k2048",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047
+        ]
+      },
+      "before_us": 3668.7920093536377,
+      "after_us": 3790.2399698893228,
+      "speedup": 0.9679577120444879
+    },
+    {
+      "name": "qwen35_full_attention_decode_b16_q1_k512",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_decode_b16_q1_k512",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511
+        ]
+      },
+      "before_us": 599.4218826293945,
+      "after_us": 593.3653513590494,
+      "speedup": 1.0102070861678614
+    },
+    {
+      "name": "qwen35_full_attention_decode_b16_q1_k512",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_decode_b16_q1_k512",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511
+        ]
+      },
+      "before_us": 959.3599637349447,
+      "after_us": 953.8666407267252,
+      "speedup": 1.0057590052672711
+    },
+    {
+      "name": "qwen35_full_attention_decode_b16_q1_k8192",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_decode_b16_q1_k8192",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191
+        ]
+      },
+      "before_us": 14809.53598022461,
+      "after_us": 15237.88833618164,
+      "speedup": 0.9718889949508339
+    },
+    {
+      "name": "qwen35_full_attention_decode_b16_q1_k8192",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_decode_b16_q1_k8192",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191
+        ]
+      },
+      "before_us": 15036.60774230957,
+      "after_us": 14689.696311950684,
+      "speedup": 1.0236159702005998
+    },
+    {
+      "name": "qwen35_full_attention_decode_b1_q1_k128",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_decode_b1_q1_k128",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          128
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          127
+        ]
+      },
+      "before_us": 66.74270523327023,
+      "after_us": 65.34890205629411,
+      "speedup": 1.0213286395504464
+    },
+    {
+      "name": "qwen35_full_attention_decode_b1_q1_k128",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_decode_b1_q1_k128",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          128
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          127
+        ]
+      },
+      "before_us": 117.19849705696106,
+      "after_us": 115.9920021891594,
+      "speedup": 1.0104015349768178
+    },
+    {
+      "name": "qwen35_full_attention_decode_b1_q1_k2048",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_decode_b1_q1_k2048",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          2048
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          2047
+        ]
+      },
+      "before_us": 1427.5775909423828,
+      "after_us": 141.40904468038806,
+      "speedup": 10.095376813901726
+    },
+    {
+      "name": "qwen35_full_attention_decode_b1_q1_k2048",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_decode_b1_q1_k2048",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          2048
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          2047
+        ]
+      },
+      "before_us": 1893.2340145111084,
+      "after_us": 236.22934023539224,
+      "speedup": 8.014389798593957
+    },
+    {
+      "name": "qwen35_full_attention_decode_b1_q1_k512",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_decode_b1_q1_k512",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          512
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          511
+        ]
+      },
+      "before_us": 258.30628190721785,
+      "after_us": 136.5449693467882,
+      "speedup": 1.8917304910090684
+    },
+    {
+      "name": "qwen35_full_attention_decode_b1_q1_k512",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_decode_b1_q1_k512",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          512
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          511
+        ]
+      },
+      "before_us": 469.310998916626,
+      "after_us": 230.5299937725067,
+      "speedup": 2.0357914874181398
+    },
+    {
+      "name": "qwen35_full_attention_decode_b1_q1_k8192",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_decode_b1_q1_k8192",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          8192
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          8191
+        ]
+      },
+      "before_us": 7366.015911102295,
+      "after_us": 516.7477758307206,
+      "speedup": 14.25456722916849
+    },
+    {
+      "name": "qwen35_full_attention_decode_b1_q1_k8192",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_decode_b1_q1_k8192",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          8192
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          8191
+        ]
+      },
+      "before_us": 7818.903923034668,
+      "after_us": 755.6080023447672,
+      "speedup": 10.347831016573956
+    },
+    {
+      "name": "qwen35_full_attention_decode_b4_q1_k128",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_decode_b4_q1_k128",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          128,
+          128,
+          128,
+          128
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          127,
+          127,
+          127,
+          127
+        ]
+      },
+      "before_us": 65.16579375869927,
+      "after_us": 64.19559213566907,
+      "speedup": 1.0151132124613758
+    },
+    {
+      "name": "qwen35_full_attention_decode_b4_q1_k128",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_decode_b4_q1_k128",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          128,
+          128,
+          128,
+          128
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          127,
+          127,
+          127,
+          127
+        ]
+      },
+      "before_us": 121.17599695920944,
+      "after_us": 119.79450285434723,
+      "speedup": 1.0115321994911728
+    },
+    {
+      "name": "qwen35_full_attention_decode_b4_q1_k2048",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_decode_b4_q1_k2048",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          2047,
+          2047,
+          2047,
+          2047
+        ]
+      },
+      "before_us": 1420.4205104282923,
+      "after_us": 592.7637100219727,
+      "speedup": 2.39626766351071
+    },
+    {
+      "name": "qwen35_full_attention_decode_b4_q1_k2048",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_decode_b4_q1_k2048",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          2047,
+          2047,
+          2047,
+          2047
+        ]
+      },
+      "before_us": 1803.4319877624512,
+      "after_us": 919.0213680267334,
+      "speedup": 1.962339560868612
+    },
+    {
+      "name": "qwen35_full_attention_decode_b4_q1_k512",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_decode_b4_q1_k512",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          512,
+          512,
+          512,
+          512
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          511,
+          511,
+          511,
+          511
+        ]
+      },
+      "before_us": 276.3762638486665,
+      "after_us": 141.06688548609154,
+      "speedup": 1.9591859768954476
+    },
+    {
+      "name": "qwen35_full_attention_decode_b4_q1_k512",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_decode_b4_q1_k512",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          512,
+          512,
+          512,
+          512
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          511,
+          511,
+          511,
+          511
+        ]
+      },
+      "before_us": 446.60601019859314,
+      "after_us": 237.78299987316132,
+      "speedup": 1.8782083262336777
+    },
+    {
+      "name": "qwen35_full_attention_decode_b4_q1_k8192",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_decode_b4_q1_k8192",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          8192,
+          8192,
+          8192,
+          8192
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          8191,
+          8191,
+          8191,
+          8191
+        ]
+      },
+      "before_us": 7437.007904052734,
+      "after_us": 3671.5919971466064,
+      "speedup": 2.025554013036426
+    },
+    {
+      "name": "qwen35_full_attention_decode_b4_q1_k8192",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_decode_b4_q1_k8192",
+        "phase": "decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          8192,
+          8192,
+          8192,
+          8192
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          8191,
+          8191,
+          8191,
+          8191
+        ]
+      },
+      "before_us": 7402.768135070801,
+      "after_us": 3633.994738260905,
+      "speedup": 2.0370882921568265
+    },
+    {
+      "name": "qwen35_full_attention_ragged_decode",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen35_full_attention_ragged_decode",
+        "phase": "ragged_decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          127,
+          513,
+          2047,
+          8191
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          126,
+          512,
+          2046,
+          8190
+        ]
+      },
+      "before_us": 7324.3842124938965,
+      "after_us": 1390.1439905166626,
+      "speedup": 5.268795363976437
+    },
+    {
+      "name": "qwen35_full_attention_ragged_decode",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen35_full_attention_ragged_decode",
+        "phase": "ragged_decode",
+        "profile": "qwen35_full_attention",
+        "hq": 16,
+        "hkv": 2,
+        "dim": 256,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          127,
+          513,
+          2047,
+          8191
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          126,
+          512,
+          2046,
+          8190
+        ]
+      },
+      "before_us": 7422.7949778238935,
+      "after_us": 1849.5465914408367,
+      "speedup": 4.0133052133827976
+    },
+    {
+      "name": "qwen3_0p6b_decode_b16_q1_k128",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_decode_b16_q1_k128",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127
+        ]
+      },
+      "before_us": 87.7122326173644,
+      "after_us": 87.34034245310266,
+      "speedup": 1.0042579425934977
+    },
+    {
+      "name": "qwen3_0p6b_decode_b16_q1_k128",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_decode_b16_q1_k128",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128,
+          128
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127,
+          127
+        ]
+      },
+      "before_us": 141.92800088362262,
+      "after_us": 141.18108966133812,
+      "speedup": 1.0052904480626703
+    },
+    {
+      "name": "qwen3_0p6b_decode_b16_q1_k2048",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_decode_b16_q1_k2048",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047
+        ]
+      },
+      "before_us": 2247.0354352678573,
+      "after_us": 2202.381678989955,
+      "speedup": 1.0202752123775298
+    },
+    {
+      "name": "qwen3_0p6b_decode_b16_q1_k2048",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_decode_b16_q1_k2048",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047,
+          2047
+        ]
+      },
+      "before_us": 2202.587400163923,
+      "after_us": 2174.1943359375,
+      "speedup": 1.0130591197654741
+    },
+    {
+      "name": "qwen3_0p6b_decode_b16_q1_k512",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_decode_b16_q1_k512",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511
+        ]
+      },
+      "before_us": 410.2213382720947,
+      "after_us": 416.13523421748994,
+      "speedup": 0.9857885238761004
+    },
+    {
+      "name": "qwen3_0p6b_decode_b16_q1_k512",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_decode_b16_q1_k512",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512,
+          512
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511,
+          511
+        ]
+      },
+      "before_us": 559.2493216196696,
+      "after_us": 561.1720085144043,
+      "speedup": 0.9965738011419624
+    },
+    {
+      "name": "qwen3_0p6b_decode_b16_q1_k8192",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_decode_b16_q1_k8192",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191
+        ]
+      },
+      "before_us": 8764.016151428223,
+      "after_us": 8950.287818908691,
+      "speedup": 0.9791881924638284
+    },
+    {
+      "name": "qwen3_0p6b_decode_b16_q1_k8192",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_decode_b16_q1_k8192",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192,
+          8192
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191,
+          8191
+        ]
+      },
+      "before_us": 8760.39981842041,
+      "after_us": 8897.99976348877,
+      "speedup": 0.9845358565154189
+    },
+    {
+      "name": "qwen3_0p6b_decode_b1_q1_k128",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_decode_b1_q1_k128",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          128
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          127
+        ]
+      },
+      "before_us": 41.646680524272305,
+      "after_us": 41.97396211518573,
+      "speedup": 0.992202747264714
+    },
+    {
+      "name": "qwen3_0p6b_decode_b1_q1_k128",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_decode_b1_q1_k128",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          128
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          127
+        ]
+      },
+      "before_us": 58.43619704246521,
+      "after_us": 58.42700004577637,
+      "speedup": 1.000157410044699
+    },
+    {
+      "name": "qwen3_0p6b_decode_b1_q1_k2048",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_decode_b1_q1_k2048",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          2048
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          2047
+        ]
+      },
+      "before_us": 766.8741399591619,
+      "after_us": 88.65861013426003,
+      "speedup": 8.649742408524645
+    },
+    {
+      "name": "qwen3_0p6b_decode_b1_q1_k2048",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_decode_b1_q1_k2048",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          2048
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          2047
+        ]
+      },
+      "before_us": 1081.8920135498047,
+      "after_us": 146.36945724487305,
+      "speedup": 7.391514827713148
+    },
+    {
+      "name": "qwen3_0p6b_decode_b1_q1_k512",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_decode_b1_q1_k512",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          512
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          511
+        ]
+      },
+      "before_us": 167.5055980682373,
+      "after_us": 84.28548404148647,
+      "speedup": 1.9873599822454453
+    },
+    {
+      "name": "qwen3_0p6b_decode_b1_q1_k512",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_decode_b1_q1_k512",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          512
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          511
+        ]
+      },
+      "before_us": 272.0234553019206,
+      "after_us": 138.32106590270996,
+      "speedup": 1.9666090159632812
+    },
+    {
+      "name": "qwen3_0p6b_decode_b1_q1_k8192",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_decode_b1_q1_k8192",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          8192
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          8191
+        ]
+      },
+      "before_us": 4400.810559590657,
+      "after_us": 396.5040147304535,
+      "speedup": 11.09903152577752
+    },
+    {
+      "name": "qwen3_0p6b_decode_b1_q1_k8192",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_decode_b1_q1_k8192",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1
+        ],
+        "kv_lengths": [
+          8192
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          8191
+        ]
+      },
+      "before_us": 4327.695846557617,
+      "after_us": 566.86798731486,
+      "speedup": 7.634398031642331
+    },
+    {
+      "name": "qwen3_0p6b_decode_b4_q1_k128",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_decode_b4_q1_k128",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          128,
+          128,
+          128,
+          128
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          127,
+          127,
+          127,
+          127
+        ]
+      },
+      "before_us": 40.67834492387443,
+      "after_us": 37.450995181967144,
+      "speedup": 1.0861752732130672
+    },
+    {
+      "name": "qwen3_0p6b_decode_b4_q1_k128",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_decode_b4_q1_k128",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          128,
+          128,
+          128,
+          128
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          127,
+          127,
+          127,
+          127
+        ]
+      },
+      "before_us": 74.64298884073894,
+      "after_us": 74.00248845418294,
+      "speedup": 1.0086551195768578
+    },
+    {
+      "name": "qwen3_0p6b_decode_b4_q1_k2048",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_decode_b4_q1_k2048",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          2047,
+          2047,
+          2047,
+          2047
+        ]
+      },
+      "before_us": 895.1120376586914,
+      "after_us": 404.7146638234456,
+      "speedup": 2.2117114047767212
+    },
+    {
+      "name": "qwen3_0p6b_decode_b4_q1_k2048",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_decode_b4_q1_k2048",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          2048,
+          2048,
+          2048,
+          2048
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          2047,
+          2047,
+          2047,
+          2047
+        ]
+      },
+      "before_us": 1071.1400508880615,
+      "after_us": 572.8013515472412,
+      "speedup": 1.8700026597261272
+    },
+    {
+      "name": "qwen3_0p6b_decode_b4_q1_k512",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_decode_b4_q1_k512",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          512,
+          512,
+          512,
+          512
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          511,
+          511,
+          511,
+          511
+        ]
+      },
+      "before_us": 164.6781272076546,
+      "after_us": 89.61223854738124,
+      "speedup": 1.8376745171987117
+    },
+    {
+      "name": "qwen3_0p6b_decode_b4_q1_k512",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_decode_b4_q1_k512",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          512,
+          512,
+          512,
+          512
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          511,
+          511,
+          511,
+          511
+        ]
+      },
+      "before_us": 279.6393235524495,
+      "after_us": 152.21418033946645,
+      "speedup": 1.837143707168418
+    },
+    {
+      "name": "qwen3_0p6b_decode_b4_q1_k8192",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_decode_b4_q1_k8192",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          8192,
+          8192,
+          8192,
+          8192
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          8191,
+          8191,
+          8191,
+          8191
+        ]
+      },
+      "before_us": 4492.92786916097,
+      "after_us": 2184.6445628574916,
+      "speedup": 2.056594443575878
+    },
+    {
+      "name": "qwen3_0p6b_decode_b4_q1_k8192",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_decode_b4_q1_k8192",
+        "phase": "decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          8192,
+          8192,
+          8192,
+          8192
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          8191,
+          8191,
+          8191,
+          8191
+        ]
+      },
+      "before_us": 4437.120119730632,
+      "after_us": 2145.453725542341,
+      "speedup": 2.068149998718331
+    },
+    {
+      "name": "qwen3_0p6b_ragged_decode",
+      "cache": "reuse",
+      "case": {
+        "name": "qwen3_0p6b_ragged_decode",
+        "phase": "ragged_decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          127,
+          513,
+          2047,
+          8191
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          126,
+          512,
+          2046,
+          8190
+        ]
+      },
+      "before_us": 4316.351890563965,
+      "after_us": 1091.6293462117512,
+      "speedup": 3.9540453044276176
+    },
+    {
+      "name": "qwen3_0p6b_ragged_decode",
+      "cache": "rotating",
+      "case": {
+        "name": "qwen3_0p6b_ragged_decode",
+        "phase": "ragged_decode",
+        "profile": "qwen3_0p6b",
+        "hq": 16,
+        "hkv": 8,
+        "dim": 128,
+        "query_lengths": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "kv_lengths": [
+          127,
+          513,
+          2047,
+          8191
+        ],
+        "page_size": 16,
+        "causal": true,
+        "prefix_lengths": [
+          126,
+          512,
+          2046,
+          8190
+        ]
+      },
+      "before_us": 4314.5599365234375,
+      "after_us": 1094.5040384928386,
+      "speedup": 3.942022856731257
+    }
+  ]
+}

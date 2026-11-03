@@ -17,6 +17,7 @@ struct ForwardContext {
   ConstTensorView block_tables;
   ConstTensorView state_indices;
   cudaStream_t stream = nullptr;
+  TensorView attention_workspace;
 };
 
 } // namespace nanovllm

@@ -125,6 +125,15 @@ void check_case(int type, int heads, int kv_heads, int dimension, int queries,
       type, 1, queries, heads, kv_heads, dimension, cache_pages, page_size,
       pages, queries, keys, static_cast<int>(causal)};
 
+  std::uint64_t workspace_elements = 0;
+  if (nano_attn_workspace_size(&arguments, &workspace_elements) != 0) {
+    throw std::runtime_error(nano_attn_error());
+  }
+  Buffer workspace((workspace_elements + 2 * guard) * sizeof(float));
+  upload(workspace, std::vector<float>(workspace_elements + 2 * guard, -37.0f), stream);
+  arguments.workspace = static_cast<float*>(workspace.pointer) + guard;
+  arguments.workspace_elements = workspace_elements;
+
   if (nano_attn_forward(&arguments) != 0) {
     throw std::runtime_error(nano_attn_error());
   }
@@ -132,6 +141,12 @@ void check_case(int type, int heads, int kv_heads, int dimension, int queries,
   const auto actual_key = download<T>(kc, cache_elements, stream);
   const auto actual_value = download<T>(vc, cache_elements, stream);
   const auto actual = download<T>(out, output_elements + 2 * guard, stream);
+  const auto scratch = download<float>(workspace, workspace_elements + 2 * guard, stream);
+  for (int i = 0; i < guard; ++i) {
+    if (scratch[i] != -37.0f || scratch[guard + workspace_elements + i] != -37.0f) {
+      throw std::runtime_error("native check: workspace guard overwritten");
+    }
+  }
   for (std::size_t i = 0; i < cache_elements; ++i) {
     if (static_cast<float>(actual_key[i]) != static_cast<float>(expected_key[i])
         || static_cast<float>(actual_value[i]) != static_cast<float>(expected_value[i])) {
@@ -176,6 +191,17 @@ int check_type(int type, cudaStream_t stream) {
         ++count;
       }
     }
+    for (int prefix : {0, 510, 511, 512, 2048}) {
+      for (bool causal : {true, false}) {
+        check_case<T>(type, 16, dimension == 80 ? 1 : 2, dimension, 1,
+                      prefix, causal, stream);
+        ++count;
+      }
+    }
+  }
+  for (bool causal : {true, false}) {
+    check_case<T>(type, 8, 1, 80, 1, 8192, causal, stream);
+    ++count;
   }
   return count;
 }

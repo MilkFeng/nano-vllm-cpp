@@ -1,8 +1,10 @@
 #include <math_constants.h>
 
+#include <algorithm>
 #include <climits>
 #include <cmath>
 #include <cstdint>
+#include <stdexcept>
 
 #include "common/cuda_utils.hh"
 #include "kernels/cuda/common.cuh"
@@ -17,6 +19,26 @@ constexpr int kQueryTile = 4;
 constexpr int kKeyTile = 16;
 constexpr int kThreads = kQueryTile * 32;
 constexpr int kHeadElements = 256 / 32;
+constexpr int kMaxDecodeSplits = 32;
+constexpr std::size_t kDecodeTargetBlocks = 256;
+constexpr std::size_t kMinSplitTokens = 256;
+
+int decode_splits(std::size_t batch, std::size_t heads,
+                  std::size_t max_seqlen_k) {
+  if (batch == 0 || heads == 0 || max_seqlen_k < 2 * kMinSplitTokens
+      || heads >= kDecodeTargetBlocks
+      || batch >= (kDecodeTargetBlocks + heads - 1) / heads) {
+    return 1;
+  }
+  const auto blocks = batch * heads;
+  const auto wanted = (kDecodeTargetBlocks + blocks - 1) / blocks;
+  int splits = 1;
+  while (splits < wanted && splits < kMaxDecodeSplits
+         && 2 * splits <= max_seqlen_k / kMinSplitTokens) {
+    splits *= 2;
+  }
+  return splits;
+}
 
 struct AttentionShape {
   std::size_t batch;
@@ -105,17 +127,18 @@ AttentionShape attn_shape(ConstTensorView query, TensorView key_cache,
   return shape;
 }
 
-template <typename T, int W, int E>
+template <typename T, int W, int E, bool SplitKV>
 __global__ void flash_attn_with_kvcache_kernel_decode(
     const T* __restrict__ query, T* __restrict__ key_cache,
     T* __restrict__ value_cache, const T* __restrict__ key,
     const T* __restrict__ value, const std::int32_t* __restrict__ cu_seqlens_q,
     const std::int32_t* __restrict__ cu_seqlens_k,
     const std::int32_t* __restrict__ block_table, T* __restrict__ output,
-    AttentionShape shape, bool causal) {
+    AttentionShape shape, bool causal, float* __restrict__ partials,
+    int num_splits, int split_tokens) {
   constexpr int kThreads = W * 32;
 
-  const std::size_t query_local_idx = blockIdx.x;
+  constexpr int query_local_idx = 0;
   const std::size_t query_head_idx = blockIdx.y;
   const std::size_t batch = blockIdx.z;
 
@@ -166,7 +189,13 @@ __global__ void flash_attn_with_kvcache_kernel_decode(
   float m = -CUDART_INF_F;
   float l = 0.0f;
 
-  for (int j = warp; j < key_end; j += W) {
+  const int key_begin = SplitKV ? blockIdx.x * split_tokens : 0;
+  const int partition_end =
+      SplitKV ? static_cast<int>(
+                    min(static_cast<std::size_t>(key_end),
+                        static_cast<std::size_t>(key_begin) + split_tokens))
+              : key_end;
+  for (int j = key_begin + warp; j < partition_end; j += W) {
     const auto page =
         block_table[batch * shape.max_blocks + j / shape.block_tokens];
     const auto cache_token = page * shape.block_tokens + j % shape.block_tokens;
@@ -243,9 +272,68 @@ __global__ void flash_attn_with_kvcache_kernel_decode(
   }
   __syncthreads();
 
-  const float inv_l = g_l > 0.0f ? 1.0f / g_l : 0.0f;
-  for (int d = threadIdx.x; d < head_dim; d += kThreads) {
-    output[query_offset + d] = detail::from_float<T>(s_out[d] * inv_l);
+  if constexpr (SplitKV) {
+    const auto row =
+        (batch * shape.query_heads + query_head_idx) * num_splits + blockIdx.x;
+    const auto rows = shape.batch * shape.query_heads * num_splits;
+    for (int d = threadIdx.x; d < head_dim; d += kThreads) {
+      partials[row * head_dim + d] = s_out[d];
+    }
+    if (threadIdx.x == 0) {
+      // Empty partitions explicitly overwrite stale workspace with (0,-inf,0).
+      partials[rows * head_dim + row] = g_m;
+      partials[rows * (head_dim + 1) + row] = g_l;
+    }
+  } else {
+    const float inv_l = g_l > 0.0f ? 1.0f / g_l : 0.0f;
+    for (int d = threadIdx.x; d < head_dim; d += kThreads) {
+      output[query_offset + d] = detail::from_float<T>(s_out[d] * inv_l);
+    }
+  }
+}
+
+template <typename T>
+__global__ void merge_decode_splits_kernel(
+    const float* __restrict__ partials,
+    const std::int32_t* __restrict__ cu_seqlens_q, T* __restrict__ output,
+    AttentionShape shape, int num_splits) {
+  const auto head = blockIdx.x;
+  const auto batch = blockIdx.y;
+  const int query_start = cu_seqlens_q[batch];
+  if (cu_seqlens_q[batch + 1] == query_start) {
+    return;
+  }
+  const auto rows = shape.batch * shape.query_heads * num_splits;
+  const auto row_begin = (batch * shape.query_heads + head) * num_splits;
+  const float* maxima = partials + rows * shape.head_dim;
+  const float* sums = maxima + rows;
+  __shared__ float weights[kMaxDecodeSplits];
+  __shared__ float inv_sum;
+
+  if (threadIdx.x < 32) {
+    const int lane = threadIdx.x;
+    const float m =
+        lane < num_splits ? maxima[row_begin + lane] : -CUDART_INF_F;
+    const float l = lane < num_splits ? sums[row_begin + lane] : 0.0f;
+    const float global_m = detail::warp_max_reduce(m);
+    const float weight = l > 0.0f ? __expf(m - global_m) : 0.0f;
+    const float global_l = detail::warp_sum_reduce(l * weight);
+    if (lane < num_splits) {
+      weights[lane] = weight;
+    }
+    if (lane == 0) {
+      inv_sum = global_l > 0.0f ? 1.0f / global_l : 0.0f;
+    }
+  }
+  __syncthreads();
+
+  const auto offset = (query_start * shape.query_heads + head) * shape.head_dim;
+  for (int d = threadIdx.x; d < shape.head_dim; d += blockDim.x) {
+    float acc = 0.0f;
+    for (int s = 0; s < num_splits; ++s) {
+      acc += partials[(row_begin + s) * shape.head_dim + d] * weights[s];
+    }
+    output[offset + d] = detail::from_float<T>(acc * inv_sum);
   }
 }
 
@@ -409,14 +497,34 @@ __global__ void flash_attn_with_kvcache_kernel(
 
 } // namespace
 
-void flash_attn_with_kvcache(ConstTensorView query, TensorView key_cache,
-                             TensorView value_cache, ConstTensorView key,
-                             ConstTensorView value,
-                             ConstTensorView cu_seqlens_q,
-                             ConstTensorView cu_seqlens_k,
-                             std::size_t max_seqlen_q, std::size_t max_seqlen_k,
-                             ConstTensorView block_table, TensorView output,
-                             bool causal, cudaStream_t stream) {
+std::size_t flash_attn_decode_workspace_elements(std::size_t max_batch,
+                                                 std::size_t query_heads,
+                                                 std::size_t head_dim,
+                                                 std::size_t max_seqlen_k) {
+  if (query_heads == 0 || head_dim == 0 || head_dim > 256
+      || max_seqlen_k > INT_MAX) {
+    throw std::invalid_argument("invalid decode workspace dimensions");
+  }
+  // The split count falls as batch grows. Reserving only for max_batch could
+  // underallocate for a smaller batch; bound all potentially split batches.
+  const auto limit = std::min(max_batch, kDecodeTargetBlocks / query_heads);
+  std::size_t elements = 0;
+  for (std::size_t batch = 1; batch <= limit; ++batch) {
+    const int splits = decode_splits(batch, query_heads, max_seqlen_k);
+    if (splits > 1) {
+      elements =
+          std::max(elements, batch * query_heads * splits * (head_dim + 2));
+    }
+  }
+  return elements;
+}
+
+void flash_attn_with_kvcache(
+    ConstTensorView query, TensorView key_cache, TensorView value_cache,
+    ConstTensorView key, ConstTensorView value, ConstTensorView cu_seqlens_q,
+    ConstTensorView cu_seqlens_k, std::size_t max_seqlen_q,
+    std::size_t max_seqlen_k, ConstTensorView block_table, TensorView output,
+    bool causal, cudaStream_t stream, TensorView workspace) {
   const auto shape =
       attn_shape(query, key_cache, value_cache, key, value, cu_seqlens_q,
                  cu_seqlens_k, max_seqlen_q, max_seqlen_k, block_table, output);
@@ -425,18 +533,50 @@ void flash_attn_with_kvcache(ConstTensorView query, TensorView key_cache,
     return;
   }
 
+  const int splits =
+      max_seqlen_q == 1 && workspace.data() != nullptr
+          ? decode_splits(shape.batch, shape.query_heads, max_seqlen_k)
+          : 1;
+  if (splits > 1
+      && (workspace.dtype() != DataType::Float32
+          || !same_device(query, workspace) || !workspace.is_contiguous()
+          || workspace.numel() < shape.batch * shape.query_heads * splits
+                                     * (shape.head_dim + 2))) {
+    throw std::invalid_argument(
+        "Split-KV requires a sufficiently large contiguous FP32 workspace "
+        "on the query device");
+  }
+
   detail::dispatch_float(query.dtype(), [&]<typename T>() {
     if (max_seqlen_q == 1) {
       constexpr int warps = 4;
-      const dim3 grid(max_seqlen_q, shape.query_heads, shape.batch);
+      const dim3 grid(splits, shape.query_heads, shape.batch);
       const auto shared_bytes = (shape.head_dim + 2 * warps) * sizeof(float);
-      flash_attn_with_kvcache_kernel_decode<T, warps, kHeadElements>
-          <<<grid, warps * 32, shared_bytes, stream>>>(
-              query.data<T>(), key_cache.data<T>(), value_cache.data<T>(),
-              key.data<T>(), value.data<T>(), cu_seqlens_q.data<std::int32_t>(),
-              cu_seqlens_k.data<std::int32_t>(),
-              block_table.data<std::int32_t>(), output.data<T>(), shape,
-              causal);
+      if (splits > 1) {
+        const int split_tokens = (max_seqlen_k + splits - 1) / splits;
+        flash_attn_with_kvcache_kernel_decode<T, warps, kHeadElements, true>
+            <<<grid, warps * 32, shared_bytes, stream>>>(
+                query.data<T>(), key_cache.data<T>(), value_cache.data<T>(),
+                key.data<T>(), value.data<T>(),
+                cu_seqlens_q.data<std::int32_t>(),
+                cu_seqlens_k.data<std::int32_t>(),
+                block_table.data<std::int32_t>(), output.data<T>(), shape,
+                causal, workspace.data<float>(), splits, split_tokens);
+        check_cuda(cudaGetLastError(), "launch Split-KV decode partitions");
+        const dim3 merge_grid(shape.query_heads, shape.batch);
+        merge_decode_splits_kernel<T><<<merge_grid, 128, 0, stream>>>(
+            workspace.data<float>(), cu_seqlens_q.data<std::int32_t>(),
+            output.data<T>(), shape, splits);
+      } else {
+        flash_attn_with_kvcache_kernel_decode<T, warps, kHeadElements, false>
+            <<<grid, warps * 32, shared_bytes, stream>>>(
+                query.data<T>(), key_cache.data<T>(), value_cache.data<T>(),
+                key.data<T>(), value.data<T>(),
+                cu_seqlens_q.data<std::int32_t>(),
+                cu_seqlens_k.data<std::int32_t>(),
+                block_table.data<std::int32_t>(), output.data<T>(), shape,
+                causal, nullptr, 1, 0);
+      }
     } else {
       const dim3 grid((max_seqlen_q + kQueryTile - 1) / kQueryTile,
                       shape.query_heads, shape.batch);

@@ -41,6 +41,10 @@ class Arguments(ctypes.Structure):
             "causal",
         )
     ]
+    _fields_ += [
+        ("workspace", ctypes.c_void_p),
+        ("workspace_elements", ctypes.c_uint64),
+    ]
 
 
 def default_library():
@@ -61,6 +65,14 @@ class Bridge:
         self.library.nano_attn_error.restype = ctypes.c_char_p
         self.library.nano_attn_build_type.restype = ctypes.c_char_p
         self.build_type = self.library.nano_attn_build_type().decode()
+        # Older libraries accept the unchanged Arguments prefix; keep them
+        # usable for an interleaved before/after comparison in the same process.
+        self.workspace_size = getattr(self.library, "nano_attn_workspace_size", None)
+        if self.workspace_size is not None:
+            self.workspace_size.argtypes = [
+                ctypes.POINTER(Arguments), ctypes.POINTER(ctypes.c_uint64)
+            ]
+            self.workspace_size.restype = ctypes.c_int
 
     def bind(self, bank):
         case = bank.case
@@ -93,10 +105,21 @@ class Bridge:
             max(case.kv_lengths, default=0),
             case.causal,
         )
+        elements = ctypes.c_uint64()
+        if self.workspace_size is not None:
+            if self.workspace_size(ctypes.byref(args), ctypes.byref(elements)):
+                raise RuntimeError(self.library.nano_attn_error().decode())
+        workspace = torch.empty(
+            elements.value, dtype=torch.float32, device=bank.query.device
+        )
+        args.workspace = workspace.data_ptr()
+        args.workspace_elements = elements.value
 
-        def launch():
+        def launch(_workspace=workspace):
             if self.library.nano_attn_forward(ctypes.byref(args)):
                 raise RuntimeError(self.library.nano_attn_error().decode())
             return bank.output
 
+        launch.workspace = workspace
+        launch.arguments = args
         return launch

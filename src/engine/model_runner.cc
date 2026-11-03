@@ -72,6 +72,14 @@ ModelRunner::ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
       static_cast<Qwen3ForCausalLM&>(*model_).transformer().set_cache(
           *qwen3_cache_);
     }
+    const auto workspace_elements =
+        kernels::cuda::flash_attn_decode_workspace_elements(
+            params_.max_num_seqs, config_.num_attention_heads, config_.head_dim,
+            params_.max_model_len);
+    if (workspace_elements > 0) {
+      attention_workspace_ = Tensor::empty({workspace_elements},
+                                           DataType::Float32, model_->device());
+    }
   } catch (...) {
     cudaStreamDestroy(stream_);
     stream_ = nullptr;
@@ -233,6 +241,7 @@ std::vector<std::int32_t> ModelRunner::run(
   context.block_tables = block_tables.view().as_const();
   context.state_indices = state_indices.view().as_const();
   context.stream = stream_;
+  context.attention_workspace = attention_workspace_.view();
 
   if (hybrid_cache_ && prefill) {
     for (const auto* seq : seqs) {

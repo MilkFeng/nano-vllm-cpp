@@ -1,0 +1,63 @@
+{
+  "status": "ok",
+  "edge_checks": {
+    "status": "ok",
+    "checks": 212,
+    "max_abs_error": 0.9473876953125,
+    "per_dtype": {
+      "float32": {
+        "max_abs_error": 3.0517578125e-05,
+        "max_tolerance_ratio": 0.004110959658438196
+      },
+      "float16": {
+        "max_abs_error": 0.0002421736717224121,
+        "max_tolerance_ratio": 0.034226282411965125
+      },
+      "bfloat16": {
+        "max_abs_error": 0.9473876953125,
+        "max_tolerance_ratio": 0.1283697047496791
+      }
+    },
+    "note": "Deterministic V includes KV-head offsets up to 448; BF16 absolute error reflects that scale."
+  },
+  "unit_tests": {
+    "status": "ok",
+    "tests": 11,
+    "artifact": "unit-tests.txt",
+    "split_test_source_sha256": "ae9af52ace64caa555861360ecfa71af1d7476c83b85f2aa80beb6a48ae4d714"
+  },
+  "native_cases_per_sanitizer": 132,
+  "sanitizers": {
+    "memcheck": {
+      "native_cases": 132,
+      "errors": 0,
+      "log": "memcheck.txt",
+      "log_sha256": "a9d061cee538182f762e132abeea7bac7bddb844338f25751bbbb043f242c425"
+    },
+    "racecheck": {
+      "native_cases": 132,
+      "errors": 0,
+      "log": "racecheck.txt",
+      "log_sha256": "91dbb142f8feb8786cd6fde6ac035e816b67db14e4b7b400a01386ec106b75c4"
+    }
+  },
+  "benchmark": {
+    "processes": 3,
+    "pairs_per_process": 52,
+    "total_pairs": 156,
+    "samples_per_implementation": 15,
+    "max_tolerance_ratio": 0.03538741593760286,
+    "production_sources_and_libraries_match_measurement": true
+  },
+  "kernel_sha256": "aaa17db1c48f23593ac70f1a7e704839716beb3b0aa934d45445b0d38871e502",
+  "library_sha256": "ee32d94ff59b169d05ed41367745efac0c62f10cfa080d9b5f552dc407304a25",
+  "prefill_kernel_body_unchanged_ignoring_whitespace": true,
+  "benchmark_script_sha256": "6fbf71f280f3a2be11c7ea8dc159ad38e4057f44fce459035e492c9c5f1ce815",
+  "artifacts_sha256": {
+    "summary.json": "50921e86fe7c623c1d936323ae1c7335174de0a6064034999bc34b6dac8f44e2",
+    "summary.csv": "ff7f3abded3ea0cb0ed35238f0b8d016ce96eb24b51f024f2a15e8d608af11bc",
+    "run-001.json": "2f597eb1518da47dbdd7feecdd5c7630f8785b289db343e3bba0d01e348f2506",
+    "run-002.json": "e17936e230ecc8cc9126966686d0ef2462f71dc23e2307ffc27edbbc6c78b36a",
+    "run-003.json": "13f30c4879c44a8309f41246fc390a2f2c924dc5a57a045ec2d06b3122f13903"
+  }
+}
