@@ -45,8 +45,6 @@ struct MoEExecutionWorkspace {
   Tensor order;
   Tensor grouped_input;
   Tensor grouped_parts;
-  Tensor single_input;
-  Tensor single_parts;
   FP8ExpertWorkspace expert;
 };
 

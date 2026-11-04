@@ -119,6 +119,11 @@ prefill/decode 各自的路由频率、专家聚合 token 数分布和整段 MoE
 固定缓存预算下的在线换入换出见[在线专家替换](docs/online-expert-placement.md)，
 使用 `--expert-adapt-every N` 开启，默认关闭。
 
+推理使用每个引擎独立的 CUDA 临时 Tensor 池，在相同容量预热后复用存储；
+首次遇到更大容量时仍可能扩容，保留块计入显存预算，直到引擎销毁时释放。
+单 token 的 CPU 专家结果按层打包上传。每层 3/8/16 个 GPU 专家槽位的前后对照、
+显存峰值和正确性检查见[运行时性能记录](docs/runtime-workspace-performance.md)。
+
 计时口径：
 
 | 指标 | 定义 |

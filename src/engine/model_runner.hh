@@ -7,6 +7,7 @@
 
 #include "core/model.hh"
 #include "core/model_config.hh"
+#include "core/tensor_pool.hh"
 #include "engine/sequence.hh"
 #include "models/qwen3.hh"
 #include "models/qwen35.hh"
@@ -47,6 +48,7 @@ class ModelRunner {
   std::unique_ptr<Qwen35Cache> hybrid_cache_;
   Tensor attention_workspace_;
   cudaStream_t stream_ = nullptr;
+  std::unique_ptr<TensorPool> temporary_pool_;
   std::uint64_t sample_step_ = 0;
 };
 } // namespace nanovllm

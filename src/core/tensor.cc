@@ -2,6 +2,8 @@
 
 #include <stdexcept>
 
+#include "core/tensor_pool.hh"
+
 namespace nanovllm {
 
 namespace {
@@ -57,7 +59,11 @@ Tensor::Tensor(std::shared_ptr<Storage> storage, std::size_t byte_offset,
 Tensor Tensor::empty(std::vector<std::size_t> shape, DataType dtype,
                      Device device) {
   auto layout = TensorLayout(std::move(shape));
-  auto storage = std::make_shared<Storage>(layout.size_bytes(dtype), device);
+  const auto bytes = layout.size_bytes(dtype);
+  auto* pool = TensorPool::current();
+  auto storage = pool && pool->device() == device && bytes != 0
+                     ? pool->acquire(bytes)
+                     : std::make_shared<Storage>(bytes, device);
   return Tensor(std::move(storage), 0, dtype, std::move(layout), device);
 }
 

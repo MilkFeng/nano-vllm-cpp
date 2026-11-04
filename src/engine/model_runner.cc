@@ -47,6 +47,7 @@ ModelRunner::ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
   check_cuda(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking),
              "create inference stream");
   try {
+    temporary_pool_ = std::make_unique<TensorPool>(Device::cuda(0), stream_);
     // load model ckpt
     if (config_.architecture == ModelArchitecture::Qwen35Moe) {
       model_ = std::make_unique<Qwen35ForCausalLM>(
@@ -203,6 +204,11 @@ std::vector<std::int32_t> ModelRunner::run(
     }
   }
 
+  // Host upload sources and the readback destination must outlive the scope's
+  // error-path synchronization. Normal steps synchronize explicitly below.
+  std::vector<std::int32_t> result(seqs.size());
+  TensorPool::Scope temporary_scope(*temporary_pool_, stream_);
+
   const auto upload = [&]<typename T>(const std::vector<T>& data,
                                       std::vector<std::size_t> shape) {
     DataType dtype;
@@ -259,7 +265,6 @@ std::vector<std::int32_t> ModelRunner::run(
   kernels::cuda::sample(logits.view().as_const(), temperature.view().as_const(),
                         output.view(), params_.seed, sample_step_++, stream_);
 
-  std::vector<std::int32_t> result(seqs.size());
   check_cuda(cudaMemcpyAsync(result.data(), output.data(), output.size_bytes(),
                              cudaMemcpyDeviceToHost, stream_),
              "download sampled tokens");

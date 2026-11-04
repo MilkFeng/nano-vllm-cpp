@@ -484,50 +484,83 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
 
   if (!hits.empty()) workspace.expert.reserve(1, store_.intermediate_size());
 
+  const auto hidden = store_.hidden_size();
+  const bool mixed = !hits.empty() && !misses.empty();
+  TensorView parts = expert_outputs;
+  TensorView indices;
+  if (mixed) {
+    const auto assignments = expert_ids.size();
+    workspace.host_order.reserve(assignments * sizeof(std::int32_t));
+    if (workspace.order.numel() < assignments) {
+      workspace.order =
+          Tensor::empty({assignments}, DataType::Int32, input.device());
+    }
+    reserve_rows(workspace.grouped_parts, assignments, hidden, input.device());
+    parts = workspace.grouped_parts.view().slice(0, 0, assignments);
+    indices = workspace.order.view().slice(0, 0, assignments);
+    auto* order = static_cast<std::int32_t*>(workspace.host_order.data());
+    std::size_t row = 0;
+    for (const auto& task : hits) order[row++] = task.rank;
+    for (const auto& task : misses) order[row++] = task.rank;
+  }
+
   if (!misses.empty()) {
-    reserve_rows(workspace.single_input, 1, store_.hidden_size());
-    reserve_rows(workspace.single_parts, expert_ids.size(),
-                 store_.hidden_size());
+    workspace.host_input.reserve(input.size_bytes());
+    workspace.host_parts.reserve(expert_ids.size() * hidden * sizeof(float));
   }
 
   std::vector<std::future<void>> cpu_tasks;
   cpu_tasks.reserve(misses.size());
   try {
+    if (mixed) {
+      check_cuda(cudaMemcpyAsync(indices.data(), workspace.host_order.data(),
+                                 indices.size_bytes(), cudaMemcpyHostToDevice,
+                                 stream),
+                 "upload single-token expert permutation");
+    }
     if (!misses.empty()) {
       check_cuda(
-          cudaMemcpyAsync(workspace.single_input.data(), input.data(),
+          cudaMemcpyAsync(workspace.host_input.data(), input.data(),
                           input.size_bytes(), cudaMemcpyDeviceToHost, stream),
           "download input for overlapping CPU experts");
       check_cuda(cudaStreamSynchronize(stream),
                  "complete overlapping input download");
     }
 
-    for (const auto& task : misses) {
+    for (std::size_t i = 0; i < misses.size(); ++i) {
+      const auto& task = misses[i];
       const auto* expert = &store_.expert_at(task.expert_id);
-      const auto x = workspace.single_input.view().as_const();
-      const auto row = workspace.single_parts.view().slice(0, task.rank, 1);
+      const auto x = host_rows(workspace.host_input, 1, hidden).as_const();
+      const auto row =
+          host_rows(workspace.host_parts, misses.size(), hidden).slice(0, i, 1);
       cpu_tasks.push_back(
           cpu_pool_.submit([expert, x, row] { expert->forward_into(x, row); }));
     }
 
-    for (const auto& task : hits) {
-      const auto row = expert_outputs.slice(0, task.rank, 1);
-      cache_.expert_at_slot(task.slot).forward_into(input, row,
-                                                    workspace.expert, stream);
+    for (std::size_t i = 0; i < hits.size(); ++i) {
+      const auto& task = hits[i];
+      const auto row = parts.slice(0, mixed ? i : task.rank, 1);
+      cache_.expert_at_slot(task.slot)
+          .forward_into(input, row, workspace.expert, stream);
     }
 
     for (auto& task : cpu_tasks) {
       task.get();
     }
 
-    for (const auto& task : misses) {
-      const auto source = workspace.single_parts.view().slice(0, task.rank, 1);
-      const auto destination = expert_outputs.slice(0, task.rank, 1);
-
-      check_cuda(cudaMemcpyAsync(destination.data(), source.data(),
+    if (!misses.empty()) {
+      // CPU rows are packed contiguously even when their original top-k ranks
+      // alternate with GPU hits. One DMA replaces one upload per CPU expert.
+      const auto destination =
+          parts.slice(0, mixed ? hits.size() : 0, misses.size());
+      check_cuda(cudaMemcpyAsync(destination.data(), workspace.host_parts.data(),
                                  destination.size_bytes(),
                                  cudaMemcpyHostToDevice, stream),
-                 "upload overlapping CPU expert output");
+                 "upload single-token CPU expert outputs");
+    }
+    if (mixed) {
+      kernels::cuda::moe_scatter(parts.as_const(), indices.as_const(),
+                                 expert_outputs, stream);
     }
   } catch (...) {
     drain_tasks(cpu_tasks);
