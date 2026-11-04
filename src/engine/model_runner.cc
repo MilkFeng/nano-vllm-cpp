@@ -52,7 +52,8 @@ ModelRunner::ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
     if (config_.architecture == ModelArchitecture::Qwen35Moe) {
       model_ = std::make_unique<Qwen35ForCausalLM>(
           config_, Device::cuda(0), params_.cpu_threads, placement,
-          params_.profile_experts, params_.expert_adaptation);
+          params_.profile_experts, params_.expert_adaptation,
+          params_.cpu_affinity);
     } else {
       model_ = std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda(0));
     }

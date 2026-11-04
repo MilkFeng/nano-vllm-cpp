@@ -98,7 +98,8 @@ class Qwen35Model final : public Module {
               std::size_t cpu_threads = 8,
               const ExpertPlacement& gpu_expert_ids_by_layer = {},
               bool profile_experts = false,
-              ExpertAdaptationParams expert_adaptation = {});
+              ExpertAdaptationParams expert_adaptation = {},
+      bool cpu_affinity = false);
 
   [[nodiscard]] Tensor forward(ConstTensorView input_ids,
                                ConstTensorView positions,
@@ -135,7 +136,8 @@ class Qwen35ForCausalLM final : public Model {
       std::size_t cpu_threads = 8,
       const ExpertPlacement& gpu_expert_ids_by_layer = {},
       bool profile_experts = false,
-      ExpertAdaptationParams expert_adaptation = {});
+      ExpertAdaptationParams expert_adaptation = {},
+      bool cpu_affinity = false);
 
   ModelLoadResult load_ckpt(const std::filesystem::path& path) override;
 

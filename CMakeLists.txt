@@ -99,6 +99,10 @@ target_compile_options(
   "$<$<AND:$<COMPILE_LANGUAGE:CUDA>,$<CXX_COMPILER_ID:GNU,Clang,AppleClang>>:-Xcompiler=-mavx2,-mfma>"
 )
 
+# Keep AVX-512 isolated: the dispatcher and the rest of the binary use AVX2.
+set_source_files_properties(src/kernels/cpu/fp8_matvec_avx512.cc PROPERTIES
+  COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/arch:AVX512>;$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-mavx512f;-mavx512bw;-mavx512dq;-mavx512vl>")
+
 if(WIN32)
   target_compile_definitions(nano-vllm-cpp PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
@@ -187,3 +191,12 @@ target_compile_definitions(nano-vllm-cpp-attn-exp PRIVATE
 add_executable(nano-vllm-cpp-attn-check EXCLUDE_FROM_ALL exp/attn/check_native.cc)
 target_include_directories(nano-vllm-cpp-attn-check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(nano-vllm-cpp-attn-check PRIVATE nano-vllm-cpp-attn-exp CUDA::cudart)
+
+# CPU checks/benchmarks do not create a CUDA context.
+add_executable(nano-vllm-cpp-cpu-check EXCLUDE_FROM_ALL exp/cpu/check.cc)
+target_include_directories(nano-vllm-cpp-cpu-check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(nano-vllm-cpp-cpu-check PRIVATE nano-vllm-cpp::nano-vllm-cpp)
+add_executable(nano-vllm-cpp-cpu-bench EXCLUDE_FROM_ALL exp/cpu/benchmark.cc)
+target_include_directories(nano-vllm-cpp-cpu-bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(nano-vllm-cpp-cpu-bench PRIVATE
+  nano-vllm-cpp::nano-vllm-cpp nlohmann_json::nlohmann_json)

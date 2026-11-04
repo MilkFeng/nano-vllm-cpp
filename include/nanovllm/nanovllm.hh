@@ -47,6 +47,9 @@ struct EngineParams {
 
   std::vector<std::int32_t> gpu_expert_ids;
   std::size_t cpu_threads = 8;
+  // One worker per allowed physical core. If workers leave a core free,
+  // reserve that core for the GPU submission thread during model forward.
+  bool cpu_affinity = false;
   bool profile_experts = false;
   bool enable_prefix_cache = true; // Qwen3.5 always disables prefix reuse.
   ExpertAdaptationParams expert_adaptation;

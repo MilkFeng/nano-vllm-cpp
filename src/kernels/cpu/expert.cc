@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "kernels/cpu/fp8_dot.hh"
+#include "kernels/cpu/fp8_matvec.hh"
 
 namespace nanovllm::kernels::cpu {
 
@@ -73,24 +74,11 @@ void expert_forward(ConstTensorView input, const ExpertWeights& weights,
   const auto* down_scale = weights.down_scale.data<float>();
   auto* result = output.data<float>();
 
-  // Keep the original dot products and storage path for single-token decode.
   if (tokens == 1) {
-    for (std::size_t row = 0; row < intermediate_size; ++row) {
-      const auto scale_offset = (row / block_size) * hidden_blocks;
-      const float g =
-          fp8_dot_kernel(gate + row * hidden_size, gate_scale + scale_offset, x,
-                         hidden_size, block_size);
-      const float u =
-          fp8_dot_kernel(up + row * hidden_size, up_scale + scale_offset, x,
-                         hidden_size, block_size);
-      activated[row] = (g / (1.0f + std::exp(-g))) * u;
-    }
-    for (std::size_t row = 0; row < hidden_size; ++row) {
-      result[row] =
-          fp8_dot_kernel(down + row * intermediate_size,
-                         down_scale + (row / block_size) * intermediate_blocks,
-                         activated.data(), intermediate_size, block_size);
-    }
+    fp8_gate_up(gate, up, gate_scale, up_scale, x, intermediate_size,
+                 hidden_size, block_size, activated.data());
+    fp8_matvec(down, down_scale, activated.data(), hidden_size,
+                intermediate_size, block_size, result);
     return;
   }
 

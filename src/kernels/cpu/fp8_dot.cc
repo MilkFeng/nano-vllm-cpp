@@ -10,14 +10,14 @@
 #include <utility>
 
 #include "kernels/cpu/fp8_dequant.hh"
+#include "kernels/cpu/fp8_decode.hh"
 
 namespace nanovllm::kernels::cpu {
 namespace {
 
 __m256 decode(const std::uint8_t* weights, const float* table) {
-  const auto bytes = _mm_loadl_epi64(reinterpret_cast<const __m128i*>(weights));
-  const auto indices = _mm256_cvtepu8_epi32(bytes);
-  return _mm256_i32gather_ps(table, indices, sizeof(float));
+  (void)table;
+  return detail::decode_fp8_avx2(weights);
 }
 
 float fp8_dot_avx2(const std::uint8_t* weights, const float* scales,

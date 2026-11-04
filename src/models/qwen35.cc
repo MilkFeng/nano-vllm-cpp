@@ -397,8 +397,9 @@ Qwen35Model::Qwen35Model(const ModelConfig& config, Device device,
                          std::size_t cpu_threads,
                          const ExpertPlacement& gpu_expert_ids_by_layer,
                          bool profile_experts,
-                         ExpertAdaptationParams expert_adaptation)
-    : cpu_pool_(cpu_threads),
+                         ExpertAdaptationParams expert_adaptation,
+                         bool cpu_affinity)
+    : cpu_pool_(cpu_threads, cpu_affinity),
       embed_tokens_(config.vocab_size, config.hidden_size, DataType::Float32,
                     device),
       norm_(config.hidden_size, config.rms_norm_eps, DataType::Float32, device,
@@ -444,6 +445,7 @@ ExpertAdaptationStats Qwen35Model::expert_adaptation_stats() const {
 Tensor Qwen35Model::forward(ConstTensorView input_ids,
                             ConstTensorView positions,
                             const ForwardContext& context) const {
+  const auto affinity = cpu_pool_.bind_caller();
   auto hidden = embed_tokens_.forward(input_ids, context.stream);
   Tensor residual;
   for (std::size_t i = 0; i < layers_.size(); ++i) {
@@ -537,11 +539,11 @@ const Qwen35DecoderLayer& Qwen35Model::layer(std::size_t i) const {
 Qwen35ForCausalLM::Qwen35ForCausalLM(
     const ModelConfig& config, Device device, std::size_t cpu_threads,
     const ExpertPlacement& gpu_expert_ids_by_layer, bool profile_experts,
-    ExpertAdaptationParams expert_adaptation)
+    ExpertAdaptationParams expert_adaptation, bool cpu_affinity)
     : config_(config),
       device_(device),
       model_(config_, device_, cpu_threads, gpu_expert_ids_by_layer,
-             profile_experts, expert_adaptation),
+             profile_experts, expert_adaptation, cpu_affinity),
       lm_head_(
           config_.vocab_size, config_.hidden_size, DataType::Float32, device_,
           config_.tie_word_embeddings ? &model_.embed_tokens().weight().tensor()

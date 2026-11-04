@@ -1,11 +1,11 @@
 #include "layers/moe.hh"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <future>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
@@ -43,11 +43,15 @@ TensorView host_rows(PinnedHostBuffer& buffer, std::size_t rows,
                     TensorLayout({rows, width}), Device::cpu());
 }
 
-void drain_tasks(std::vector<std::future<void>>& tasks) noexcept {
-  for (auto& task : tasks) {
-    if (task.valid()) task.wait();
+struct CpuExpertJob {
+  const FP8Expert* expert;
+  ConstTensorView input;
+  TensorView output;
+  static void run(void* argument) {
+    const auto& job = *static_cast<const CpuExpertJob*>(argument);
+    job.expert->forward_into(job.input, job.output);
   }
-}
+};
 
 } // namespace
 
@@ -383,8 +387,11 @@ ExpertExecutionStats ExpertExecutor::forward_into(
 
   const auto indices = workspace.order.view().slice(0, 0, assignments);
   const auto parts = workspace.grouped_parts.view().slice(0, 0, assignments);
-  std::vector<std::future<void>> tasks;
-  tasks.reserve(misses.size());
+  std::vector<CpuExpertJob> jobs;
+  std::vector<ThreadPool::Task> descriptors;
+  jobs.reserve(misses.size());
+  descriptors.reserve(misses.size());
+  ThreadPool::TaskGroup tasks;
   try {
     check_cuda(cudaMemcpyAsync(indices.data(), order, indices.size_bytes(),
                                cudaMemcpyHostToDevice, stream),
@@ -416,9 +423,10 @@ ExpertExecutionStats ExpertExecutor::forward_into(
             0, begin, group.rows);
         const auto y = host_output.slice(0, begin, group.rows);
         const auto* expert = &store_.expert_at(group.id);
-        tasks.push_back(
-            cpu_pool_.submit([expert, x, y] { expert->forward_into(x, y); }));
+        jobs.push_back({expert, x, y});
+        descriptors.push_back({CpuExpertJob::run, &jobs.back()});
       }
+      tasks = cpu_pool_.submit_batch(descriptors);
     }
 
     if (gpu_rows != 0) {
@@ -436,9 +444,7 @@ ExpertExecutionStats ExpertExecutor::forward_into(
       }
     }
 
-    for (auto& task : tasks) {
-      task.get();
-    }
+    tasks.wait();
 
     if (cpu_rows != 0) {
       const auto destination = parts.slice(0, gpu_rows, cpu_rows);
@@ -450,7 +456,7 @@ ExpertExecutionStats ExpertExecutor::forward_into(
     kernels::cuda::moe_scatter(parts.as_const(), indices.as_const(),
                                expert_outputs, stream);
   } catch (...) {
-    drain_tasks(tasks);
+    tasks.wait_noexcept();
     cudaStreamSynchronize(stream);
     throw;
   }
@@ -509,8 +515,20 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
     workspace.host_parts.reserve(expert_ids.size() * hidden * sizeof(float));
   }
 
-  std::vector<std::future<void>> cpu_tasks;
-  cpu_tasks.reserve(misses.size());
+  // Qwen's top-8 decode uses stack descriptors; larger routers fall back to
+  // vectors. No per-expert function wrapper or future allocation is needed.
+  std::array<CpuExpertJob, 8> small_jobs;
+  std::array<ThreadPool::Task, 8> small_descriptors;
+  std::vector<CpuExpertJob> large_jobs;
+  std::vector<ThreadPool::Task> large_descriptors;
+  if (misses.size() > small_jobs.size()) {
+    large_jobs.resize(misses.size());
+    large_descriptors.resize(misses.size());
+  }
+  auto* jobs = large_jobs.empty() ? small_jobs.data() : large_jobs.data();
+  auto* descriptors = large_descriptors.empty() ? small_descriptors.data()
+                                               : large_descriptors.data();
+  ThreadPool::TaskGroup cpu_tasks;
   try {
     if (mixed) {
       check_cuda(cudaMemcpyAsync(indices.data(), workspace.host_order.data(),
@@ -533,9 +551,11 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
       const auto x = host_rows(workspace.host_input, 1, hidden).as_const();
       const auto row =
           host_rows(workspace.host_parts, misses.size(), hidden).slice(0, i, 1);
-      cpu_tasks.push_back(
-          cpu_pool_.submit([expert, x, row] { expert->forward_into(x, row); }));
+      jobs[i] = {expert, x, row};
+      descriptors[i] = {CpuExpertJob::run, &jobs[i]};
     }
+
+    cpu_tasks = cpu_pool_.submit_batch({descriptors, misses.size()});
 
     for (std::size_t i = 0; i < hits.size(); ++i) {
       const auto& task = hits[i];
@@ -544,9 +564,7 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
           .forward_into(input, row, workspace.expert, stream);
     }
 
-    for (auto& task : cpu_tasks) {
-      task.get();
-    }
+    cpu_tasks.wait();
 
     if (!misses.empty()) {
       // CPU rows are packed contiguously even when their original top-k ranks
@@ -563,7 +581,7 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
                                  expert_outputs, stream);
     }
   } catch (...) {
-    drain_tasks(cpu_tasks);
+    cpu_tasks.wait_noexcept();
     cudaStreamSynchronize(stream);
     throw;
   }
