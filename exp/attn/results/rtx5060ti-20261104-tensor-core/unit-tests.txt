@@ -1,0 +1,20 @@
+test_aggregation_uses_matching_precision_and_contract (test_attn.AttentionTests.test_aggregation_uses_matching_precision_and_contract) ... ok
+test_bad_raw_samples_and_mixed_settings_are_rejected (test_attn.AttentionTests.test_bad_raw_samples_and_mixed_settings_are_rejected) ... ok
+test_invalid_shapes_are_rejected_before_gpu (test_attn.AttentionTests.test_invalid_shapes_are_rejected_before_gpu) ... ok
+test_predeclared_case_counts (test_attn.AttentionTests.test_predeclared_case_counts) ... ok
+test_unsupported_does_not_turn_into_zero_or_fake_speedup (test_attn.AttentionTests.test_unsupported_does_not_turn_into_zero_or_fake_speedup) ... ok
+test_capacity_reserved_for_large_batch_serves_smaller_batch (test_split_kv.SplitKVTests.test_capacity_reserved_for_large_batch_serves_smaller_batch) ... ok
+test_empty_partitions_and_empty_requests (test_split_kv.SplitKVTests.test_empty_partitions_and_empty_requests) ... ok
+test_graph_replay_reuses_poisoned_workspace_on_two_streams (test_split_kv.SplitKVTests.test_graph_replay_reuses_poisoned_workspace_on_two_streams) ... ok
+test_partition_maxima_are_merged_stably (test_split_kv.SplitKVTests.test_partition_maxima_are_merged_stably) ... ok
+test_split_boundaries_page_sizes_and_head_mapping (test_split_kv.SplitKVTests.test_split_boundaries_page_sizes_and_head_mapping) ... ok
+test_workspace_size_validation_and_optional_fallback (test_split_kv.SplitKVTests.test_workspace_size_validation_and_optional_fallback) ... ok
+test_partition_maxima_remain_stable_with_tensor_cores (test_tensor.TensorAttentionTests.test_partition_maxima_remain_stable_with_tensor_cores) ... ok
+test_ragged_tiles_pages_and_empty_partitions (test_tensor.TensorAttentionTests.test_ragged_tiles_pages_and_empty_partitions) ... ok
+test_split_and_no_workspace_paths (test_tensor.TensorAttentionTests.test_split_and_no_workspace_paths) ... ok
+test_two_stream_graphs_overwrite_poisoned_scratch (test_tensor.TensorAttentionTests.test_two_stream_graphs_overwrite_poisoned_scratch) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 2.491s
+
+OK

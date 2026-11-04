@@ -73,7 +73,7 @@ ModelRunner::ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
           *qwen3_cache_);
     }
     const auto workspace_elements =
-        kernels::cuda::flash_attn_decode_workspace_elements(
+        kernels::cuda::flash_attn_workspace_elements(
             params_.max_num_seqs, config_.num_attention_heads, config_.head_dim,
             params_.max_model_len);
     if (workspace_elements > 0) {

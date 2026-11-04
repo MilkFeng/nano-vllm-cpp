@@ -12,6 +12,7 @@
 
 #include "attn_bridge.hh"
 #include "common/cuda_utils.hh"
+#include "kernels/cuda/kernels.hh"
 
 namespace {
 
@@ -51,8 +52,7 @@ std::vector<T> download(const Buffer& buffer, std::size_t count, cudaStream_t st
 
 template <typename T>
 void check_case(int type, int heads, int kv_heads, int dimension, int queries,
-                 int prefix, bool causal, cudaStream_t stream) {
-  constexpr int page_size = 16;
+                 int prefix, bool causal, cudaStream_t stream, int page_size = 16) {
   constexpr int guard = 32;
   const int keys = prefix + queries;
   const int pages = (keys + page_size - 1) / page_size;
@@ -129,6 +129,12 @@ void check_case(int type, int heads, int kv_heads, int dimension, int queries,
   if (nano_attn_workspace_size(&arguments, &workspace_elements) != 0) {
     throw std::runtime_error(nano_attn_error());
   }
+  if (queries == 1) {
+    // Existing callers of the decode-only sizing API must remain valid after
+    // dispatching D=256 decode to grouped tensor-core partitions.
+    workspace_elements = nanovllm::kernels::cuda::flash_attn_decode_workspace_elements(
+        1, heads, dimension, keys);
+  }
   Buffer workspace((workspace_elements + 2 * guard) * sizeof(float));
   upload(workspace, std::vector<float>(workspace_elements + 2 * guard, -37.0f), stream);
   arguments.workspace = static_cast<float*>(workspace.pointer) + guard;
@@ -202,6 +208,13 @@ int check_type(int type, cudaStream_t stream) {
   for (bool causal : {true, false}) {
     check_case<T>(type, 8, 1, 80, 1, 8192, causal, stream);
     ++count;
+    for (int dimension : {128, 256}) {
+      for (int queries : {3, 17, 65}) {
+        check_case<T>(type, 16, dimension == 128 ? 8 : 2, dimension,
+                      queries, 513, causal, stream, 7);
+        ++count;
+      }
+    }
   }
   return count;
 }

@@ -1,0 +1,366 @@
+{
+  "status": "passed",
+  "metric": "FlashInfer median latency / custom median latency; equal-weight geometric mean within each group",
+  "threshold": 0.5,
+  "processes": 3,
+  "cases_per_process": 224,
+  "total_cases": 672,
+  "coverage": "all 56 suite shapes x FP16/BF16 x reuse/rotating",
+  "source_and_library_integrity": "passed",
+  "correctness_and_sanitizers": "passed",
+  "groups": [
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "chunked_prefill",
+      "dtype": "bfloat16",
+      "cache": "reuse",
+      "shapes": 8,
+      "ratio": 0.6107416741544144
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "chunked_prefill",
+      "dtype": "bfloat16",
+      "cache": "rotating",
+      "shapes": 8,
+      "ratio": 0.6086851172258373
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "chunked_prefill",
+      "dtype": "float16",
+      "cache": "reuse",
+      "shapes": 8,
+      "ratio": 0.6015385193151631
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "chunked_prefill",
+      "dtype": "float16",
+      "cache": "rotating",
+      "shapes": 8,
+      "ratio": 0.614353369821968
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "decode",
+      "dtype": "bfloat16",
+      "cache": "reuse",
+      "shapes": 12,
+      "ratio": 0.9505663720685863
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "decode",
+      "dtype": "bfloat16",
+      "cache": "rotating",
+      "shapes": 12,
+      "ratio": 1.0285453818379477
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "decode",
+      "dtype": "float16",
+      "cache": "reuse",
+      "shapes": 12,
+      "ratio": 0.9518757545248608
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "decode",
+      "dtype": "float16",
+      "cache": "rotating",
+      "shapes": 12,
+      "ratio": 1.0179184672875268
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "prefill",
+      "dtype": "bfloat16",
+      "cache": "reuse",
+      "shapes": 6,
+      "ratio": 0.6985930503371547
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "prefill",
+      "dtype": "bfloat16",
+      "cache": "rotating",
+      "shapes": 6,
+      "ratio": 0.7260651677907568
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "prefill",
+      "dtype": "float16",
+      "cache": "reuse",
+      "shapes": 6,
+      "ratio": 0.6987676888102982
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "prefill",
+      "dtype": "float16",
+      "cache": "rotating",
+      "shapes": 6,
+      "ratio": 0.7371277491040681
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "ragged_chunked_prefill",
+      "dtype": "bfloat16",
+      "cache": "reuse",
+      "shapes": 1,
+      "ratio": 0.5891162847185973
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "ragged_chunked_prefill",
+      "dtype": "bfloat16",
+      "cache": "rotating",
+      "shapes": 1,
+      "ratio": 0.6001603135297247
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "ragged_chunked_prefill",
+      "dtype": "float16",
+      "cache": "reuse",
+      "shapes": 1,
+      "ratio": 0.5903634664532187
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "ragged_chunked_prefill",
+      "dtype": "float16",
+      "cache": "rotating",
+      "shapes": 1,
+      "ratio": 0.5904954379792146
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "ragged_decode",
+      "dtype": "bfloat16",
+      "cache": "reuse",
+      "shapes": 1,
+      "ratio": 0.5746103902539604
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "ragged_decode",
+      "dtype": "bfloat16",
+      "cache": "rotating",
+      "shapes": 1,
+      "ratio": 0.8593516788981327
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "ragged_decode",
+      "dtype": "float16",
+      "cache": "reuse",
+      "shapes": 1,
+      "ratio": 0.5549288259306948
+    },
+    {
+      "profile": "qwen35_full_attention",
+      "phase": "ragged_decode",
+      "dtype": "float16",
+      "cache": "rotating",
+      "shapes": 1,
+      "ratio": 0.855228400173788
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "chunked_prefill",
+      "dtype": "bfloat16",
+      "cache": "reuse",
+      "shapes": 8,
+      "ratio": 0.9449866860020307
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "chunked_prefill",
+      "dtype": "bfloat16",
+      "cache": "rotating",
+      "shapes": 8,
+      "ratio": 0.931124167394614
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "chunked_prefill",
+      "dtype": "float16",
+      "cache": "reuse",
+      "shapes": 8,
+      "ratio": 0.9493344606476759
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "chunked_prefill",
+      "dtype": "float16",
+      "cache": "rotating",
+      "shapes": 8,
+      "ratio": 0.9295652223315906
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "decode",
+      "dtype": "bfloat16",
+      "cache": "reuse",
+      "shapes": 12,
+      "ratio": 0.8351612035159792
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "decode",
+      "dtype": "bfloat16",
+      "cache": "rotating",
+      "shapes": 12,
+      "ratio": 1.026929814173402
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "decode",
+      "dtype": "float16",
+      "cache": "reuse",
+      "shapes": 12,
+      "ratio": 0.8371534834223342
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "decode",
+      "dtype": "float16",
+      "cache": "rotating",
+      "shapes": 12,
+      "ratio": 1.0270505275216424
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "prefill",
+      "dtype": "bfloat16",
+      "cache": "reuse",
+      "shapes": 6,
+      "ratio": 1.0551168055434588
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "prefill",
+      "dtype": "bfloat16",
+      "cache": "rotating",
+      "shapes": 6,
+      "ratio": 1.0506092983934812
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "prefill",
+      "dtype": "float16",
+      "cache": "reuse",
+      "shapes": 6,
+      "ratio": 1.0368709202875488
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "prefill",
+      "dtype": "float16",
+      "cache": "rotating",
+      "shapes": 6,
+      "ratio": 1.0429954271464354
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "ragged_chunked_prefill",
+      "dtype": "bfloat16",
+      "cache": "reuse",
+      "shapes": 1,
+      "ratio": 1.06516411056187
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "ragged_chunked_prefill",
+      "dtype": "bfloat16",
+      "cache": "rotating",
+      "shapes": 1,
+      "ratio": 1.0004148278140428
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "ragged_chunked_prefill",
+      "dtype": "float16",
+      "cache": "reuse",
+      "shapes": 1,
+      "ratio": 1.0854652882313867
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "ragged_chunked_prefill",
+      "dtype": "float16",
+      "cache": "rotating",
+      "shapes": 1,
+      "ratio": 0.9666155858912531
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "ragged_decode",
+      "dtype": "bfloat16",
+      "cache": "reuse",
+      "shapes": 1,
+      "ratio": 0.8987904497090959
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "ragged_decode",
+      "dtype": "bfloat16",
+      "cache": "rotating",
+      "shapes": 1,
+      "ratio": 0.894663224908582
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "ragged_decode",
+      "dtype": "float16",
+      "cache": "reuse",
+      "shapes": 1,
+      "ratio": 0.9288500415235919
+    },
+    {
+      "profile": "qwen3_0p6b",
+      "phase": "ragged_decode",
+      "dtype": "float16",
+      "cache": "rotating",
+      "shapes": 1,
+      "ratio": 0.9118000014460587
+    }
+  ],
+  "groups_below_target": [],
+  "individual_cases_below_target": [
+    {
+      "name": "qwen35_full_attention_chunked_prefill_b1_q16_k2064",
+      "dtype": "bfloat16",
+      "cache": "reuse",
+      "ratio": 0.48426479037169756
+    },
+    {
+      "name": "qwen35_full_attention_chunked_prefill_b1_q16_k2064",
+      "dtype": "bfloat16",
+      "cache": "rotating",
+      "ratio": 0.4730060469273774
+    },
+    {
+      "name": "qwen35_full_attention_chunked_prefill_b1_q16_k2064",
+      "dtype": "float16",
+      "cache": "reuse",
+      "ratio": 0.46756160852797635
+    },
+    {
+      "name": "qwen35_full_attention_chunked_prefill_b1_q16_k2064",
+      "dtype": "float16",
+      "cache": "rotating",
+      "ratio": 0.4810302118347115
+    },
+    {
+      "name": "qwen35_full_attention_chunked_prefill_b4_q16_k2064",
+      "dtype": "bfloat16",
+      "cache": "reuse",
+      "ratio": 0.4933083154377682
+    }
+  ]
+}

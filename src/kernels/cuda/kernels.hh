@@ -259,4 +259,10 @@ void flash_attn_with_kvcache(
     std::size_t max_batch, std::size_t query_heads, std::size_t head_dim,
     std::size_t max_seqlen_k);
 
+// FP32 elements, sufficient for decode and tensor-core prefill at any query
+// length and any batch up to max_batch. Allocate outside CUDA Graph capture.
+[[nodiscard]] std::size_t flash_attn_workspace_elements(
+    std::size_t max_batch, std::size_t query_heads, std::size_t head_dim,
+    std::size_t max_seqlen_k);
+
 } // namespace nanovllm::kernels::cuda

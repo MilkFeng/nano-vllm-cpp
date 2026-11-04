@@ -62,9 +62,10 @@ TTFT 单独报告，不能将预热带来的加载、页面或 kernel 初始化�
 ## 3. Attention：区分 prefill 与 paged decode
 
 当前 `attention.cu` 支持 FP32/FP16/BF16，Qwen 模型运行链路主要使用 FP32。
-kernel 采用 online softmax、共享内存分块和分页 KV，包含新 KV 写入；
-它没有 Tensor Core MMA。应明确称为当前 CUDA 实现，不根据函数名宣称具有
-FlashAttention-2 的性能。
+FP16/BF16、D=128/256 已新增 Tensor Core MMA、GQA KV 复用、异步搬运和
+prefill/decode Split-KV；FP32 及其他维度仍使用 SIMT。全部路径包含新 KV 写入。
+性能结论及适用范围以 [attention 实验记录](../exp/attn/README.md) 为准，不能把
+半精度算子收益直接用于当前 FP32 模型端到端速度。
 
 | 场景 | 正确性参考 | 主流性能对照 |
 | --- | --- | --- |
@@ -86,13 +87,11 @@ Paged decode 对照使用同样页大小、长度分布和页表条件，不额�
 等于输入长度，decode 的 query 长度为 1。覆盖 Qwen3 的 Hq/Hkv/D=16/8/128 和
 Qwen3.5 的 16/2/256。只测 inference forward，不和训练 forward+backward 混比。
 
-从代码推测的优先优化点，需要用 Nsight 验证：
-
-- `kQueryTile=4` 在单 query decode 时只使用其中一个 query warp 执行主计算。
-  可实现 decode 专用路径，并考察 split-KV 增加长上下文的并行度。
-- GQA 的多个 query head 会分别加载相同 KV head，可尝试跨头复用 KV tile。
-- Prefill 若以接近主流实现为目标，需进一步考虑 Tensor Core 分块与流水线，
-  仅调大现有 tile 不足以保证竞争力。
+Decode 专用路径、Split-KV、GQA 共享 KV 和半精度 Tensor Core prefill 均已落地。
+2026-11-04 的三个独立进程共测量 672 项，40 个阶段/精度/缓存/配置分组的吞吐
+几何平均均超过 FlashInfer 的 50%，最低 55.49%。仍有 5/224 个单项略低于 50%，
+全部是 D=256、Q=16、prefix=2048；完整范围、误差、样本与限制见
+[目标验收](../exp/attn/results/rtx5060ti-20261104-tensor-core/overview.md)。
 
 参考：[PyTorch SDPA](https://docs.pytorch.org/docs/2.11/generated/torch.nn.functional.scaled_dot_product_attention.html)、
 [FlashAttention 官方实现](https://github.com/Dao-AILab/flash-attention)、

@@ -94,8 +94,8 @@ int nano_attn_workspace_size(const NanoAttnArgs* args,
     }
     validate_dimensions(*args);
     *elements =
-        args->max_query == 1 && args->tokens > 0
-            ? nanovllm::kernels::cuda::flash_attn_decode_workspace_elements(
+        args->tokens > 0
+            ? nanovllm::kernels::cuda::flash_attn_workspace_elements(
                   args->batch, args->query_heads, args->head_dim, args->max_key)
             : 0;
     return 0;

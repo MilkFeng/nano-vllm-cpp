@@ -6,6 +6,58 @@
 TensorView 支持代码构建为实验共享库。`exp/attn` 不包含另一份 CUDA attention
 算法，也没有复制、冻结或改写生产 kernel。
 
+## Tensor Core 路径：2026-11-04
+
+在 RTX 5060 Ti / SM120、Release 上完成 **3 个独立进程、672 项**正式测量：
+全部 56 个分页 shape × FP16/BF16 × reuse/rotating，每项每实现 15 组样本。
+输出、cache 更新、源码/共享库 SHA256 校验全部通过。按既有的等权几何平均口径，
+**40 个配置/阶段/精度/缓存分组全部超过 FlashInfer 的 50%，最低 55.49%**。
+
+以下为 **BF16/reuse、包含 KV 追加**：
+
+| Hq/Hkv/D | Decode（12 shapes） | Paged prefill（6 shapes） | Chunked prefill（8 shapes） |
+| --- | ---: | ---: | ---: |
+| Qwen3-0.6B：16/8/128 | **83.52%** | **105.51%** | **94.50%** |
+| Qwen3.5 full attention：16/2/256 | **95.06%** | **69.86%** | **61.07%** |
+
+这是分组目标；**5/224 个单项仍低于 50%**，均为 D=256、Q=16、prefix=2048，
+逐项保留在报告中。FP32 模型端到端速度不属于本次结论。
+[验收说明与限制](results/rtx5060ti-20261104-tensor-core/overview.md) ·
+[完整分组报告](results/rtx5060ti-20261104-tensor-core/report.md) ·
+[逐项 CSV](results/rtx5060ti-20261104-tensor-core/summary.csv) ·
+[可运行验收脚本](results/rtx5060ti-20261104-tensor-core/verify_results.py)。
+
+生产算子新增 FP16/BF16、D=128/256 的 Tensor Core 路径：`mma.sync` 执行 QK/PV，
+softmax 状态和输出累加保持 FP32，PV 的概率转换为输入精度；`cp.async` 搬运
+Q/K/V，`ldmatrix` 加载矩阵片段。同组 GQA head 共用 KV tile，分页地址每个 token
+计算一次。D=128 decode 使用向量化 SIMT；D=256 decode 的 warp 分摊输出维度。
+Prefill 和 decode 均可沿 KV 分片，FP32 scratch 保存未归一化输出、最大值和分母，
+第二个 kernel 稳定归并。新 KV 始终从输入读取，cache 由唯一的 tile/head/分片写入。
+
+FP32、其他 D 及不支持该 Tensor Core 配置的 GPU 保留原 SIMT 路径。
+新路径要求 SM80+ 且 opt-in shared memory 至少 96 KiB，已实测 SM120；SM75 编译通过。
+算子内不分配显存、不做全局同步；硬件属性及 shared-memory 配置按进程缓存。
+
+引擎在 capture 外用 **`flash_attn_workspace_elements(max_batch, Hq, D, max_k)`**
+分配通用 FP32 工作区，覆盖所有 query 长度和不超过 max_batch 的 batch。
+Tensor 分片的 packed query/head/split 行数上限为 16384；D=128/256 的工作区约
+8.1/16.1 MiB。旧 `flash_attn_decode_workspace_elements()` 仍只保证 decode 容量。
+不传工作区时使用单阶段路径；传入不足的工作区会拒绝调用。
+工作区按 stream 独立拥有、生命周期覆盖 Graph 重放。
+
+正式对比沿用 `suite.json` 的全部 56 个分页 shape，包含 KV 追加，FP16/BF16 各自
+比较同精度 FlashInfer，reuse/rotating 各自统计，3 个独立进程、每项 15 组样本。
+FP32 不在 FlashInfer 可比集合内，正确性仍由边界、原生和 Split-KV 测试覆盖。
+结果与完整性验证归档到 `results/rtx5060ti-20261104-tensor-core/`。
+
+```bash
+cmake --build build --target nano-vllm-cpp-attn-check nano-vllm-cpp -j 4
+build/attn-venv/bin/python -m unittest discover -s exp/attn -p 'test_*.py' -v
+build/attn-venv/bin/python exp/attn/run_attn.py --suite full --tasks pipeline \
+  --dtypes float16,bfloat16 --cache both --runs 3 \
+  --output-dir exp/attn/results/rtx5060ti-20261104-tensor-core
+```
+
 ## Split-KV 完整 profile：2026-11-03，RTX 5060 Ti
 
 直接运行原有 `run_attn.py --suite full`，每进程 **408 项**，3 个独立进程共 **1224 项**，

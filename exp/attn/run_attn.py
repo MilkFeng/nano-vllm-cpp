@@ -66,6 +66,12 @@ def source_hashes():
         ROOT / "src/kernels/cuda/attention.cu",
         ROOT / "src/kernels/cuda/common.cuh",
         ROOT / "src/kernels/cuda/reduce.cuh",
+        ROOT / "src/kernels/cuda/kernels.hh",
+        ROOT / "src/engine/model_runner.cc",
+        ROOT / "src/engine/model_runner.hh",
+        ROOT / "src/core/forward_context.hh",
+        ROOT / "src/models/qwen3.cc",
+        ROOT / "src/models/qwen35.cc",
     ]
     for pattern in ("*.py", "*.cc", "*.cu", "*.hh", "suite.json"):
         files += sorted(Path(__file__).parent.glob(pattern))

@@ -1,0 +1,42 @@
+{
+  "build_type": "Release",
+  "cuda_architecture": 120,
+  "cuda_compiler": "13.3.73",
+  "compile_commands": [
+    {
+      "directory": "/home/feng/nano-vllm-cpp/build",
+      "command": "/usr/local/cuda-13.3/bin/nvcc -forward-unknown-to-host-compiler -DSPDLOG_COMPILED_LIB -DSPDLOG_FMT_EXTERNAL -I/home/feng/nano-vllm-cpp/include -I/home/feng/nano-vllm-cpp/src -I/home/feng/nano-vllm-cpp/build/_deps/tokenizers_cpp-src/include -isystem /home/feng/nano-vllm-cpp/build/_deps/minja-src/include -isystem /usr/local/cuda-13.3/targets/x86_64-linux/include -isystem /home/feng/nano-vllm-cpp/build/vcpkg_installed/x64-linux/include -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" --display-error-number --generate-line-info -Xcompiler=-mavx2,-mfma -x cu -c /home/feng/nano-vllm-cpp/src/kernels/cuda/attention.cu -o CMakeFiles/nano-vllm-cpp.dir/src/kernels/cuda/attention.cu.o",
+      "file": "/home/feng/nano-vllm-cpp/src/kernels/cuda/attention.cu",
+      "output": "CMakeFiles/nano-vllm-cpp.dir/src/kernels/cuda/attention.cu.o"
+    },
+    {
+      "directory": "/home/feng/nano-vllm-cpp/build",
+      "command": "/usr/bin/c++ -DNANOVLLM_ATTN_BUILD_TYPE=\\\"Release\\\" -Dnano_vllm_cpp_attn_exp_EXPORTS -I/home/feng/nano-vllm-cpp/src -isystem /usr/local/cuda-13.3/targets/x86_64-linux/include -O3 -DNDEBUG -std=c++20 -fPIC -o CMakeFiles/nano-vllm-cpp-attn-exp.dir/exp/attn/attn_bridge.cc.o -c /home/feng/nano-vllm-cpp/exp/attn/attn_bridge.cc",
+      "file": "/home/feng/nano-vllm-cpp/exp/attn/attn_bridge.cc",
+      "output": "CMakeFiles/nano-vllm-cpp-attn-exp.dir/exp/attn/attn_bridge.cc.o"
+    },
+    {
+      "directory": "/home/feng/nano-vllm-cpp/build",
+      "command": "/usr/local/cuda-13.3/bin/nvcc -forward-unknown-to-host-compiler -DNANOVLLM_ATTN_BUILD_TYPE=\\\"Release\\\" -Dnano_vllm_cpp_attn_exp_EXPORTS -I/home/feng/nano-vllm-cpp/src -isystem /usr/local/cuda-13.3/targets/x86_64-linux/include -O3 -DNDEBUG -std=c++20 \"--generate-code=arch=compute_120,code=[compute_120,sm_120]\" -Xcompiler=-fPIC --generate-line-info -x cu -c /home/feng/nano-vllm-cpp/src/kernels/cuda/attention.cu -o CMakeFiles/nano-vllm-cpp-attn-exp.dir/src/kernels/cuda/attention.cu.o",
+      "file": "/home/feng/nano-vllm-cpp/src/kernels/cuda/attention.cu",
+      "output": "CMakeFiles/nano-vllm-cpp-attn-exp.dir/src/kernels/cuda/attention.cu.o"
+    },
+    {
+      "directory": "/home/feng/nano-vllm-cpp/build",
+      "command": "/usr/bin/c++  -I/home/feng/nano-vllm-cpp/src -isystem /usr/local/cuda-13.3/targets/x86_64-linux/include -O3 -DNDEBUG -std=c++20 -o CMakeFiles/nano-vllm-cpp-attn-check.dir/exp/attn/check_native.cc.o -c /home/feng/nano-vllm-cpp/exp/attn/check_native.cc",
+      "file": "/home/feng/nano-vllm-cpp/exp/attn/check_native.cc",
+      "output": "CMakeFiles/nano-vllm-cpp-attn-check.dir/exp/attn/check_native.cc.o"
+    }
+  ],
+  "sm75_compile_check": {
+    "status": "passed",
+    "command": "/usr/local/cuda-13.3/bin/nvcc -std=c++20 -O3 -arch=sm_75 -I src -c src/kernels/cuda/attention.cu -o /tmp/nano-attn-sm75.o"
+  },
+  "production_build": {
+    "status": "passed",
+    "targets": [
+      "nano-vllm-cpp",
+      "nano-vllm-cpp-attn-check"
+    ]
+  }
+}
