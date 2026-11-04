@@ -123,6 +123,8 @@ prefill/decode 各自的路由频率、专家聚合 token 数分布和整段 MoE
 首次遇到更大容量时仍可能扩容，保留块计入显存预算，直到引擎销毁时释放。
 单 token 的 CPU 专家结果按层打包上传。每层 3/8/16 个 GPU 专家槽位的前后对照、
 显存峰值和正确性检查见[运行时性能记录](docs/runtime-workspace-performance.md)。
+单 token MoE 合并路由与输入下载、共享专家提前提交和异步返回的实现与验证见
+[MoE 同步优化](docs/moe-synchronization.md)。
 
 计时口径：
 
@@ -400,7 +402,9 @@ token 选中会分别计数；`expert_cache().num_slots()`
 和 `size_bytes()` 只统计 routed 缓存槽位和权重，不包含 Router、共享专家及工作区。
 
 当前支持多 token、FP32 激活与 FP8 专家、1..1024 个专家、`1 <= top_k <= E`。
-populate/forward/replace 同步传入的 stream，调用需串行。缓存槽位数固定，
+populate/replace 同步传入的 stream，调用需串行；forward 的 GPU 工作异步提交，
+读取结果或释放模块前需等待相应 stream，开启 profiling 时仍等待本层完成。
+缓存槽位数固定，
 开启在线策略后会按 decode 路由热度更新槽位中的专家；
 文本生成支持 Qwen3 与 Qwen3.5 MoE，后者使用下面的 FP8 RAM store。
 
@@ -693,7 +697,10 @@ MoE moe({128, 64, 16, 2}, cpu_pool, Device::cuda(0),
 executor 将 `[T,K]` 的分派按专家计数分组，先提交 CPU 专家任务，再提交 GPU
 专家计算，因此两者可以重叠。GPU 专家、CPU 输出上传、scatter 和 combine
 使用同一个 stream 排序。executor 返回前完成全部 CPU 任务，GPU 工作可以仍在
-排队；`MoE::forward()` 在返回前统一同步，随后才能复用工作区或改用其他 stream。
+排队。`MoE::forward()` 的单 token 路径把路由 ID 与输入一起下载，只等待下载
+完成事件；共享专家提前提交，与 CPU 专家重叠。层末记录完成事件后异步返回，
+下一层通过同一 stream 排序与下载事件安全复用工作区。工作区切换到另一 stream
+或析构时等待先前使用完成；profiling 保留层末等待以维持计时口径。
 内部 executor 的 cache 就绪状态、张量形状及专家编号是调用方的前置条件，
 Debug 构建通过断言检查；Release 测试只传入满足这些条件的分派。
 

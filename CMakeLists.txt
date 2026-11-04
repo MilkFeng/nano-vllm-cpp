@@ -200,3 +200,8 @@ add_executable(nano-vllm-cpp-cpu-bench EXCLUDE_FROM_ALL exp/cpu/benchmark.cc)
 target_include_directories(nano-vllm-cpp-cpu-bench PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(nano-vllm-cpp-cpu-bench PRIVATE
   nano-vllm-cpp::nano-vllm-cpp nlohmann_json::nlohmann_json)
+
+add_executable(nano-vllm-cpp-moe-sync-check EXCLUDE_FROM_ALL exp/moe/check.cc)
+target_include_directories(nano-vllm-cpp-moe-sync-check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(nano-vllm-cpp-moe-sync-check PRIVATE
+  nano-vllm-cpp::nano-vllm-cpp CUDA::cudart nlohmann_json::nlohmann_json)

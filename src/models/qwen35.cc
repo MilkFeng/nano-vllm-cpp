@@ -465,8 +465,8 @@ Tensor Qwen35Model::forward(ConstTensorView input_ids,
     residual = std::move(output.residual);
   }
 
-  // Each MoE has completed its CPU tasks and synchronized this stream. Slots
-  // can now be overwritten without racing kernels from the current step.
+  // CPU tasks have finished. Weight uploads use the same inference stream,
+  // so they follow queued expert kernels before publishing the new slot map.
   if (!context.is_prefill && expert_adaptation_.advance()) {
     const auto started = std::chrono::steady_clock::now();
     ExpertPlacement placement;

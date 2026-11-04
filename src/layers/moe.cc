@@ -55,6 +55,50 @@ struct CpuExpertJob {
 
 } // namespace
 
+MoEExecutionWorkspace::~MoEExecutionWorkspace() noexcept {
+  // In particular, an asynchronous H2D may still be reading host_parts.
+  if (pending_) cudaEventSynchronize(completion_);
+  if (completion_) cudaEventDestroy(completion_);
+  if (host_ready_) cudaEventDestroy(host_ready_);
+}
+
+void MoEExecutionWorkspace::synchronize() {
+  if (pending_) {
+    check_cuda(cudaEventSynchronize(completion_), "complete MoE workspace uses");
+    pending_ = false;
+  }
+}
+
+void MoEExecutionWorkspace::prepare(cudaStream_t stream) {
+  // Same-stream reuse is ordered by the next host-ready event. A different
+  // stream must finish the old DMA before touching any shared host staging.
+  if (pending_ && pending_stream_ != stream) synchronize();
+  if (!host_ready_) {
+    check_cuda(cudaEventCreateWithFlags(&host_ready_, cudaEventDisableTiming),
+               "create MoE host-ready event");
+  }
+  if (!completion_) {
+    check_cuda(cudaEventCreateWithFlags(&completion_, cudaEventDisableTiming),
+               "create MoE workspace completion event");
+  }
+}
+
+void MoEExecutionWorkspace::record_host_ready(cudaStream_t stream) {
+  check_cuda(cudaEventRecord(host_ready_, stream), "record MoE host downloads");
+}
+
+void MoEExecutionWorkspace::wait_host_ready() {
+  check_cuda(cudaEventSynchronize(host_ready_), "complete MoE host downloads");
+  // This marker also follows all previous uses of the workspace on the stream.
+  pending_ = false;
+}
+
+void MoEExecutionWorkspace::record_completion(cudaStream_t stream) {
+  check_cuda(cudaEventRecord(completion_, stream), "record MoE workspace uses");
+  pending_stream_ = stream;
+  pending_ = true;
+}
+
 FP8ExpertWorkspace::FP8ExpertWorkspace(std::size_t intermediate_size,
                                        std::size_t rows) {
   reserve(rows, intermediate_size);
@@ -302,6 +346,24 @@ ExpertExecutionStats ExpertExecutor::forward_into(
     ConstTensorView input, std::span<const std::int32_t> expert_ids,
     std::size_t top_k, TensorView expert_outputs,
     MoEExecutionWorkspace& workspace, cudaStream_t stream) const {
+  workspace.prepare(stream);
+  workspace.synchronize();
+  try {
+    const auto stats = forward_prepared(input, expert_ids, top_k, expert_outputs,
+                                         workspace, stream, {});
+    workspace.record_completion(stream);
+    return stats;
+  } catch (...) {
+    cudaStreamSynchronize(stream);
+    throw;
+  }
+}
+
+ExpertExecutionStats ExpertExecutor::forward_prepared(
+    ConstTensorView input, std::span<const std::int32_t> expert_ids,
+    std::size_t top_k, TensorView expert_outputs,
+    MoEExecutionWorkspace& workspace, cudaStream_t stream,
+    ConstTensorView host_input) const {
   const auto tokens = input.shape()[0];
   const auto hidden = store_.hidden_size();
   const auto assignments = tokens * top_k;
@@ -312,7 +374,7 @@ ExpertExecutionStats ExpertExecutor::forward_into(
 
   if (tokens == 1) {
     return forward_single_into(input, expert_ids, expert_outputs, workspace,
-                               stream);
+                               stream, host_input);
   }
 
   struct Group {
@@ -466,7 +528,7 @@ ExpertExecutionStats ExpertExecutor::forward_into(
 ExpertExecutionStats ExpertExecutor::forward_single_into(
     ConstTensorView input, std::span<const std::int32_t> expert_ids,
     TensorView expert_outputs, MoEExecutionWorkspace& workspace,
-    cudaStream_t stream) const {
+    cudaStream_t stream, ConstTensorView host_input) const {
   struct Task {
     std::size_t rank;
     std::size_t expert_id;
@@ -536,7 +598,7 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
                                  stream),
                  "upload single-token expert permutation");
     }
-    if (!misses.empty()) {
+    if (!misses.empty() && host_input.data() == nullptr) {
       check_cuda(
           cudaMemcpyAsync(workspace.host_input.data(), input.data(),
                           input.size_bytes(), cudaMemcpyDeviceToHost, stream),
@@ -548,7 +610,9 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
     for (std::size_t i = 0; i < misses.size(); ++i) {
       const auto& task = misses[i];
       const auto* expert = &store_.expert_at(task.expert_id);
-      const auto x = host_rows(workspace.host_input, 1, hidden).as_const();
+      const auto x = host_input.data() != nullptr
+                         ? host_input
+                         : host_rows(workspace.host_input, 1, hidden).as_const();
       const auto row =
           host_rows(workspace.host_parts, misses.size(), hidden).slice(0, i, 1);
       jobs[i] = {expert, x, row};
@@ -675,6 +739,7 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
     throw std::invalid_argument("MoE assignment count exceeds Int32 indices");
   }
   const auto assignments = tokens * config_.top_k;
+  workspace_->prepare(stream);
   workspace_->host_ids.reserve(assignments * sizeof(std::int32_t));
   const auto host_ids = std::span(
       static_cast<std::int32_t*>(workspace_->host_ids.data()), assignments);
@@ -696,22 +761,49 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
     check_cuda(cudaMemcpyAsync(host_ids.data(), ids.data(), ids.size_bytes(),
                                cudaMemcpyDeviceToHost, stream),
                "copy MoE expert IDs to CPU");
-    check_cuda(cudaStreamSynchronize(stream), "complete MoE routing");
+    // A decode input is only H floats. Download it with the IDs so CPU expert
+    // dispatch needs a single host wait, even when every selected ID is cached.
+    const bool prefetch_input =
+        tokens == 1 && cache_->num_slots() < config_.num_experts;
+    if (prefetch_input) {
+      workspace_->host_input.reserve(hidden_states.size_bytes());
+      check_cuda(cudaMemcpyAsync(workspace_->host_input.data(),
+                                 hidden_states.data(), hidden_states.size_bytes(),
+                                 cudaMemcpyDeviceToHost, stream),
+                 "download decode input with MoE routing");
+    }
+    workspace_->record_host_ready(stream);
 
-    stats = executor_->forward_into(hidden_states, host_ids, config_.top_k,
-                                    expert_outputs.view(), *workspace_, stream);
+    const auto launch_shared = [&] {
+      if (shared_expert_) {
+        shared_output = shared_expert_->forward(hidden_states, stream);
+        shared_gate_logits = shared_expert_gate_->forward(hidden_states, stream);
+      }
+    };
+    // Queue independent decode work after the download marker, before the host
+    // waits for it. Shared and cached experts can run while CPU experts execute.
+    if (tokens == 1) launch_shared();
+    workspace_->wait_host_ready();
+    const auto host_input =
+        prefetch_input
+            ? host_rows(workspace_->host_input, 1, config_.hidden_size).as_const()
+            : ConstTensorView{};
+    stats = executor_->forward_prepared(
+        hidden_states, host_ids, config_.top_k, expert_outputs.view(),
+        *workspace_, stream, host_input);
     kernels::cuda::moe_combine(expert_outputs.view().as_const(),
                                weights.view().as_const(), output.view(),
                                stream);
 
+    // Prefill retains demand-driven input downloads in the batch executor.
+    if (tokens != 1) launch_shared();
     if (shared_expert_) {
-      shared_output = shared_expert_->forward(hidden_states, stream);
-      shared_gate_logits = shared_expert_gate_->forward(hidden_states, stream);
       kernels::cuda::moe_add_shared(shared_output.view().as_const(),
                                     shared_gate_logits.view().as_const(),
                                     output.view(), stream);
     }
-    check_cuda(cudaStreamSynchronize(stream), "complete MoE forward");
+    workspace_->record_completion(stream);
+    if (profile) workspace_->synchronize();
   } catch (...) {
     // Executor has drained CPU tasks; keep inputs, outputs, and staging alive
     // until any queued DMA/kernels finish, including failed combine/shared

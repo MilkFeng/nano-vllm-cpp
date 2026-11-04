@@ -37,6 +37,14 @@ struct FP8ExpertWorkspace {
 };
 
 struct MoEExecutionWorkspace {
+  MoEExecutionWorkspace() = default;
+  ~MoEExecutionWorkspace() noexcept;
+  MoEExecutionWorkspace(const MoEExecutionWorkspace&) = delete;
+  MoEExecutionWorkspace& operator=(const MoEExecutionWorkspace&) = delete;
+
+  // Complete queued uses before host staging is overwritten or destroyed.
+  void synchronize();
+
   PinnedHostBuffer host_ids;
   PinnedHostBuffer host_order;
   PinnedHostBuffer host_input;
@@ -46,6 +54,19 @@ struct MoEExecutionWorkspace {
   Tensor grouped_input;
   Tensor grouped_parts;
   FP8ExpertWorkspace expert;
+
+ private:
+  friend class MoE;
+  friend class ExpertExecutor;
+  void prepare(cudaStream_t stream);
+  void record_host_ready(cudaStream_t stream);
+  void wait_host_ready();
+  void record_completion(cudaStream_t stream);
+
+  cudaEvent_t host_ready_ = nullptr;
+  cudaEvent_t completion_ = nullptr;
+  cudaStream_t pending_stream_ = nullptr;
+  bool pending_ = false;
 };
 
 class FP8Expert final : public Module {
@@ -137,10 +158,19 @@ class ExpertExecutor final {
       MoEExecutionWorkspace& workspace, cudaStream_t stream = nullptr) const;
 
  private:
+  friend class MoE;
+  // The caller has completed previous workspace uses. A supplied host input
+  // has already been downloaded into workspace.host_input.
+  [[nodiscard]] ExpertExecutionStats forward_prepared(
+      ConstTensorView input, std::span<const std::int32_t> expert_ids,
+      std::size_t top_k, TensorView expert_outputs,
+      MoEExecutionWorkspace& workspace, cudaStream_t stream,
+      ConstTensorView host_input) const;
+
   [[nodiscard]] ExpertExecutionStats forward_single_into(
       ConstTensorView input, std::span<const std::int32_t> expert_ids,
       TensorView expert_outputs, MoEExecutionWorkspace& workspace,
-      cudaStream_t stream) const;
+      cudaStream_t stream, ConstTensorView host_input) const;
 
   const ExpertStore& store_;
   const ExpertCache& cache_;
@@ -177,6 +207,8 @@ class MoE final : public Module {
   void populate_expert_cache(cudaStream_t stream = nullptr);
   void invalidate_expert_cache() noexcept;
 
+  // GPU work is asynchronous on stream; profiling waits for accurate wall time.
+  // Keep the module and returned tensors alive until queued uses complete.
   [[nodiscard]] MoEOutput forward(ConstTensorView hidden_states,
                                   cudaStream_t stream = nullptr,
                                   MoEPhaseProfile* profile = nullptr,

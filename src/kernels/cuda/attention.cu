@@ -133,8 +133,8 @@ AttentionShape attn_shape(ConstTensorView query, TensorView key_cache,
 // probabilities passed to the PV tensor-core operation are rounded to T.
 template <typename T>
 __device__ __forceinline__ void attn_mma(float (&c)[4], unsigned a0,
-                                       unsigned a1, unsigned a2, unsigned a3,
-                                       unsigned b0, unsigned b1) {
+                                         unsigned a1, unsigned a2, unsigned a3,
+                                         unsigned b0, unsigned b1) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
   // The host dispatcher retains the SIMT implementation on pre-Ampere GPUs.
   asm volatile("trap;");
@@ -158,36 +158,43 @@ __device__ __forceinline__ void attn_mma(float (&c)[4], unsigned a0,
 bool tensor_attention_supported() {
   static const bool supported = [] {
     int major = 0, shared_bytes = 0;
-    check_cuda(cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, 0),
-                "query attention compute capability");
-    check_cuda(cudaDeviceGetAttribute(&shared_bytes, cudaDevAttrMaxSharedMemoryPerBlockOptin, 0),
-                "query attention shared memory");
+    check_cuda(
+        cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, 0),
+        "query attention compute capability");
+    check_cuda(cudaDeviceGetAttribute(
+                   &shared_bytes, cudaDevAttrMaxSharedMemoryPerBlockOptin, 0),
+               "query attention shared memory");
     return major >= 8 && shared_bytes >= 96 * 1024;
   }();
   return supported;
 }
 
 template <typename T>
-__device__ __forceinline__ void attn_ld_a(const T* p, int stride, unsigned (&a)[4]) {
+__device__ __forceinline__ void attn_ld_a(const T* p, int stride,
+                                          unsigned (&a)[4]) {
   const int lane = threadIdx.x % 32;
-  const auto address = static_cast<unsigned>(__cvta_generic_to_shared(
-      p + (lane % 16) * stride + (lane / 16) * 8));
+  const auto address = static_cast<unsigned>(
+      __cvta_generic_to_shared(p + (lane % 16) * stride + (lane / 16) * 8));
   asm volatile("ldmatrix.sync.aligned.m8n8.x4.shared.b16 {%0,%1,%2,%3}, [%4];"
-      : "=r"(a[0]), "=r"(a[1]), "=r"(a[2]), "=r"(a[3]) : "r"(address));
+               : "=r"(a[0]), "=r"(a[1]), "=r"(a[2]), "=r"(a[3])
+               : "r"(address));
 }
 
 template <bool Transpose, typename T>
-__device__ __forceinline__ void attn_ld_b(const T* p, int stride, unsigned (&b)[2]) {
+__device__ __forceinline__ void attn_ld_b(const T* p, int stride,
+                                          unsigned (&b)[2]) {
   const int lane = threadIdx.x % 32;
   const T* src = Transpose ? p + (lane % 16) * stride
                            : p + (lane % 8) * stride + ((lane / 8) % 2) * 8;
   const auto address = static_cast<unsigned>(__cvta_generic_to_shared(src));
   if constexpr (Transpose) {
     asm volatile("ldmatrix.sync.aligned.m8n8.x2.trans.shared.b16 {%0,%1}, [%2];"
-        : "=r"(b[0]), "=r"(b[1]) : "r"(address));
+                 : "=r"(b[0]), "=r"(b[1])
+                 : "r"(address));
   } else {
     asm volatile("ldmatrix.sync.aligned.m8n8.x2.shared.b16 {%0,%1}, [%2];"
-        : "=r"(b[0]), "=r"(b[1]) : "r"(address));
+                 : "=r"(b[0]), "=r"(b[1])
+                 : "r"(address));
   }
 }
 
@@ -195,10 +202,12 @@ template <typename T>
 __device__ __forceinline__ void attn_copy16(T* dst, const T* src, bool valid) {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
   const auto address = static_cast<unsigned>(__cvta_generic_to_shared(dst));
-  asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;"
-      :: "r"(address), "l"(src), "r"(valid ? 16 : 0) : "memory");
+  asm volatile("cp.async.cg.shared.global [%0], [%1], 16, %2;" ::"r"(address),
+               "l"(src), "r"(valid ? 16 : 0)
+               : "memory");
 #else
-  *reinterpret_cast<uint4*>(dst) = valid ? *reinterpret_cast<const uint4*>(src) : uint4{};
+  *reinterpret_cast<uint4*>(dst) =
+      valid ? *reinterpret_cast<const uint4*>(src) : uint4{};
 #endif
 }
 
@@ -208,14 +217,16 @@ __device__ __forceinline__ void attn_wait_copy() {
 #endif
 }
 
-template <typename T, int D, int W = 4, int N = 32, bool SplitKV = false, int Cols = 1>
+template <typename T, int D, int W = 4, int N = 32, bool SplitKV = false,
+          int Cols = 1>
 __global__ void flash_attn_tensor_kernel(
     const T* __restrict__ query, T* __restrict__ key_cache,
     T* __restrict__ value_cache, const T* __restrict__ key,
     const T* __restrict__ value, const std::int32_t* __restrict__ cu_q,
     const std::int32_t* __restrict__ cu_k,
     const std::int32_t* __restrict__ table, T* __restrict__ output,
-    AttentionShape shape, bool causal, float* partials, int splits, int split_tokens) {
+    AttentionShape shape, bool causal, float* partials, int splits,
+    int split_tokens) {
   // Flatten (query position, GQA head) into rows sharing one KV head.
   // Cols=1 assigns 16 rows to each warp. For D=256 decode, Cols=4 shares
   // those 16 rows across warps: partition QK columns, exchange scores, then
@@ -256,14 +267,16 @@ __global__ void flash_attn_tensor_kernel(
     const int qp = (qbase + row) / group;
     const int head = head_base + (qbase + row) % group;
     const auto offset = ((qstart + qp) * shape.query_heads + head) * D + d;
-    attn_copy16(sq + row * DS + d, qp < qlen ? query + offset : query, qp < qlen);
+    attn_copy16(sq + row * DS + d, qp < qlen ? query + offset : query,
+                qp < qlen);
   }
   attn_wait_copy();
   float acc[OD / 8][4] = {};
   float maxima[2] = {-CUDART_INF_F, -CUDART_INF_F};
   float sums[2] = {};
   const float scale = rsqrtf(float(D));
-  const int visible = causal ? min(klen, prefix + (qbase + M - 1) / group + 1) : klen;
+  const int visible =
+      causal ? min(klen, prefix + (qbase + M - 1) / group + 1) : klen;
   const int begin = SplitKV ? split * split_tokens : 0;
   const int end = SplitKV ? min(visible, begin + split_tokens) : visible;
   __shared__ std::size_t offsets[N];
@@ -273,7 +286,8 @@ __global__ void flash_attn_tensor_kernel(
       const int pos = kb + threadIdx.x;
       if (pos < klen) {
         const int page = table[batch * shape.max_blocks + pos / page_tokens];
-        const auto slot = static_cast<std::size_t>(page) * page_tokens + pos % page_tokens;
+        const auto slot =
+            static_cast<std::size_t>(page) * page_tokens + pos % page_tokens;
         offsets[threadIdx.x] = (slot * shape.key_heads + kh) * D;
       }
     }
@@ -294,10 +308,13 @@ __global__ void flash_attn_tensor_kernel(
           ksrc = key + source;
           vsrc = value + source;
           // Unique writer, even for noncausal attention. All readers of the
-          // newly appended region use the input, never a concurrent cache write.
+          // newly appended region use the input, never a concurrent cache
+          // write.
           if (np * group / M == qt) {
-            *reinterpret_cast<uint4*>(key_cache + offset) = *reinterpret_cast<const uint4*>(ksrc);
-            *reinterpret_cast<uint4*>(value_cache + offset) = *reinterpret_cast<const uint4*>(vsrc);
+            *reinterpret_cast<uint4*>(key_cache + offset) =
+                *reinterpret_cast<const uint4*>(ksrc);
+            *reinterpret_cast<uint4*>(value_cache + offset) =
+                *reinterpret_cast<const uint4*>(vsrc);
           }
         }
       }
@@ -324,28 +341,29 @@ __global__ void flash_attn_tensor_kernel(
       for (int n = 0; n < Fragments; ++n) {
 #pragma unroll
         for (int j = 0; j < 4; ++j)
-          exchanged_scores[(qwarp * 16 + r + j / 2 * 8) * N
-              + colwarp * N / Cols + n * 8 + 2 * t + j % 2] = fragment[n][j];
+          exchanged_scores[(qwarp * 16 + r + j / 2 * 8) * N + colwarp * N / Cols
+                           + n * 8 + 2 * t + j % 2] = fragment[n][j];
       }
       __syncthreads();
 #pragma unroll
       for (int n = 0; n < N / 8; ++n) {
 #pragma unroll
         for (int j = 0; j < 4; ++j)
-          scores[n][j] = exchanged_scores[(qwarp * 16 + r + j / 2 * 8) * N + n * 8 + 2 * t + j % 2];
+          scores[n][j] = exchanged_scores[(qwarp * 16 + r + j / 2 * 8) * N
+                                          + n * 8 + 2 * t + j % 2];
       }
     } else {
 #pragma unroll
-    for (int dk = 0; dk < D; dk += 16) {
-      unsigned a[4];
-      attn_ld_a(sq + warp * 16 * DS + dk, DS, a);
+      for (int dk = 0; dk < D; dk += 16) {
+        unsigned a[4];
+        attn_ld_a(sq + warp * 16 * DS + dk, DS, a);
 #pragma unroll
-      for (int n = 0; n < N / 8; ++n) {
-        unsigned b[2];
-        attn_ld_b<false>(sk + 8 * n * DS + dk, DS, b);
-        attn_mma<T>(scores[n], a[0], a[1], a[2], a[3], b[0], b[1]);
+        for (int n = 0; n < N / 8; ++n) {
+          unsigned b[2];
+          attn_ld_b<false>(sk + 8 * n * DS + dk, DS, b);
+          attn_mma<T>(scores[n], a[0], a[1], a[2], a[3], b[0], b[1]);
+        }
       }
-    }
     }
     float alpha[2];
 #pragma unroll
@@ -359,7 +377,8 @@ __global__ void flash_attn_tensor_kernel(
           const int kp = kb + 8 * n + 2 * t + j;
           float& s = scores[n][2 * rr + j];
           s = qr < qlen && kp < end && (!causal || kp <= prefix + qr)
-              ? s * scale : -CUDART_INF_F;
+                  ? s * scale
+                  : -CUDART_INF_F;
           m = fmaxf(m, s);
         }
       }
@@ -376,8 +395,8 @@ __global__ void flash_attn_tensor_kernel(
           const float p = s == -CUDART_INF_F ? 0.f : __expf(s - m);
           l += p;
           if (colwarp == 0)
-            sp[(qwarp * 16 + r + 8 * rr) * NS + n * 8 + 2 * t + j]
-                = detail::from_float<T>(p);
+            sp[(qwarp * 16 + r + 8 * rr) * NS + n * 8 + 2 * t + j] =
+                detail::from_float<T>(p);
         }
       }
       l += __shfl_xor_sync(0xffffffff, l, 1);
@@ -411,7 +430,8 @@ __global__ void flash_attn_tensor_kernel(
     const int head = head_base + flat % group;
     if (qr < qlen) {
       const float inv = sums[rr] > 0.f ? 1.f / sums[rr] : 0.f;
-      const auto row = (((qstart + qr) * shape.query_heads + head) * splits + split);
+      const auto row =
+          (((qstart + qr) * shape.query_heads + head) * splits + split);
       const auto rows = shape.query_tokens * shape.query_heads * splits;
       if constexpr (SplitKV) {
         if (t == 0 && colwarp == 0) {
@@ -424,9 +444,11 @@ __global__ void flash_attn_tensor_kernel(
 #pragma unroll
         for (int j = 0; j < 2; ++j) {
           const int d = colwarp * OD + dv * 8 + 2 * t + j;
-          if constexpr (SplitKV) partials[row * D + d] = acc[dv][2 * rr + j];
-          else output[((qstart + qr) * shape.query_heads + head) * D + d]
-              = detail::from_float<T>(acc[dv][2 * rr + j] * inv);
+          if constexpr (SplitKV)
+            partials[row * D + d] = acc[dv][2 * rr + j];
+          else
+            output[((qstart + qr) * shape.query_heads + head) * D + d] =
+                detail::from_float<T>(acc[dv][2 * rr + j] * inv);
         }
       }
     }
@@ -462,13 +484,16 @@ __global__ void merge_attn_tensor_splits(const float* partials, T* output,
 }
 
 int tensor_splits(std::size_t batch, std::size_t heads, std::size_t group,
-                   std::size_t max_q, std::size_t max_k, int tile,
-                   std::size_t tokens) {
+                  std::size_t max_q, std::size_t max_k, int tile,
+                  std::size_t tokens) {
   const auto blocks = batch * heads * ((max_q * group + tile - 1) / tile);
   int splits = 1;
   while (blocks * splits * 2 <= (tile == 128 ? 512 : 256) && splits < 32
-          && tokens * heads * group * splits * 2 <= 256 * 64
-          && max_k / (splits * 2) >= (max_q == 1 ? 32 : tile == 128 ? 64 : 128)) splits *= 2;
+         && tokens * heads * group * splits * 2 <= 256 * 64
+         && max_k / (splits * 2) >= (max_q == 1    ? 32
+                                     : tile == 128 ? 64
+                                                   : 128))
+    splits *= 2;
   return splits;
 }
 
@@ -480,26 +505,31 @@ void launch_attn_tensor(ConstTensorView query, TensorView key_cache,
                         TensorView output, AttentionShape shape, bool causal,
                         cudaStream_t stream, float* partials, int splits) {
   constexpr int M = W / Cols * 16;
-  constexpr int bytes = (M * (D + 8) + 2 * N * (D + 8)
-                         + M * (N + 8)) * sizeof(T);
+  constexpr int bytes =
+      (M * (D + 8) + 2 * N * (D + 8) + M * (N + 8)) * sizeof(T);
   static const bool configured = [] {
-    check_cuda(cudaFuncSetAttribute(flash_attn_tensor_kernel<T, D, W, N, SplitKV, Cols>,
-                                  cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                  bytes), "configure tensor attention shared memory");
+    check_cuda(cudaFuncSetAttribute(
+                   flash_attn_tensor_kernel<T, D, W, N, SplitKV, Cols>,
+                   cudaFuncAttributeMaxDynamicSharedMemorySize, bytes),
+               "configure tensor attention shared memory");
     return true;
   }();
   (void)configured;
   const int group = shape.query_heads / shape.key_heads;
-  const dim3 grid((shape.max_seqlen_q * group + M - 1) / M * splits, shape.key_heads, shape.batch);
+  const dim3 grid((shape.max_seqlen_q * group + M - 1) / M * splits,
+                  shape.key_heads, shape.batch);
   // Align partitions to N so every key is visited exactly once.
   const int tokens = (shape.max_seqlen_k + splits * N - 1) / (splits * N) * N;
-  flash_attn_tensor_kernel<T, D, W, N, SplitKV, Cols><<<grid, W * 32, bytes, stream>>>(
-      query.data<T>(), key_cache.data<T>(), value_cache.data<T>(), key.data<T>(),
-      value.data<T>(), cu_q.data<std::int32_t>(), cu_k.data<std::int32_t>(),
-      table.data<std::int32_t>(), output.data<T>(), shape, causal, partials, splits, tokens);
+  flash_attn_tensor_kernel<T, D, W, N, SplitKV, Cols>
+      <<<grid, W * 32, bytes, stream>>>(
+          query.data<T>(), key_cache.data<T>(), value_cache.data<T>(),
+          key.data<T>(), value.data<T>(), cu_q.data<std::int32_t>(),
+          cu_k.data<std::int32_t>(), table.data<std::int32_t>(),
+          output.data<T>(), shape, causal, partials, splits, tokens);
   if constexpr (SplitKV) {
-    merge_attn_tensor_splits<T><<<shape.query_tokens * shape.query_heads, 128, 0, stream>>>(
-        partials, output.data<T>(), shape, splits);
+    merge_attn_tensor_splits<T>
+        <<<shape.query_tokens * shape.query_heads, 128, 0, stream>>>(
+            partials, output.data<T>(), shape, splits);
   }
 }
 
@@ -518,8 +548,8 @@ __global__ void flash_attn_vector_decode_kernel(
     const T* __restrict__ value, const std::int32_t* __restrict__ cu_q,
     const std::int32_t* __restrict__ cu_k,
     const std::int32_t* __restrict__ table, T* __restrict__ output,
-    AttentionShape shape, bool causal, float* __restrict__ partials,
-    int splits, int split_tokens) {
+    AttentionShape shape, bool causal, float* __restrict__ partials, int splits,
+    int split_tokens) {
   constexpr int G = D == 128 ? 4 : 8;
   constexpr int Groups = 128 / G;
   constexpr int E = D / G;
@@ -551,7 +581,8 @@ __global__ void flash_attn_vector_decode_kernel(
   float m = -CUDART_INF_F, l = 0.f;
   for (int pos = begin + group; pos < end; pos += Groups) {
     const auto page = table[batch * shape.max_blocks + pos / page_tokens];
-    const auto slot = static_cast<std::size_t>(page) * page_tokens + pos % page_tokens;
+    const auto slot =
+        static_cast<std::size_t>(page) * page_tokens + pos % page_tokens;
     const auto offset = (slot * shape.key_heads + kh) * D;
     const bool fresh = pos >= prefix;
     const auto input_offset = ((qs + pos - prefix) * shape.key_heads + kh) * D;
@@ -591,15 +622,22 @@ __global__ void flash_attn_vector_decode_kernel(
   __shared__ float sm[Groups], sl[Groups];
   __shared__ float so[Groups][D];
   __shared__ float global_m, global_l;
-  if (lane == 0) { sm[group] = m; sl[group] = l; }
+  if (lane == 0) {
+    sm[group] = m;
+    sl[group] = l;
+  }
   __syncthreads();
   if (threadIdx.x < 32) {
     const int g = threadIdx.x;
     const float mm = g < Groups ? sm[g] : -CUDART_INF_F;
     const float ll = g < Groups ? sl[g] : 0.f;
     const float gm = detail::warp_max_reduce(mm);
-    const float gl = detail::warp_sum_reduce(ll > 0.f ? ll * __expf(mm - gm) : 0.f);
-    if (g == 0) { global_m = gm; global_l = gl; }
+    const float gl =
+        detail::warp_sum_reduce(ll > 0.f ? ll * __expf(mm - gm) : 0.f);
+    if (g == 0) {
+      global_m = gm;
+      global_l = gl;
+    }
   }
   __syncthreads();
   const float gm = global_m, gl = global_l;
@@ -614,8 +652,10 @@ __global__ void flash_attn_vector_decode_kernel(
     float o = 0.f;
 #pragma unroll
     for (int g = 0; g < Groups; ++g) o += so[g][d];
-    if constexpr (SplitKV) partials[row * D + d] = o;
-    else output[qo + d] = detail::from_float<T>(gl > 0.f ? o / gl : 0.f);
+    if constexpr (SplitKV)
+      partials[row * D + d] = o;
+    else
+      output[qo + d] = detail::from_float<T>(gl > 0.f ? o / gl : 0.f);
   }
   if constexpr (SplitKV) {
     if (threadIdx.x == 0) {
@@ -837,26 +877,29 @@ __global__ void merge_decode_splits_kernel(
 
 template <typename T, int D>
 void launch_attn_vector_decode(ConstTensorView query, TensorView key_cache,
-                        TensorView value_cache, ConstTensorView key,
-                        ConstTensorView value, ConstTensorView cu_q,
-                        ConstTensorView cu_k, ConstTensorView table,
-                        TensorView output, AttentionShape shape, bool causal,
-                        cudaStream_t stream, float* partials, int splits) {
+                               TensorView value_cache, ConstTensorView key,
+                               ConstTensorView value, ConstTensorView cu_q,
+                               ConstTensorView cu_k, ConstTensorView table,
+                               TensorView output, AttentionShape shape,
+                               bool causal, cudaStream_t stream,
+                               float* partials, int splits) {
   const dim3 grid(splits, shape.query_heads, shape.batch);
   if (splits > 1) {
     const int tokens = (shape.max_seqlen_k + splits - 1) / splits;
     flash_attn_vector_decode_kernel<T, D, true><<<grid, 128, 0, stream>>>(
-        query.data<T>(), key_cache.data<T>(), value_cache.data<T>(), key.data<T>(),
-        value.data<T>(), cu_q.data<std::int32_t>(), cu_k.data<std::int32_t>(),
-        table.data<std::int32_t>(), output.data<T>(), shape, causal, partials, splits, tokens);
+        query.data<T>(), key_cache.data<T>(), value_cache.data<T>(),
+        key.data<T>(), value.data<T>(), cu_q.data<std::int32_t>(),
+        cu_k.data<std::int32_t>(), table.data<std::int32_t>(), output.data<T>(),
+        shape, causal, partials, splits, tokens);
     const dim3 merge_grid(shape.query_heads, shape.batch);
     merge_decode_splits_kernel<T><<<merge_grid, 128, 0, stream>>>(
         partials, cu_q.data<std::int32_t>(), output.data<T>(), shape, splits);
   } else {
     flash_attn_vector_decode_kernel<T, D, false><<<grid, 128, 0, stream>>>(
-        query.data<T>(), key_cache.data<T>(), value_cache.data<T>(), key.data<T>(),
-        value.data<T>(), cu_q.data<std::int32_t>(), cu_k.data<std::int32_t>(),
-        table.data<std::int32_t>(), output.data<T>(), shape, causal, nullptr, 1, 0);
+        query.data<T>(), key_cache.data<T>(), value_cache.data<T>(),
+        key.data<T>(), value.data<T>(), cu_q.data<std::int32_t>(),
+        cu_k.data<std::int32_t>(), table.data<std::int32_t>(), output.data<T>(),
+        shape, causal, nullptr, 1, 0);
   }
 }
 
@@ -1029,7 +1072,8 @@ std::size_t flash_attn_workspace_elements(std::size_t max_batch,
   // Tensor partitions explicitly cap packed query/head/split rows at 16384,
   // independently of padding, GQA grouping, and query length.
   return max_batch > 0 && max_seqlen_k >= 256
-      ? std::max(decode, std::size_t{256 * 64} * (head_dim + 2)) : decode;
+             ? std::max(decode, std::size_t{256 * 64} * (head_dim + 2))
+             : decode;
 }
 
 std::size_t flash_attn_decode_workspace_elements(std::size_t max_batch,
@@ -1054,9 +1098,9 @@ std::size_t flash_attn_decode_workspace_elements(std::size_t max_batch,
   // D=256 can use grouped tensor-core decode. Without a KV-head argument,
   // reserve its worst case: at most 256 CTAs, 16 rows per CTA, 32 splits.
   if (head_dim == 256 && max_batch > 0 && max_seqlen_k >= 256) {
-    const auto rows = std::min(std::size_t{4096},
-        std::min(max_batch, std::size_t{128})
-        * std::min(query_heads, std::size_t{128}) * 32);
+    const auto rows = std::min(
+        std::size_t{4096}, std::min(max_batch, std::size_t{128})
+                               * std::min(query_heads, std::size_t{128}) * 32);
     elements = std::max(elements, rows * (head_dim + 2));
   }
   return elements;
@@ -1092,48 +1136,74 @@ void flash_attn_with_kvcache(
 
   detail::dispatch_float(query.dtype(), [&]<typename T>() {
     if constexpr (!std::is_same_v<T, float>) {
-      if ((shape.head_dim == 128 || shape.head_dim == 256) && tensor_attention_supported()) {
+      if ((shape.head_dim == 128 || shape.head_dim == 256)
+          && tensor_attention_supported()) {
         if (max_seqlen_q == 1 && shape.head_dim == 256) {
-          const int ts = workspace.data() != nullptr && max_seqlen_k >= 256
-              ? tensor_splits(shape.batch, shape.key_heads, shape.query_heads / shape.key_heads,
-                              max_seqlen_q, max_seqlen_k, 16, shape.query_tokens) : 1;
-          if (ts > 1 && (workspace.dtype() != DataType::Float32
-              || !same_device(query, workspace) || !workspace.is_contiguous()
-              || workspace.numel() < shape.query_tokens * shape.query_heads * ts * (shape.head_dim + 2)))
-            throw std::invalid_argument("tensor decode requires a sufficiently large FP32 workspace");
+          const int ts =
+              workspace.data() != nullptr && max_seqlen_k >= 256
+                  ? tensor_splits(shape.batch, shape.key_heads,
+                                  shape.query_heads / shape.key_heads,
+                                  max_seqlen_q, max_seqlen_k, 16,
+                                  shape.query_tokens)
+                  : 1;
+          if (ts > 1
+              && (workspace.dtype() != DataType::Float32
+                  || !same_device(query, workspace)
+                  || !workspace.is_contiguous()
+                  || workspace.numel() < shape.query_tokens * shape.query_heads
+                                             * ts * (shape.head_dim + 2)))
+            throw std::invalid_argument(
+                "tensor decode requires a sufficiently large FP32 workspace");
           if (ts > 1) {
-            launch_attn_tensor<T, 256, true, 4, 32, 4>(query, key_cache, value_cache, key, value,
-                cu_seqlens_q, cu_seqlens_k, block_table, output, shape, causal, stream,
+            launch_attn_tensor<T, 256, true, 4, 32, 4>(
+                query, key_cache, value_cache, key, value, cu_seqlens_q,
+                cu_seqlens_k, block_table, output, shape, causal, stream,
                 workspace.data<float>(), ts);
           } else {
-            launch_attn_tensor<T, 256, false, 4, 32, 4>(query, key_cache, value_cache, key, value,
-                cu_seqlens_q, cu_seqlens_k, block_table, output, shape, causal, stream,
+            launch_attn_tensor<T, 256, false, 4, 32, 4>(
+                query, key_cache, value_cache, key, value, cu_seqlens_q,
+                cu_seqlens_k, block_table, output, shape, causal, stream,
                 workspace.data<float>(), ts);
           }
         } else if (max_seqlen_q == 1) {
-          launch_attn_vector_decode<T, 128>(query, key_cache, value_cache, key, value,
-              cu_seqlens_q, cu_seqlens_k, block_table, output, shape, causal, stream,
+          launch_attn_vector_decode<T, 128>(
+              query, key_cache, value_cache, key, value, cu_seqlens_q,
+              cu_seqlens_k, block_table, output, shape, causal, stream,
               workspace.data<float>(), splits);
         } else {
-          const int ts = workspace.data() != nullptr
-              ? tensor_splits(shape.batch, shape.key_heads, shape.query_heads / shape.key_heads,
-                              max_seqlen_q, max_seqlen_k, shape.head_dim == 256 ? 128 : 64,
-                              shape.query_tokens) : 1;
-          if (ts > 1 && (workspace.dtype() != DataType::Float32
-              || !same_device(query, workspace) || !workspace.is_contiguous()
-              || workspace.numel() < shape.query_tokens * shape.query_heads * ts * (shape.head_dim + 2)))
-            throw std::invalid_argument("tensor Split-KV requires a sufficiently large FP32 workspace");
+          const int ts =
+              workspace.data() != nullptr
+                  ? tensor_splits(shape.batch, shape.key_heads,
+                                  shape.query_heads / shape.key_heads,
+                                  max_seqlen_q, max_seqlen_k,
+                                  shape.head_dim == 256 ? 128 : 64,
+                                  shape.query_tokens)
+                  : 1;
+          if (ts > 1
+              && (workspace.dtype() != DataType::Float32
+                  || !same_device(query, workspace)
+                  || !workspace.is_contiguous()
+                  || workspace.numel() < shape.query_tokens * shape.query_heads
+                                             * ts * (shape.head_dim + 2)))
+            throw std::invalid_argument(
+                "tensor Split-KV requires a sufficiently large FP32 workspace");
           const auto launch = [&]<int D, bool Split>() {
-            launch_attn_tensor<T, D, Split, D == 256 ? 8 : 4, D == 256 ? 16 : 32>(query, key_cache, value_cache, key, value,
-                cu_seqlens_q, cu_seqlens_k, block_table, output, shape, causal, stream,
+            launch_attn_tensor<T, D, Split, D == 256 ? 8 : 4,
+                               D == 256 ? 16 : 32>(
+                query, key_cache, value_cache, key, value, cu_seqlens_q,
+                cu_seqlens_k, block_table, output, shape, causal, stream,
                 workspace.data<float>(), ts);
           };
           if (shape.head_dim == 128) {
-            if (ts > 1) launch.template operator()<128, true>();
-            else launch.template operator()<128, false>();
+            if (ts > 1)
+              launch.template operator()<128, true>();
+            else
+              launch.template operator()<128, false>();
           } else {
-            if (ts > 1) launch.template operator()<256, true>();
-            else launch.template operator()<256, false>();
+            if (ts > 1)
+              launch.template operator()<256, true>();
+            else
+              launch.template operator()<256, false>();
           }
         }
         check_cuda(cudaGetLastError(), "launch specialized attention");

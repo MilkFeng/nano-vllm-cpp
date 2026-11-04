@@ -10,10 +10,11 @@
 
 namespace nanovllm {
 
-// Reusable temporary storage for one CUDA stream and one submitting host thread.
-// A block can be reused after its last Tensor owner is released: previously
-// submitted uses precede its next use on the same stream. Persistent tensors and
-// Tensor slices retain ownership, so their blocks are never handed out again.
+// Reusable temporary storage for one CUDA stream and one submitting host
+// thread. A block can be reused after its last Tensor owner is released:
+// previously submitted uses precede its next use on the same stream. Persistent
+// tensors and Tensor slices retain ownership, so their blocks are never handed
+// out again.
 class TensorPool final {
  public:
   TensorPool(Device device, cudaStream_t stream);
