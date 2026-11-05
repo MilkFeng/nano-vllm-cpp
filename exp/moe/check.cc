@@ -13,6 +13,7 @@
 #include "core/expert_policy.hh"
 #include "core/tensor_pool.hh"
 #include "layers/moe.hh"
+#include "models/qwen35.hh"
 
 using namespace nanovllm;
 
@@ -260,6 +261,111 @@ void check_executor(cudaStream_t first, cudaStream_t second) {
   compare(download(output.view().as_const(), first), expected);
 }
 
+void check_graphs(const std::vector<std::int32_t>& resident, bool shared,
+                    cudaStream_t first, cudaStream_t second) {
+  ThreadPool workers(4);
+  MoE moe({kHidden, kHidden, kExperts, kTopK, shared ? kHidden : 0}, workers,
+          Device::cuda(0), resident);
+  const auto dense = initialize(moe);
+  moe.populate_expert_cache(first);
+  auto input = Tensor::empty({1, kHidden}, DataType::Float32, Device::cuda(0));
+  ExpertUsage usage{std::vector<double>(kExperts)};
+  for (std::size_t step = 0; step < 32; ++step) {
+    const auto stream = step < 16 ? first : second;
+    if (step == 8 && !resident.empty() && moe.expert_cache().slot_of(1) < 0) {
+      const ExpertCacheReplacement swap{0, 1};
+      require(moe.replace_experts({&swap, 1}, stream, false) > 0,
+              "asynchronous expert replacement");
+    }
+    const auto values = input_values(1, step);
+    store(input.view(), values.data());
+    auto output = moe.forward(input.view().as_const(), stream, nullptr, &usage, true);
+    compare(download(output.hidden_states.view().as_const(), stream),
+            reference(moe, dense, values, 1, shared));
+    moe.check_async_error();
+    require(output.gpu_experts + output.cpu_experts == kTopK, "hybrid assignment counters");
+  }
+  require(usage.gpu_assignments + usage.cpu_assignments == 32 * kTopK,
+          "hybrid usage counters");
+}
+
+void check_state_graph(cudaStream_t stream, bool whole) {
+  ModelConfig config;
+  config.hidden_size = kHidden;
+  config.moe_intermediate_size = kHidden;
+  config.num_experts = kExperts;
+  config.num_experts_per_tok = kTopK;
+  config.shared_expert_intermediate_size = kHidden;
+  config.quantization_config = FP8QuantizationConfig{};
+  config.quantization_config->weight_block_size = {128, 128};
+  config.layer_types = {AttentionType::Linear};
+  config.linear_num_key_heads = 1;
+  config.linear_num_value_heads = 2;
+  config.linear_key_head_dim = 16;
+  config.linear_value_head_dim = 32;
+  config.linear_conv_kernel_dim = 3;
+  config.rms_norm_eps = 1e-6f;
+  ThreadPool workers(4);
+  MoEExecutionWorkspace work_a, work_b;
+  Qwen35DecoderLayer plain(config, 0, Device::cuda(0), {0, 2, 4}, workers, work_a);
+  Qwen35DecoderLayer graphed(config, 0, Device::cuda(0), {0, 2, 4}, workers, work_b);
+  initialize(plain);
+  initialize(graphed);
+  plain.mlp().populate_expert_cache(stream);
+  graphed.mlp().populate_expert_cache(stream);
+  auto conv_a = Tensor::empty({1, 96, 2}, DataType::Float32, Device::cuda(0));
+  auto conv_b = Tensor::empty({1, 96, 2}, DataType::Float32, Device::cuda(0));
+  auto state_a = Tensor::empty({1, 2, 16, 32}, DataType::Float32, Device::cuda(0));
+  auto state_b = Tensor::empty({1, 2, 16, 32}, DataType::Float32, Device::cuda(0));
+  for (auto* tensor : {&conv_a, &conv_b, &state_a, &state_b})
+    check_cuda(cudaMemsetAsync(tensor->data(), 0, tensor->size_bytes(), stream), "zero state graph check");
+  plain.linear_attention()->set_state_cache(conv_a.view(), state_a.view());
+  graphed.linear_attention()->set_state_cache(conv_b.view(), state_b.view());
+  auto input = Tensor::empty({1, kHidden}, DataType::Float32, Device::cuda(0));
+  auto slots = Tensor::empty({1}, DataType::Int32, Device::cuda(0));
+  const std::int32_t zero = 0;
+  store(slots.view(), &zero);
+  ForwardContext context;
+  context.state_indices = slots.view().as_const();
+  context.stream = stream;
+  WholeDecodeGraph whole_graph;
+  const std::array<TensorView, 2> states{conv_b.view(), state_b.view()};
+  for (std::size_t step = 0; step < 32; ++step) {
+    const auto values = input_values(1, step);
+    store(input.view(), values.data());
+    context.decode_graphs = false;
+    auto a = plain.forward({}, input.view().as_const(), input.view().as_const(), context);
+    context.decode_graphs = true;
+    Qwen35DecoderLayerOutput b;
+    if (whole) {
+      context.decode_graphs = false;
+      context.whole_graph = true;
+      auto result = whole_graph.run(stream, {input.data(), slots.data()}, states,
+          [&](bool capturing) -> std::vector<Tensor> {
+            auto captured = context;
+            captured.graph_warmup = !capturing;
+            auto out = graphed.forward({}, input.view().as_const(), input.view().as_const(), captured);
+            return {std::move(out.hidden_states), std::move(out.residual)};
+          }, [&] { graphed.mlp().reset_hybrid(); },
+          [&] { graphed.mlp().complete_hybrid_cpu(stream); },
+          [&] { graphed.mlp().abort_hybrid(); });
+      b = {std::move(result[0]), std::move(result[1])};
+    } else {
+      b = graphed.forward({}, input.view().as_const(), input.view().as_const(), context);
+    }
+    for (const auto pair : {std::pair{a.hidden_states.view().as_const(), b.hidden_states.view().as_const()},
+                            std::pair{a.residual.view().as_const(), b.residual.view().as_const()},
+                            std::pair{conv_a.view().as_const(), conv_b.view().as_const()},
+                            std::pair{state_a.view().as_const(), state_b.view().as_const()}}) {
+      const auto x = download(pair.first, stream), y = download(pair.second, stream);
+      require(x.size() == y.size() && std::memcmp(x.data(), y.data(), x.size() * sizeof(float)) == 0,
+              "graph changed decoder output or recurrent state");
+    }
+    graphed.mlp().check_async_error();
+    context.whole_graph = false;
+  }
+}
+
 } // namespace
 
 int main() {
@@ -274,10 +380,14 @@ int main() {
     for (bool shared : {false, true}) {
       for (const auto& ids : std::vector<std::vector<std::int32_t>>{
                {}, {0, 2, 4, 6, 8, 10, 12, 14},
-               {8, 9, 10, 11, 12, 13, 14, 15}, all})
+               {8, 9, 10, 11, 12, 13, 14, 15}, all}) {
         check_moe(ids, shared, first, second);
+        check_graphs(ids, shared, first, second);
+      }
     }
     check_executor(first, second);
+    check_state_graph(first, false);
+    check_state_graph(first, true);
     check_cuda(cudaStreamDestroy(second), "destroy second test stream");
     check_cuda(cudaStreamDestroy(first), "destroy first test stream");
     std::cout << "MoE async checks passed: CPU/mixed/GPU, shared experts, "

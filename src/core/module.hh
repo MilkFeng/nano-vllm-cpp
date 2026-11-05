@@ -50,6 +50,8 @@ class Module {
   [[nodiscard]] bool has_parameter(std::string_view full_name) const noexcept;
   [[nodiscard]] Parameter& parameter(std::string_view full_name);
   [[nodiscard]] const Parameter& parameter(std::string_view full_name) const;
+  [[nodiscard]] Module& module(std::string_view full_name);
+  [[nodiscard]] const Module& module(std::string_view full_name) const;
 
  private:
   void append_named_parameters(std::string_view prefix,

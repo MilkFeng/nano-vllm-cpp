@@ -3,6 +3,7 @@
 #include <cuda_runtime_api.h>
 
 #include <filesystem>
+#include <array>
 #include <memory>
 
 #include "core/model.hh"
@@ -50,5 +51,8 @@ class ModelRunner {
   cudaStream_t stream_ = nullptr;
   std::unique_ptr<TensorPool> temporary_pool_;
   std::uint64_t sample_step_ = 0;
+  std::array<Tensor, 7> whole_metadata_;
+  std::vector<TensorView> whole_states_;
+  WholeDecodeGraph whole_decode_;
 };
 } // namespace nanovllm

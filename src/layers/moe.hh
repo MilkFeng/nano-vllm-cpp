@@ -12,11 +12,14 @@
 #include "common/pinned_buffer.hh"
 #include "common/thread_pool.hh"
 #include "core/module.hh"
+#include "core/decode_graph.hh"
 #include "layers/linear.hh"
 #include "layers/swiglu_mlp.hh"
 #include "nanovllm/nanovllm.hh"
 
 namespace nanovllm {
+
+namespace kernels::cuda { struct FP8ExpertWeights; }
 
 struct ExpertUsage;
 
@@ -79,6 +82,7 @@ class FP8Expert final : public Module {
   void forward_into(ConstTensorView input, TensorView output,
                     FP8ExpertWorkspace& workspace,
                     cudaStream_t stream = nullptr) const;
+  [[nodiscard]] kernels::cuda::FP8ExpertWeights device_weights() const;
 
  private:
   Linear gate_, up_, down_;
@@ -107,6 +111,7 @@ class ExpertCache final {
  public:
   ExpertCache(const ExpertStore& source,
               std::vector<std::int32_t> resident_ids);
+  ~ExpertCache();
 
   ExpertCache(const ExpertCache&) = delete;
   ExpertCache& operator=(const ExpertCache&) = delete;
@@ -114,11 +119,12 @@ class ExpertCache final {
   ExpertCache& operator=(ExpertCache&&) = delete;
 
   void populate(cudaStream_t stream = nullptr);
-  // Call only between forwards. Reuses existing device allocations and publishes
-  // the new mapping after all weights and scales have finished copying.
+  // Call only between forwards. Default behavior completes uploads before
+  // returning. With synchronize=false, subsequent GPU uses must follow on the
+  // same stream; immutable RAM weights and routing staging stay alive.
   [[nodiscard]] std::size_t replace(
       std::span<const ExpertCacheReplacement> replacements,
-      cudaStream_t stream = nullptr);
+      cudaStream_t stream = nullptr, bool synchronize = true);
   void invalidate() noexcept;
 
   [[nodiscard]] int slot_of(std::size_t expert_id) const;
@@ -128,12 +134,17 @@ class ExpertCache final {
   [[nodiscard]] std::size_t size_bytes() const;
   [[nodiscard]] std::span<const std::int32_t> resident_ids() const noexcept;
   [[nodiscard]] const ExpertStore& source() const noexcept;
+  [[nodiscard]] ConstTensorView device_routes() const;
 
  private:
   const ExpertStore& source_;
   std::vector<std::int32_t> resident_ids_;
   std::vector<int> expert_to_slot_;
   std::vector<std::unique_ptr<FP8Expert>> slots_;
+  Tensor routes_;
+  PinnedHostBuffer host_routes_;
+  cudaEvent_t routes_ready_ = nullptr;
+  void publish_routes(cudaStream_t stream);
   bool ready_ = false;
 };
 
@@ -199,6 +210,7 @@ struct MoEOutput {
 
 class MoE final : public Module {
  public:
+  ~MoE() override;
   explicit MoE(
       MoEConfig config, ThreadPool& cpu_pool, Device device = Device::cuda(0),
       std::optional<std::vector<std::int32_t>> gpu_expert_ids = std::nullopt,
@@ -212,18 +224,28 @@ class MoE final : public Module {
   [[nodiscard]] MoEOutput forward(ConstTensorView hidden_states,
                                   cudaStream_t stream = nullptr,
                                   MoEPhaseProfile* profile = nullptr,
-                                  ExpertUsage* usage = nullptr) const;
+                                  ExpertUsage* usage = nullptr,
+                                  bool decode_graphs = false, bool defer_cpu = false,
+                                  bool graph_warmup = false) const;
 
   [[nodiscard]] std::size_t replace_experts(
       std::span<const ExpertCacheReplacement> replacements,
-      cudaStream_t stream = nullptr) const;
+      cudaStream_t stream = nullptr, bool synchronize = true) const;
 
   [[nodiscard]] const MoEConfig& config() const noexcept;
 
   [[nodiscard]] const ExpertStore& expert_store() const noexcept;
   [[nodiscard]] const ExpertCache& expert_cache() const;
+  void check_async_error() const;
+  void reset_hybrid() const;
+  void complete_hybrid_cpu(cudaStream_t stream) const;
+  void abort_hybrid() const noexcept;
 
  private:
+  struct HybridWorkspace;
+  [[nodiscard]] MoEOutput forward_hybrid(ConstTensorView input, cudaStream_t stream,
+                                          ExpertUsage* usage, bool defer_cpu,
+                                          bool graph_warmup) const;
   MoEConfig config_;
   Linear gate_;
   ExpertStore experts_;
@@ -233,6 +255,8 @@ class MoE final : public Module {
   MoEExecutionWorkspace* workspace_ = nullptr;
   std::unique_ptr<ExpertCache> cache_;
   std::unique_ptr<ExpertExecutor> executor_;
+  mutable std::unique_ptr<HybridWorkspace> hybrid_;
+  mutable DecodeGraph decode_prefix_;
 };
 
 } // namespace nanovllm

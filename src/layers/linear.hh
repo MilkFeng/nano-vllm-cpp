@@ -26,11 +26,15 @@ class Linear final : public Module {
   [[nodiscard]] Parameter* bias() noexcept;
   [[nodiscard]] const Parameter* bias() const noexcept;
 
+  // Retain checkpoint FP8 weights; activations, scaling and accumulation stay FP32.
+  void use_fp8_weight();
+
  private:
   std::size_t in_features_;
   std::size_t out_features_;
   Parameter weight_;
   std::unique_ptr<Parameter> bias_;
+  std::unique_ptr<Parameter> weight_scale_inv_;
 };
 
 } // namespace nanovllm

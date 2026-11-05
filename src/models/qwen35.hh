@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "core/expert_policy.hh"
+#include "core/decode_graph.hh"
 #include "core/model.hh"
 #include "core/model_config.hh"
 #include "layers/embedding.hh"
@@ -90,6 +91,7 @@ class Qwen35DecoderLayer final : public Module {
   std::unique_ptr<GatedDeltaNet> linear_attn_;
   MoE mlp_;
   RMSNorm input_layernorm_, post_attention_layernorm_;
+  mutable DecodeGraph decode_prefix_;
 };
 
 class Qwen35Model final : public Module {
@@ -116,10 +118,15 @@ class Qwen35Model final : public Module {
   [[nodiscard]] const std::vector<MoELayerProfile>& expert_profile()
       const noexcept;
   [[nodiscard]] ExpertAdaptationStats expert_adaptation_stats() const;
+  void finish_decode_step(cudaStream_t stream) const;
+  void reset_hybrid_step() const;
+  void run_hybrid_cpu(cudaStream_t stream) const;
+  void abort_hybrid_step() const noexcept;
 
  private:
+  void adapt_experts(cudaStream_t stream) const;
   // Workers and scratch storage outlive every executor.
-  ThreadPool cpu_pool_;
+  mutable ThreadPool cpu_pool_;
   mutable MoEExecutionWorkspace moe_workspace_;
   Embedding embed_tokens_;
   ModuleList layers_;

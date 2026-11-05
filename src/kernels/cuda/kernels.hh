@@ -4,6 +4,7 @@
 
 #include <cstddef>
 #include <optional>
+#include <span>
 
 #include "core/tensor_view.hh"
 
@@ -24,6 +25,23 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
 void linear_fp8(ConstTensorView input, ConstTensorView weight,
                 ConstTensorView weight_scale_inv, TensorView output,
                 cudaStream_t stream = nullptr);
+
+struct FP8ExpertWeights {
+  const std::uint8_t *gate, *up, *down;
+  const float *gate_scale, *up_scale, *down_scale;
+};
+struct FP8ExpertBatch {
+  FP8ExpertWeights weights[8];
+  unsigned rows[8];
+  unsigned count = 0;
+};
+// All resident decode experts in two launches: fused Gate/Up/SiLU, then Down.
+void fp8_experts_decode(ConstTensorView input, const FP8ExpertBatch& batch,
+                         TensorView activated, TensorView output,
+                         cudaStream_t stream = nullptr);
+void fp8_experts_decode_routed(ConstTensorView input, ConstTensorView ids,
+                                ConstTensorView routes, TensorView activated,
+                                TensorView output, cudaStream_t stream);
 
 // hidden state of the last token of each sequence
 //
@@ -234,6 +252,18 @@ void moe_scatter(ConstTensorView grouped, ConstTensorView order,
 //   expert_weights[tok][j] * expert_outputs[tok * topk + j][i])
 void moe_combine(ConstTensorView expert_outputs, ConstTensorView expert_weights,
                  TensorView output, cudaStream_t stream = nullptr);
+
+// CPU host-node rows are mapped and materialized in expert_outputs.
+void moe_combine_routed(TensorView expert_outputs, const float* cpu_parts,
+                          ConstTensorView ids, ConstTensorView routes,
+                          ConstTensorView expert_weights, TensorView output,
+                          ConstTensorView shared_output, ConstTensorView gate_logits,
+                          cudaStream_t stream, const volatile std::uint32_t* ready = nullptr,
+                          volatile std::uint32_t* error = nullptr);
+void moe_publish_decode(ConstTensorView input, ConstTensorView ids,
+                          float* mapped_input, std::int32_t* mapped_ids,
+                          volatile std::uint32_t* ready, cudaStream_t stream,
+                          bool publish_only = false);
 
 // shared_output: [tokens, hidden_size]
 // gate_logits:   [tokens, 1]

@@ -96,6 +96,7 @@ __global__ void route_kernel(const float* __restrict__ logits,
       weights[rank] /= selected_sum;
     }
   }
+
 }
 
 __global__ void moe_gather_kernel(const float* __restrict__ input,
@@ -166,6 +167,72 @@ __global__ void add_shared_kernel(const float* __restrict__ shared_output,
                                        : exponential / (1.0f + exponential);
     output[index] += weight * shared_output[index];
   }
+}
+
+__global__ void combine_mapped_kernel(float* parts, const float* cpu_parts,
+                                       const float* weights,
+                                       float* output, const float* shared,
+                                       const float* gate, std::size_t hidden,
+                                       std::size_t top_k,
+                                       const std::int32_t* ids,
+                                       const FP8ExpertWeights* routes,
+                                       const volatile std::uint32_t* ready,
+                                       volatile std::uint32_t* error) {
+  __shared__ int usable;
+  if (threadIdx.x == 0) {
+    usable = 1;
+    if (ready) {
+      unsigned long long start, now;
+      asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(start));
+      std::uint32_t value;
+      while ((value = *ready) == 0) {
+        __nanosleep(64);
+        asm volatile("mov.u64 %0, %%globaltimer;" : "=l"(now));
+        if (now - start > 200000000ull) {
+          if (error) error[blockIdx.x] = 1;
+          value = 2;
+          break;
+        }
+      }
+      __threadfence_system();
+      usable = value == 1;
+    }
+  }
+  __syncthreads();
+  const auto d = std::size_t(blockIdx.x) * blockDim.x + threadIdx.x;
+  if (d >= hidden) return;
+  if (!usable) { output[d] = 0; return; }
+  float sum = 0;
+  for (std::size_t rank = 0; rank < top_k; ++rank) {
+    float value;
+    const int cpu_row = routes[ids[rank]].gate ? -1 : int(rank);
+    if (cpu_row >= 0) {
+      value = cpu_parts[std::size_t(cpu_row) * hidden + d];
+      parts[rank * hidden + d] = value;
+    } else {
+      value = parts[rank * hidden + d];
+    }
+    sum += weights[rank] * value;
+  }
+  if (shared) {
+    const float logit = gate[0];
+    const float exponential = expf(-fabsf(logit));
+    const float weight = logit >= 0.0f ? 1.0f / (1.0f + exponential)
+                                       : exponential / (1.0f + exponential);
+    sum += weight * shared[d];
+  }
+  output[d] = sum;
+}
+
+__global__ void publish_decode_kernel(const float* input, const std::int32_t* ids,
+                                       float* host_input, std::int32_t* host_ids,
+                                       volatile std::uint32_t* ready,
+                                       std::size_t hidden, std::size_t top_k) {
+  for (std::size_t d = threadIdx.x; d < hidden; d += blockDim.x) host_input[d] = input[d];
+  for (std::size_t r = threadIdx.x; r < top_k; r += blockDim.x) host_ids[r] = ids[r];
+  __threadfence_system();
+  __syncthreads();
+  if (threadIdx.x == 0) *ready = 1;
 }
 
 } // namespace
@@ -316,6 +383,29 @@ void moe_add_shared(ConstTensorView shared_output, ConstTensorView gate_logits,
       shared_output.data<float>(), gate_logits.data<float>(),
       output.data<float>(), hidden_size, tokens);
   check_cuda(cudaGetLastError(), "MoE shared branch kernel launch");
+}
+
+void moe_combine_routed(TensorView expert_outputs, const float* cpu_parts,
+                          ConstTensorView ids, ConstTensorView routes,
+                          ConstTensorView expert_weights, TensorView output,
+                          ConstTensorView shared_output, ConstTensorView gate_logits,
+                          cudaStream_t stream, const volatile std::uint32_t* ready,
+                          volatile std::uint32_t* error) {
+  const auto hidden = output.shape()[1];
+  combine_mapped_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
+      expert_outputs.data<float>(), cpu_parts, expert_weights.data<float>(),
+      output.data<float>(), shared_output.data<float>(), gate_logits.data<float>(), hidden,
+      ids.numel(), ids.data<std::int32_t>(), reinterpret_cast<const FP8ExpertWeights*>(routes.data()), ready, error);
+  check_cuda(cudaGetLastError(), "routed mapped combine launch");
+}
+
+void moe_publish_decode(ConstTensorView input, ConstTensorView ids,
+                          float* mapped_input, std::int32_t* mapped_ids,
+                          volatile std::uint32_t* ready, cudaStream_t stream,
+                          bool publish_only) {
+  publish_decode_kernel<<<1, publish_only ? 1 : 256, 0, stream>>>(input.data<float>(), ids.data<std::int32_t>(),
+      mapped_input, mapped_ids, ready, publish_only ? 0 : input.shape()[1], publish_only ? 0 : ids.numel());
+  check_cuda(cudaGetLastError(), "publish mapped decode input");
 }
 
 } // namespace nanovllm::kernels::cuda

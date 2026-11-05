@@ -22,8 +22,8 @@ build/nano-vllm-cpp-bench \
     --num-blocks 32 \
     --block-size 16 \
     --max-batched-tokens 128 \
-    --cpu-threads 8 \
-    --gpu-expert-ids 0,2,4 \
+    --cpu-threads 7 --cpu-affinity \
+    --gpu-expert-ids 0,2,4,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58,60,62,64,66 \
     --expert-adapt-every 4 \
     --output "$OUTPUT_FILE"
 

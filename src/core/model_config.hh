@@ -76,8 +76,8 @@ struct ModelConfig {
   HiddenAct hidden_act = HiddenAct::SiLU;
   bool tie_word_embeddings = false;
 
-  // Dtype of unquantized checkpoint parameters. Qwen3.5 runtime currently
-  // expands BF16/FP8 into FP32; dtype must not be overwritten with FP8/F32.
+  // Dtype of unquantized checkpoint parameters, independent of activation and
+  // compact Linear storage dtypes; do not overwrite this with FP8/F32.
   DataType dtype = DataType::Float32;
 
   std::optional<FP8QuantizationConfig> quantization_config;

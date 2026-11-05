@@ -326,6 +326,7 @@ int main(int argc, char** argv) {
           const nanovllm::SamplingParams sampling{.temperature = 0,
                                                   .max_tokens = output_length,
                                                   .ignore_eos = true};
+          Json token_ids;
           const auto run = [&](std::size_t round,
                                nanovllm::GenerationMetrics* metrics) {
             std::vector<std::vector<std::int32_t>> prompts(
@@ -337,7 +338,9 @@ int main(int argc, char** argv) {
                 prompts[request][token] = seed[(token + request) % seed.size()];
             }
             const auto outputs = engine.generate(prompts, sampling, metrics);
+            token_ids = Json::array();
             for (const auto& output : outputs) {
+              token_ids.push_back(output.token_ids);
               if (output.token_ids.size() != output_length) {
                 throw std::runtime_error(
                     "generation did not reach requested output length");
@@ -349,7 +352,9 @@ int main(int argc, char** argv) {
           for (std::size_t i = 0; i < options.repeat; ++i) {
             nanovllm::GenerationMetrics metrics;
             run(i, &metrics);
-            runs.push_back(serialize(metrics));
+            auto record = serialize(metrics);
+            record["token_ids"] = token_ids;
+            runs.push_back(std::move(record));
           }
           auto summary = summarize(runs);
           std::cout

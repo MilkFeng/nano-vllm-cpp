@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <functional>
@@ -47,6 +48,16 @@ class ThreadPool final {
   [[nodiscard]] TaskGroup submit_batch(std::span<const Task> tasks);
   [[nodiscard]] ScopedCpuAffinity bind_caller() const;
 
+  class BusyScope final {
+   public:
+    explicit BusyScope(ThreadPool& pool, bool enabled = true);
+    ~BusyScope();
+    BusyScope(const BusyScope&) = delete;
+    BusyScope& operator=(const BusyScope&) = delete;
+   private:
+    ThreadPool* pool_;
+  };
+
  private:
   struct QueueItem {
     std::packaged_task<void()> single;
@@ -59,6 +70,8 @@ class ThreadPool final {
   std::queue<QueueItem> tasks_;
   std::vector<std::thread> workers_;
   std::optional<unsigned> caller_cpu_;
+  std::atomic<bool> work_available_{false};
+  std::atomic<unsigned> active_scopes_{0};
   bool stopping_ = false;
 };
 } // namespace nanovllm

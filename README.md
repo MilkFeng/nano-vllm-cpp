@@ -125,6 +125,9 @@ prefill/decode 各自的路由频率、专家聚合 token 数分布和整段 MoE
 显存峰值和正确性检查见[运行时性能记录](docs/runtime-workspace-performance.md)。
 单 token MoE 合并路由与输入下载、共享专家提前提交和异步返回的实现与验证见
 [MoE 同步优化](docs/moe-synchronization.md)。
+Qwen3.5 单序列 greedy 的整步异构 Decode Graph、逐轮测速和数值检查见
+[Decode 性能记录](docs/decode30-performance.md)。曾测到均值 32.37 tok/s，
+后续复核未稳定达到 30 tok/s；目前已按用户要求停止继续优化。
 
 计时口径：
 
@@ -201,12 +204,12 @@ python3 tests/benchmark_test.py --model "$HOME/models/Qwen3-0.6B"
 包含分块 prefill 中的序列。35B-A3B 当前每个槽位约 62.8 MiB；不要沿用 dense
 Qwen3 的默认值 512，这会仅为 linear 状态分配约 31.4 GiB。日志分别显示 K/V
 字节数、状态槽位与状态字节数、每层 GPU 专家数。可加 `--gpu-expert-ids 0,2`，
-两个 FP32 routed 专家在 40 层共增加约 960 MiB 常驻权重。
+两个 FP8 routed 专家在 40 层共增加约 240 MiB 常驻权重及少量 scale。
 
-这条命令给出运行接口，完整 35B 尚未在本机验证：当前 WSL 只有 22 GiB RAM，
-仅全部 routed FP8 权重就约 30 GiB，需先让 WSL 使用足够的物理内存。模型加载
-后非专家参数、激活和累加仍使用 FP32；GPU routed 专家保留 FP8 权重和 FP32
-scale，计算时在 FP32 GEMM 内融合 FP8 权重反量化。
+完整 35B 已在约 39 GiB RAM 的 WSL2 上验证单序列运行，配置和结果见
+[Decode 性能记录](docs/decode30-performance.md)。全部 routed FP8 权重约 30 GiB，
+加载还会使用页缓存和 staging。GPU 投影保留 FP8 权重和 FP32 scale，LM head
+保留 checkpoint 的 BF16 存储；读取后以 FP32 计算。其他非专家参数、激活和累加仍为 FP32。
 KV 和递推状态也在 GPU，尚未放到系统 RAM。
 
 ### C++ 聊天模板接口
@@ -268,7 +271,7 @@ Token IDs → Embedding
 
 内部 CUDA 算子只接受连续 Tensor，并使用调用线程已经选好的 device 0。通用模型配置约束，以及模型和算子内部的 shape、dtype 和索引约束使用 Debug 断言；Qwen3 支持范围、用户参数和 CUDA/cuBLAS 运行错误在 Release 中也会检查。缓冲区重叠关系由调用者保证。RoPE 直接原地修改 Q/K。
 
-当前支持 CUDA device 0 上的 dense Qwen3 与文本 Qwen3.5 MoE，支持单文件及分片 safetensors、未缩放的 RoPE，以及偶数且不超过 256 的 full attention head dimension。Attention 是用于打通计算链路的基础实现；FlashAttention 级优化、CUDA Graph 和张量并行仍待实现。KV 块数由命令行或 `EngineParams` 手动指定。
+当前支持 CUDA device 0 上的 dense Qwen3 与文本 Qwen3.5 MoE，支持单文件及分片 safetensors、未缩放的 RoPE，以及偶数且不超过 256 的 full attention head dimension。Attention 的优化范围见实验记录；Qwen3.5 单序列 greedy decode 已接入整步 CUDA Graph，其他阶段及 dense Qwen3 尚未接入整步图，张量并行仍待实现。KV 块数由命令行或 `EngineParams` 手动指定。
 
 FP16/BF16 的舍入会受 GEMM 的 batch 大小影响；候选分数接近时，生成 token 可能随批量配置变化，也不保证与 Transformers 逐 token 相同。当前融合 residual 和 RMSNorm 的计算顺序沿用 nano-vllm。
 
@@ -592,9 +595,8 @@ prefill。现有 prefix cache 只保存 K/V 块，不能复用 GatedDeltaNet 的
 
 按 35B-A3B 的 10 个 full 层和 30 个 linear 层计算，当前 FP32 K/V 每个逻辑
 token 占 40 KiB；linear 状态每个序列约 62.8 MiB，与上下文长度无关。
-非专家权重展开和全部 FP8 routed 专家仍需足够的 VRAM/RAM；本次验证环境的
-WSL 只分到 22 GiB RAM，未加载完整 35B 模型。以后运行整模型前需确认 WSL
-确实能使用机器的 48 GiB 内存。
+早期小模型验证时，WSL 只有 22 GiB RAM，未加载完整 35B。后续约 39 GiB RAM
+环境的整模型运行与紧凑 GPU 权重实现见 [Decode 性能记录](docs/decode30-performance.md)。
 
 ### Engine 中的序列状态槽位
 

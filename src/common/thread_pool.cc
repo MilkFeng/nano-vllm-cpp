@@ -1,6 +1,8 @@
 #include "common/thread_pool.hh"
 
 #include <algorithm>
+#include <chrono>
+#include <immintrin.h>
 #include <latch>
 #include <stdexcept>
 #include <utility>
@@ -27,7 +29,15 @@ ThreadPool::TaskGroup& ThreadPool::TaskGroup::operator=(TaskGroup&& other) noexc
   return *this;
 }
 void ThreadPool::TaskGroup::wait_noexcept() const noexcept {
-  if (state_) state_->remaining.wait();
+  if (!state_ || state_->remaining.try_wait()) return;
+  const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(500);
+  while (!state_->remaining.try_wait()) {
+    for (int i = 0; i < 32; ++i) _mm_pause();
+    if (std::chrono::steady_clock::now() >= until) {
+      state_->remaining.wait();
+      break;
+    }
+  }
 }
 void ThreadPool::TaskGroup::wait() const {
   wait_noexcept();
@@ -66,6 +76,19 @@ ThreadPool::~ThreadPool() { stop(); }
 ScopedCpuAffinity ThreadPool::bind_caller() const {
   return ScopedCpuAffinity(caller_cpu_);
 }
+ThreadPool::BusyScope::BusyScope(ThreadPool& pool, bool enabled)
+    : pool_(enabled ? &pool : nullptr) {
+  if (pool_) {
+    {
+      std::lock_guard lock(pool_->mutex_);
+      pool_->active_scopes_.fetch_add(1, std::memory_order_release);
+    }
+    pool_->ready_.notify_all();
+  }
+}
+ThreadPool::BusyScope::~BusyScope() {
+  if (pool_) pool_->active_scopes_.fetch_sub(1, std::memory_order_release);
+}
 std::future<void> ThreadPool::submit(std::function<void()> task) {
   std::packaged_task<void()> packaged(std::move(task));
   auto result = packaged.get_future();
@@ -73,6 +96,7 @@ std::future<void> ThreadPool::submit(std::function<void()> task) {
     std::lock_guard lock(mutex_);
     if (stopping_) throw std::logic_error("cannot submit to a stopped pool");
     tasks_.push({std::move(packaged), {}});
+    work_available_.store(true, std::memory_order_release);
   }
   ready_.notify_one();
   return result;
@@ -87,6 +111,7 @@ ThreadPool::TaskGroup ThreadPool::submit_batch(std::span<const Task> tasks) {
     std::lock_guard lock(mutex_);
     if (stopping_) throw std::logic_error("cannot submit to a stopped pool");
     tasks_.push({{}, state});
+    work_available_.store(true, std::memory_order_release);
   }
   if (tasks.size() >= (workers_.size() + 1) / 2) {
     // One OS wake operation for the common top-8 batch. Repeated notify_one
@@ -104,8 +129,28 @@ void ThreadPool::run() {
     Task task{};
     {
       std::unique_lock lock(mutex_);
-      ready_.wait(lock, [this] { return stopping_ || !tasks_.empty(); });
-      if (tasks_.empty()) return;
+      if (tasks_.empty() && !stopping_) {
+        // Consecutive MoE layers arrive within a millisecond. Brief polling
+        // avoids an OS sleep/wake on each layer, then yields to the usual CV
+        // when the engine is idle. Queue ownership still uses the mutex.
+        lock.unlock();
+        const auto until = std::chrono::steady_clock::now()
+                           + std::chrono::milliseconds(1);
+        while (!work_available_.load(std::memory_order_acquire)) {
+          for (int i = 0; i < 32; ++i) _mm_pause();
+          if (active_scopes_.load(std::memory_order_acquire) == 0
+              && std::chrono::steady_clock::now() >= until) break;
+        }
+        lock.lock();
+      }
+      ready_.wait(lock, [this] {
+        return stopping_ || !tasks_.empty()
+               || active_scopes_.load(std::memory_order_acquire) != 0;
+      });
+      if (tasks_.empty()) {
+        if (stopping_) return;
+        continue;
+      }
       auto& item = tasks_.front();
       if (item.batch) {
         batch = item.batch;
@@ -115,6 +160,7 @@ void ThreadPool::run() {
         single = std::move(item.single);
         tasks_.pop();
       }
+      work_available_.store(!tasks_.empty() || stopping_, std::memory_order_release);
     }
     if (!batch) {
       single();
@@ -133,6 +179,7 @@ void ThreadPool::stop() noexcept {
   {
     std::lock_guard lock(mutex_);
     stopping_ = true;
+    work_available_.store(true, std::memory_order_release);
   }
   ready_.notify_all();
   for (auto& worker : workers_) worker.join();

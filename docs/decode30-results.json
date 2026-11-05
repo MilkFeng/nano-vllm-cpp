@@ -1,0 +1,179 @@
+{
+  "status": "paused_at_user_request",
+  "target_tok_s": 30,
+  "stable_target_verified": false,
+  "latest_record": "diagnostic-dma33",
+  "note": "Different development-stage builds; diagnostic results include light CPU timing. No final uninstrumented acceptance of the latest code.",
+  "records": [
+    {
+      "source": "profile/decode30-20261105/before.json",
+      "instrumented": false,
+      "completed": true,
+      "warmup": 1,
+      "repeat": 3,
+      "initial_gpu_experts_per_layer": 3,
+      "cpu_threads": 8,
+      "cpu_affinity": false,
+      "decode_tok_s": [
+        13.337520652493046,
+        14.457341532350052,
+        14.663019780603385
+      ],
+      "arithmetic_mean_tok_s": 14.152627321815494,
+      "min_tok_s": 13.337520652493046,
+      "max_tok_s": 14.663019780603385,
+      "model_load_seconds": 126.394342304
+    },
+    {
+      "source": "profile/decode30-20261105/compact3.json",
+      "instrumented": false,
+      "completed": true,
+      "warmup": 1,
+      "repeat": 3,
+      "initial_gpu_experts_per_layer": 3,
+      "cpu_threads": 8,
+      "cpu_affinity": false,
+      "decode_tok_s": [
+        18.363883469629762,
+        18.53218203853877,
+        17.48265379590794
+      ],
+      "arithmetic_mean_tok_s": 18.12623976802549,
+      "min_tok_s": 17.48265379590794,
+      "max_tok_s": 18.53218203853877,
+      "model_load_seconds": 83.657409163
+    },
+    {
+      "source": "profile/decode30-20261105/fast-poll33.json",
+      "instrumented": false,
+      "completed": true,
+      "warmup": 1,
+      "repeat": 3,
+      "initial_gpu_experts_per_layer": 33,
+      "cpu_threads": 7,
+      "cpu_affinity": true,
+      "decode_tok_s": [
+        20.390959236383775,
+        23.298624940032386,
+        22.282200091612445
+      ],
+      "arithmetic_mean_tok_s": 21.99059475600954,
+      "min_tok_s": 20.390959236383775,
+      "max_tok_s": 23.298624940032386,
+      "model_load_seconds": 112.428544102,
+      "tokens_match_reference": true,
+      "compared_output_tokens": 384
+    },
+    {
+      "source": "profile/decode30-20261105/whole33.json",
+      "instrumented": false,
+      "completed": true,
+      "warmup": 1,
+      "repeat": 3,
+      "initial_gpu_experts_per_layer": 33,
+      "cpu_threads": 7,
+      "cpu_affinity": true,
+      "decode_tok_s": [
+        30.871846903491118,
+        32.486737373242235,
+        33.74634578060079
+      ],
+      "arithmetic_mean_tok_s": 32.368310019111384,
+      "min_tok_s": 30.871846903491118,
+      "max_tok_s": 33.74634578060079,
+      "model_load_seconds": 84.666228323,
+      "tokens_match_reference": true,
+      "compared_output_tokens": 384
+    },
+    {
+      "source": "profile/decode30-20261105/final-confirm33.json",
+      "instrumented": false,
+      "completed": true,
+      "warmup": 1,
+      "repeat": 3,
+      "initial_gpu_experts_per_layer": 33,
+      "cpu_threads": 7,
+      "cpu_affinity": true,
+      "decode_tok_s": [
+        23.345011896730192,
+        26.097141232638368,
+        30.825168094605193
+      ],
+      "arithmetic_mean_tok_s": 26.755773741324585,
+      "min_tok_s": 23.345011896730192,
+      "max_tok_s": 30.825168094605193,
+      "model_load_seconds": 102.248766773,
+      "tokens_match_reference": true,
+      "compared_output_tokens": 384
+    },
+    {
+      "source": "profile/decode30-20261105/diagnostic33.json",
+      "instrumented": true,
+      "completed": true,
+      "warmup": 1,
+      "repeat": 5,
+      "initial_gpu_experts_per_layer": 33,
+      "cpu_threads": 7,
+      "cpu_affinity": true,
+      "decode_tok_s": [
+        24.31073932022383,
+        22.76332853611899,
+        29.713094882962743,
+        30.943851371990085,
+        31.101925523392804
+      ],
+      "arithmetic_mean_tok_s": 27.76658792693769,
+      "min_tok_s": 22.76332853611899,
+      "max_tok_s": 31.101925523392804,
+      "model_load_seconds": 123.204663643,
+      "tokens_match_reference": true,
+      "compared_output_tokens": 640
+    },
+    {
+      "source": "profile/decode30-20261105/diagnostic-busy33.json",
+      "instrumented": true,
+      "completed": true,
+      "warmup": 1,
+      "repeat": 5,
+      "initial_gpu_experts_per_layer": 33,
+      "cpu_threads": 7,
+      "cpu_affinity": true,
+      "decode_tok_s": [
+        26.45619762922118,
+        29.465766092686763,
+        29.932923770722205,
+        26.154614787122952,
+        30.401290967696795
+      ],
+      "arithmetic_mean_tok_s": 28.482158649489982,
+      "min_tok_s": 26.154614787122952,
+      "max_tok_s": 30.401290967696795,
+      "model_load_seconds": 103.846784979,
+      "tokens_match_reference": true,
+      "compared_output_tokens": 640
+    },
+    {
+      "source": "profile/decode30-20261105/diagnostic-dma33.json",
+      "instrumented": true,
+      "completed": true,
+      "warmup": 1,
+      "repeat": 5,
+      "initial_gpu_experts_per_layer": 33,
+      "cpu_threads": 7,
+      "cpu_affinity": true,
+      "decode_tok_s": [
+        27.212271697126468,
+        23.9418519964961,
+        27.649867157911423,
+        29.563149013326115,
+        29.67306235319891
+      ],
+      "arithmetic_mean_tok_s": 27.608040443611806,
+      "min_tok_s": 23.9418519964961,
+      "max_tok_s": 29.67306235319891,
+      "model_load_seconds": 107.366772109,
+      "tokens_match_reference": true,
+      "compared_output_tokens": 640
+    }
+  ]
+}

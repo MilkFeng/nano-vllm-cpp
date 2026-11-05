@@ -271,7 +271,86 @@ __global__ void matmul_kernel(const float* __restrict__ input,
   }
 }
 
+__global__ void expert_gate_up_kernel(const float* input, FP8ExpertBatch batch,
+                                       float* activated, std::size_t hidden,
+                                       std::size_t intermediate,
+                                       const FP8ExpertWeights* routes = nullptr,
+                                       const std::int32_t* ids = nullptr) {
+  const auto expert = blockIdx.y;
+  const auto n = std::size_t(blockIdx.x) * kWarps + threadIdx.x / 32;
+  const auto lane = threadIdx.x % 32;
+  if (n >= intermediate) return;
+  const auto weights = routes ? routes[ids[expert]] : batch.weights[expert];
+  if (!weights.gate) return;
+  const auto blocks = (hidden + 127) / 128;
+  float gate = 0, up = 0;
+  for (std::size_t k = lane * 4; k < hidden; k += 128) {
+    const auto x = load_input4_or_zero(input, 1, hidden, 0, k);
+    const auto index = (n / 128) * blocks + k / 128;
+    const auto g = dequantize4(load_weight4_or_zero(weights.gate, intermediate, hidden, n, k, hidden), weights.gate_scale[index]);
+    const auto u = dequantize4(load_weight4_or_zero(weights.up, intermediate, hidden, n, k, hidden), weights.up_scale[index]);
+    gate = fmaf(x.x, g.x, gate); gate = fmaf(x.y, g.y, gate);
+    gate = fmaf(x.z, g.z, gate); gate = fmaf(x.w, g.w, gate);
+    up = fmaf(x.x, u.x, up); up = fmaf(x.y, u.y, up);
+    up = fmaf(x.z, u.z, up); up = fmaf(x.w, u.w, up);
+  }
+  gate = detail::warp_sum_reduce<float, false>(gate);
+  up = detail::warp_sum_reduce<float, false>(up);
+  if (lane == 0) activated[expert * intermediate + n] = (gate / (1.0f + __expf(-gate))) * up;
+}
+
+__global__ void expert_down_kernel(const float* activated, FP8ExpertBatch batch,
+                                    float* output, std::size_t hidden,
+                                    std::size_t intermediate,
+                                    const FP8ExpertWeights* routes = nullptr,
+                                    const std::int32_t* ids = nullptr) {
+  const auto expert = blockIdx.y;
+  const auto n = std::size_t(blockIdx.x) * kWarps + threadIdx.x / 32;
+  const auto lane = threadIdx.x % 32;
+  if (n >= hidden) return;
+  const auto weights = routes ? routes[ids[expert]] : batch.weights[expert];
+  if (!weights.down) return;
+  const auto blocks = (intermediate + 127) / 128;
+  float sum = 0;
+  for (std::size_t k = lane * 4; k < intermediate; k += 128) {
+    const auto x = load_input4_or_zero(activated, batch.count, intermediate, expert, k);
+    const auto w = dequantize4(load_weight4_or_zero(weights.down, hidden, intermediate, n, k, intermediate), weights.down_scale[(n / 128) * blocks + k / 128]);
+    sum = fmaf(x.x, w.x, sum); sum = fmaf(x.y, w.y, sum);
+    sum = fmaf(x.z, w.z, sum); sum = fmaf(x.w, w.w, sum);
+  }
+  sum = detail::warp_sum_reduce<float, false>(sum);
+  if (lane == 0) output[std::size_t(routes ? expert : batch.rows[expert]) * hidden + n] = sum;
+}
+
 } // namespace
+
+void fp8_experts_decode(ConstTensorView input, const FP8ExpertBatch& batch,
+                         TensorView activated, TensorView output, cudaStream_t stream) {
+  assert(batch.count > 0 && batch.count <= 8);
+  assert(input.rank() == 2 && input.shape()[0] == 1);
+  assert(input.dtype() == DataType::Float32 && same_dtype(input, activated, output));
+  assert(activated.rank() == 2 && activated.shape()[0] >= batch.count);
+  const auto hidden = input.shape()[1], intermediate = activated.shape()[1];
+  expert_gate_up_kernel<<<dim3((intermediate + 3) / 4, batch.count), 128, 0, stream>>>(input.data<float>(), batch, activated.data<float>(), hidden, intermediate);
+  check_cuda(cudaGetLastError(), "batched FP8 Gate/Up decode launch");
+  expert_down_kernel<<<dim3((hidden + 3) / 4, batch.count), 128, 0, stream>>>(activated.data<float>(), batch, output.data<float>(), hidden, intermediate);
+  check_cuda(cudaGetLastError(), "batched FP8 Down decode launch");
+}
+
+void fp8_experts_decode_routed(ConstTensorView input, ConstTensorView ids,
+                                ConstTensorView routes, TensorView activated,
+                                TensorView output, cudaStream_t stream) {
+  FP8ExpertBatch batch{};
+  batch.count = ids.numel();
+  const auto hidden = input.shape()[1], intermediate = activated.shape()[1];
+  const auto* table = reinterpret_cast<const FP8ExpertWeights*>(routes.data());
+  expert_gate_up_kernel<<<dim3((intermediate + 3) / 4, batch.count), 128, 0, stream>>>(
+      input.data<float>(), batch, activated.data<float>(), hidden, intermediate, table, ids.data<std::int32_t>());
+  check_cuda(cudaGetLastError(), "routed FP8 Gate/Up launch");
+  expert_down_kernel<<<dim3((hidden + 3) / 4, batch.count), 128, 0, stream>>>(
+      activated.data<float>(), batch, output.data<float>(), hidden, intermediate, table, ids.data<std::int32_t>());
+  check_cuda(cudaGetLastError(), "routed FP8 Down launch");
+}
 
 void linear_fp8(ConstTensorView input, ConstTensorView weight,
                 ConstTensorView weight_scale_inv, TensorView output,

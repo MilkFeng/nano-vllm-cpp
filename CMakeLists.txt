@@ -205,3 +205,7 @@ add_executable(nano-vllm-cpp-moe-sync-check EXCLUDE_FROM_ALL exp/moe/check.cc)
 target_include_directories(nano-vllm-cpp-moe-sync-check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(nano-vllm-cpp-moe-sync-check PRIVATE
   nano-vllm-cpp::nano-vllm-cpp CUDA::cudart nlohmann_json::nlohmann_json)
+
+add_executable(nano-vllm-cpp-compact-check EXCLUDE_FROM_ALL exp/gemm/check_compact.cc)
+target_include_directories(nano-vllm-cpp-compact-check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(nano-vllm-cpp-compact-check PRIVATE nano-vllm-cpp::nano-vllm-cpp CUDA::cudart)
