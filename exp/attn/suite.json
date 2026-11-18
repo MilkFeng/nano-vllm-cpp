@@ -139,7 +139,7 @@
     {
       "name": "dense_prefill_append_attention",
       "runner_task": "prefill",
-      "custom": "same production API in src/kernels/cuda/attention.cu",
+      "custom": "same production API in src/kernels/cuda/attn/attn.cu",
       "shapes": "full.prefill",
       "page_assignment": "identity; dense K/V are zero-copy views of the same cache",
       "baselines": [

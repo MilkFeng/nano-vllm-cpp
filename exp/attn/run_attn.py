@@ -63,7 +63,8 @@ def save(path, document):
 def source_hashes():
     files = [
         ROOT / "CMakeLists.txt",
-        ROOT / "src/kernels/cuda/attention.cu",
+        ROOT / "src/kernels/cuda/attn/attn.cu",
+        ROOT / "src/kernels/cuda/wmma_ext.cuh",
         ROOT / "src/kernels/cuda/common.cuh",
         ROOT / "src/kernels/cuda/reduce.cuh",
         ROOT / "src/kernels/cuda/kernels.hh",
@@ -73,6 +74,7 @@ def source_hashes():
         ROOT / "src/models/qwen3.cc",
         ROOT / "src/models/qwen35.cc",
     ]
+    files += sorted((ROOT / "src/kernels/cuda/attn").glob("*.cuh"))
     for pattern in ("*.py", "*.cc", "*.cu", "*.hh", "suite.json"):
         files += sorted(Path(__file__).parent.glob(pattern))
     return {str(path.relative_to(ROOT)): sha256(path) for path in files}

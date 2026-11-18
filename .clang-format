@@ -21,3 +21,4 @@ AllowShortIfStatementsOnASingleLine: WithoutElse
 SpaceBeforeParens: ControlStatements
 SpaceInEmptyParentheses: false
 SpacesInAngles: Never
+InsertBraces: true

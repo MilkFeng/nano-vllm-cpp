@@ -53,7 +53,9 @@ std::shared_ptr<Storage> TensorPool::acquire(std::size_t bytes) {
       best = &block;
     }
   }
-  if (best) return *best;
+  if (best) {
+    return *best;
+  }
 
   // Size classes bound retained storage when ragged batches grow a few tokens
   // at a time, instead of retaining a separate block for every observed size.

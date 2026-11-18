@@ -1,8 +1,8 @@
 # Attention 比较
 
-自定义侧直接调用 **`src/kernels/cuda/attention.cu`** 的
+自定义侧直接调用 **`src/kernels/cuda/attn/attn.cu`** 的
 `nanovllm::kernels::cuda::flash_attn_with_kvcache()`。
-`attn_bridge.cc` include 项目的 `kernels/cuda/kernels.hh`，CMake 将该原始 `.cu` 与
+`attn_bridge.cc` include 项目的 `kernels/cuda/kernels.hh`，CMake 将该入口及同目录实现头文件与
 TensorView 支持代码构建为实验共享库。`exp/attn` 不包含另一份 CUDA attention
 算法，也没有复制、冻结或改写生产 kernel。
 
@@ -41,7 +41,7 @@ FP32、其他 D 及不支持该 Tensor Core 配置的 GPU 保留原 SIMT 路径�
 引擎在 capture 外用 **`flash_attn_workspace_elements(max_batch, Hq, D, max_k)`**
 分配通用 FP32 工作区，覆盖所有 query 长度和不超过 max_batch 的 batch。
 Tensor 分片的 packed query/head/split 行数上限为 16384；D=128/256 的工作区约
-8.1/16.1 MiB。旧 `flash_attn_decode_workspace_elements()` 仍只保证 decode 容量。
+8.1/16.1 MiB。
 不传工作区时使用单阶段路径；传入不足的工作区会拒绝调用。
 工作区按 stream 独立拥有、生命周期覆盖 Graph 重放。
 
@@ -88,7 +88,7 @@ softmax 最大值和分母，第二个 kernel 稳定归并。分片数随 batch�
 仍走单阶段路径。Prefill 的计算路径保持不变。
 
 `flash_attn_with_kvcache()` 末尾增加可选 FP32 `workspace`；不提供时仍支持原单 block 调用。
-使用 `flash_attn_decode_workspace_elements(max_batch, Hq, D, max_k)` 查询容量，返回的是
+统一使用 `flash_attn_workspace_elements(max_batch, Hq, D, max_k)` 查询容量，返回的是
 **float 元素数**，覆盖所有不超过 `max_batch` 的 batch，避免只按最大 batch 估算导致小 batch
 分片更多时容量不足。工作区在 capture 外分配，生命周期覆盖 stream/Graph 使用，
 不同并发 stream 使用不同工作区。引擎已预分配并通过 `ForwardContext` 传入，两种 Qwen 模型

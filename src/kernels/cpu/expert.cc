@@ -76,9 +76,9 @@ void expert_forward(ConstTensorView input, const ExpertWeights& weights,
 
   if (tokens == 1) {
     fp8_gate_up(gate, up, gate_scale, up_scale, x, intermediate_size,
-                 hidden_size, block_size, activated.data());
+                hidden_size, block_size, activated.data());
     fp8_matvec(down, down_scale, activated.data(), hidden_size,
-                intermediate_size, block_size, result);
+               intermediate_size, block_size, result);
     return;
   }
 

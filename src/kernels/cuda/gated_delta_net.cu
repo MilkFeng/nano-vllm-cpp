@@ -65,10 +65,15 @@ __global__ void conv_kernel(const float* input, const float* weight,
       const auto n = static_cast<std::size_t>(token) * channels + channel;
       const float current = input[n];
       float sum = current * weight[channel * kernel + kernel - 1];
-      for (std::size_t j = 0; j + 1 < kernel; ++j)
+      for (std::size_t j = 0; j + 1 < kernel; ++j) {
         sum += history[j] * weight[channel * kernel + j];
-      for (std::size_t j = 0; j + 2 < kernel; ++j) history[j] = history[j + 1];
-      if (kernel > 1) history[kernel - 2] = current;
+      }
+      for (std::size_t j = 0; j + 2 < kernel; ++j) {
+        history[j] = history[j + 1];
+      }
+      if (kernel > 1) {
+        history[kernel - 2] = current;
+      }
       output[n] = sum / (1.0f + expf(-sum));
     }
   }

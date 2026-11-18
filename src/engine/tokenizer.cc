@@ -180,7 +180,9 @@ std::optional<std::string> read_token_string(const nlohmann::json& config,
 std::optional<std::int32_t> resolve_token_id(
     const std::optional<std::string>& token, std::string_view field,
     const TokenizerBackend& backend) {
-  if (!token) return std::nullopt;
+  if (!token) {
+    return std::nullopt;
+  }
   const auto token_id = backend.token_to_id(*token);
   if (token_id < 0) {
     throw std::runtime_error(

@@ -26,7 +26,8 @@ class Linear final : public Module {
   [[nodiscard]] Parameter* bias() noexcept;
   [[nodiscard]] const Parameter* bias() const noexcept;
 
-  // Retain checkpoint FP8 weights; activations, scaling and accumulation stay FP32.
+  // Retain checkpoint FP8 weights; activations, scaling and accumulation stay
+  // FP32.
   void use_fp8_weight();
 
  private:

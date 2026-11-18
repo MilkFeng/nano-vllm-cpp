@@ -2,8 +2,8 @@
 
 #include <cuda_runtime_api.h>
 
-#include <filesystem>
 #include <array>
+#include <filesystem>
 #include <memory>
 
 #include "core/model.hh"

@@ -60,29 +60,34 @@ struct LoadPlan {
 };
 
 void retain_checkpoint_weights(Module& module, const Checkpoint& checkpoint,
-                                std::string_view prefix) {
+                               std::string_view prefix) {
   // Snapshot the registry before adding each Linear's scale parameter.
   for (const auto& [name, parameter] : module.named_parameters()) {
     if (!name.ends_with("weight")
-        || parameter->view().device().type != DeviceType::Cuda) continue;
+        || parameter->view().device().type != DeviceType::Cuda) {
+      continue;
+    }
     const auto source_name = std::string(prefix) + "." + name;
     const auto& source = checkpoint.tensor(source_name);
     if (!std::ranges::equal(source.shape, parameter->view().shape())) {
-      throw std::runtime_error("unexpected checkpoint weight shape: " + source_name);
+      throw std::runtime_error("unexpected checkpoint weight shape: "
+                               + source_name);
     }
     const auto separator = name.rfind('.');
-    auto& owner = module.module(separator == std::string::npos
-                                   ? std::string_view{}
-                                   : std::string_view(name).substr(0, separator));
+    auto& owner =
+        module.module(separator == std::string::npos
+                          ? std::string_view{}
+                          : std::string_view(name).substr(0, separator));
     if (source.dtype == DataType::Float8E4M3FN) {
-      if (auto* linear = dynamic_cast<Linear*>(&owner); linear && !linear->bias()) {
+      if (auto* linear = dynamic_cast<Linear*>(&owner);
+          linear && !linear->bias()) {
         linear->use_fp8_weight();
       }
     } else if (source.dtype == DataType::BFloat16
                && dynamic_cast<LMHead*>(&owner)
                && parameter->view().dtype() != DataType::BFloat16) {
-      parameter->tensor() = Tensor::empty(source.shape, source.dtype,
-                                          parameter->view().device());
+      parameter->tensor() =
+          Tensor::empty(source.shape, source.dtype, parameter->view().device());
     }
   }
 }
@@ -112,7 +117,8 @@ LoadPlan plan_load(Module& module, const Checkpoint& checkpoint,
 
     if (destination.dtype() == DataType::Float8E4M3FN) {
       if (source.dtype != DataType::Float8E4M3FN) {
-        throw std::runtime_error("compact FP8 weight requires an FP8 checkpoint");
+        throw std::runtime_error(
+            "compact FP8 weight requires an FP8 checkpoint");
       }
     } else if (source.dtype == DataType::Float8E4M3FN) {
       if (source.shape.size() != 2 || !entry.name.ends_with(".weight")) {
@@ -386,7 +392,8 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
     RMSNormOutput before;
     auto residual_view = hidden_states;
     if (residual) {
-      before = input_layernorm_.forward(hidden_states, *residual, context.stream);
+      before =
+          input_layernorm_.forward(hidden_states, *residual, context.stream);
       residual_view = before.residual.view().as_const();
     } else {
       before.hidden_states =
@@ -395,22 +402,26 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
 
     auto attention =
         self_attn_
-            ? self_attn_->forward(positions,
-                                  before.hidden_states.view().as_const(), context)
+            ? self_attn_->forward(
+                  positions, before.hidden_states.view().as_const(), context)
             : linear_attn_->forward(before.hidden_states.view().as_const(),
                                     context);
-    auto after = post_attention_layernorm_.forward(attention.view().as_const(),
-                                                   residual_view, context.stream);
+    auto after = post_attention_layernorm_.forward(
+        attention.view().as_const(), residual_view, context.stream);
     return {std::move(after.hidden_states), std::move(after.residual)};
   };
-  auto after = context.decode_graphs && linear_attn_
-                   ? decode_prefix_.run(context.stream,
-                         {hidden_states.data(), residual ? residual->data() : nullptr,
-                          context.state_indices.data(), linear_attn_->conv_state().data(),
-                          linear_attn_->recurrent_state().data()}, prefix)
-                   : prefix();
-  auto output = mlp_.forward(after[0].view().as_const(),
-                             context.stream, profile, usage, context.decode_graphs,
+  auto after =
+      context.decode_graphs && linear_attn_
+          ? decode_prefix_.run(
+                context.stream,
+                {hidden_states.data(), residual ? residual->data() : nullptr,
+                 context.state_indices.data(),
+                 linear_attn_->conv_state().data(),
+                 linear_attn_->recurrent_state().data()},
+                prefix)
+          : prefix();
+  auto output = mlp_.forward(after[0].view().as_const(), context.stream,
+                             profile, usage, context.decode_graphs,
                              context.whole_graph, context.graph_warmup);
 
   return {std::move(output.hidden_states), std::move(after[1])};
@@ -459,7 +470,9 @@ Qwen35Model::Qwen35Model(const ModelConfig& config, Device device,
 }
 
 void Qwen35Model::reset_expert_profile() {
-  for (auto& layer : expert_profile_) layer = {};
+  for (auto& layer : expert_profile_) {
+    layer = {};
+  }
   adaptation_stats_ = {};
   expert_adaptation_.reset_assignment_stats();
 }
@@ -505,8 +518,9 @@ Tensor Qwen35Model::forward(ConstTensorView input_ids,
     residual = std::move(output.residual);
   }
 
-  if (!context.is_prefill && !context.decode_graphs && !context.whole_graph)
+  if (!context.is_prefill && !context.decode_graphs && !context.whole_graph) {
     adapt_experts(context.stream);
+  }
 
   auto normalized = norm_.forward(hidden.view().as_const(),
                                   residual.view().as_const(), context.stream);
@@ -514,20 +528,28 @@ Tensor Qwen35Model::forward(ConstTensorView input_ids,
 }
 
 void Qwen35Model::finish_decode_step(cudaStream_t stream) const {
-  for (std::size_t i = 0; i < layers_.size(); ++i) layer(i).mlp().check_async_error();
+  for (std::size_t i = 0; i < layers_.size(); ++i) {
+    layer(i).mlp().check_async_error();
+  }
   adapt_experts(stream);
 }
 
 void Qwen35Model::reset_hybrid_step() const {
-  for (std::size_t i = 0; i < layers_.size(); ++i) layer(i).mlp().reset_hybrid();
+  for (std::size_t i = 0; i < layers_.size(); ++i) {
+    layer(i).mlp().reset_hybrid();
+  }
 }
 void Qwen35Model::run_hybrid_cpu(cudaStream_t stream) const {
   const auto affinity = cpu_pool_.bind_caller();
   ThreadPool::BusyScope keep_workers(cpu_pool_);
-  for (std::size_t i = 0; i < layers_.size(); ++i) layer(i).mlp().complete_hybrid_cpu(stream);
+  for (std::size_t i = 0; i < layers_.size(); ++i) {
+    layer(i).mlp().complete_hybrid_cpu(stream);
+  }
 }
 void Qwen35Model::abort_hybrid_step() const noexcept {
-  for (std::size_t i = 0; i < layers_.size(); ++i) layer(i).mlp().abort_hybrid();
+  for (std::size_t i = 0; i < layers_.size(); ++i) {
+    layer(i).mlp().abort_hybrid();
+  }
 }
 
 void Qwen35Model::adapt_experts(cudaStream_t stream) const {
@@ -541,8 +563,11 @@ void Qwen35Model::adapt_experts(cudaStream_t stream) const {
     const auto swaps = expert_adaptation_.plan(placement);
     for (std::size_t i = 0; i < layers_.size(); ++i) {
       std::vector<ExpertCacheReplacement> replacements;
-      for (const auto& swap : swaps)
-        if (swap.layer == i) replacements.push_back({swap.slot, swap.new_id});
+      for (const auto& swap : swaps) {
+        if (swap.layer == i) {
+          replacements.push_back({swap.slot, swap.new_id});
+        }
+      }
       if (!replacements.empty()) {
         adaptation_stats_.bytes_uploaded +=
             layer(i).mlp().replace_experts(replacements, stream, false);
@@ -555,7 +580,6 @@ void Qwen35Model::adapt_experts(cudaStream_t stream) const {
                                      std::chrono::steady_clock::now() - started)
                                      .count();
   }
-
 }
 
 void Qwen35Model::set_cache(Qwen35Cache& cache) {
@@ -574,10 +598,11 @@ void Qwen35Model::set_cache(Qwen35Cache& cache) {
 
 void Qwen35Model::clear_cache() noexcept {
   for (std::size_t i = 0; i < layers_.size(); ++i) {
-    if (auto* attention = layer(i).self_attention())
+    if (auto* attention = layer(i).self_attention()) {
       attention->clear_kv_cache();
-    else
+    } else {
       layer(i).linear_attention()->clear_state_cache();
+    }
   }
 }
 

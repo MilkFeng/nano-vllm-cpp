@@ -5,12 +5,11 @@
 
 #include "kernels/cpu/fp8_dot.hh"
 
-namespace nanovllm::kernels::cpu::detail {
-namespace {
+namespace nanovllm::kernels::cpu::detail { namespace {
 
 float reduce8(__m256 sum) {
-  auto v = _mm_add_ps(_mm256_castps256_ps128(sum),
-                       _mm256_extractf128_ps(sum, 1));
+  auto v =
+      _mm_add_ps(_mm256_castps256_ps128(sum), _mm256_extractf128_ps(sum, 1));
   v = _mm_hadd_ps(v, v);
   v = _mm_hadd_ps(v, v);
   return _mm_cvtss_f32(v);
@@ -27,7 +26,9 @@ void tile(const std::uint8_t* weight, const std::uint8_t* up,
   Wide up_sums[Rows];
   [&]<std::size_t... R>(std::index_sequence<R...>) {
     ((sums[R] = zero()), ...);
-    if constexpr (GateUp) ((up_sums[R] = zero()), ...);
+    if constexpr (GateUp) {
+      ((up_sums[R] = zero()), ...);
+    }
   }(indices);
   const auto blocks = columns / 128;
   for (std::size_t block = 0; block < blocks; ++block) {
@@ -44,20 +45,23 @@ void tile(const std::uint8_t* weight, const std::uint8_t* up,
     for (std::size_t col = block * 128; col < (block + 1) * 128; col += 16) {
       const auto x = load(input + col);
       [&]<std::size_t... R>(std::index_sequence<R...>) {
-        ((sums[R] = madd(decode(weight + (first + R) * columns + col),
-                          scale[R], x, sums[R])), ...);
+        ((sums[R] = madd(decode(weight + (first + R) * columns + col), scale[R],
+                         x, sums[R])),
+         ...);
         if constexpr (GateUp) {
           ((up_sums[R] = madd(decode(up + (first + R) * columns + col),
-                               up_scale[R], x, up_sums[R])), ...);
+                              up_scale[R], x, up_sums[R])),
+           ...);
         }
       }(indices);
     }
   }
   [&]<std::size_t... R>(std::index_sequence<R...>) {
     if constexpr (GateUp) {
-      ((output[first + R] = (reduce(sums[R]) /
-                            (1.0f + std::exp(-reduce(sums[R])))) *
-                           reduce(up_sums[R])), ...);
+      ((output[first + R] =
+            (reduce(sums[R]) / (1.0f + std::exp(-reduce(sums[R]))))
+            * reduce(up_sums[R])),
+       ...);
     } else {
       ((output[first + R] = reduce(sums[R])), ...);
     }
@@ -98,11 +102,10 @@ void gate_up_impl(const std::uint8_t* gate, const std::uint8_t* up,
     const auto offset = (row / block_size) * blocks;
     const auto g = fp8_dot_kernel(gate + row * columns, gate_scale + offset,
                                   input, columns, block_size);
-    const auto u = fp8_dot_kernel(up + row * columns, up_scale + offset,
-                                  input, columns, block_size);
+    const auto u = fp8_dot_kernel(up + row * columns, up_scale + offset, input,
+                                  columns, block_size);
     activated[row] = (g / (1.0f + std::exp(-g))) * u;
   }
 }
 
-} // namespace
-} // namespace nanovllm::kernels::cpu::detail
+}} // namespace nanovllm::kernels::cpu::detail

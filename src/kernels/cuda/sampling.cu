@@ -67,7 +67,9 @@ __global__ void sample_kernel(const T* __restrict__ logits,
 
     __syncthreads();
     if (temperature == 0.0f) {
-      if (threadIdx.x == 0) output[row] = greedy_index;
+      if (threadIdx.x == 0) {
+        output[row] = greedy_index;
+      }
       continue;
     }
 

@@ -28,8 +28,9 @@ Scheduler::Scheduler(std::size_t num_blocks, std::size_t block_size,
     throw std::invalid_argument("scheduler limits must be positive");
   }
   if (use_recurrent_state_) {
-    for (std::size_t slot = 0; slot < max_num_seqs_; ++slot)
+    for (std::size_t slot = 0; slot < max_num_seqs_; ++slot) {
       free_state_slots_.push_back(slot);
+    }
   }
 }
 
@@ -221,7 +222,9 @@ void Scheduler::postprocess(const Scheduled& scheduled,
 
 void Scheduler::clear() {
   for (auto& seq : sequences_) {
-    if (!seq.block_ids.empty()) block_manager_.deallocate(seq);
+    if (!seq.block_ids.empty()) {
+      block_manager_.deallocate(seq);
+    }
     release_state_slot(seq);
   }
   sequences_.clear();

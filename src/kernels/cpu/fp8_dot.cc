@@ -9,8 +9,8 @@
 #include <cassert>
 #include <utility>
 
-#include "kernels/cpu/fp8_dequant.hh"
 #include "kernels/cpu/fp8_decode.hh"
+#include "kernels/cpu/fp8_dequant.hh"
 
 namespace nanovllm::kernels::cpu {
 namespace {

@@ -12,7 +12,6 @@
 
 #include "attn_bridge.hh"
 #include "common/cuda_utils.hh"
-#include "kernels/cuda/kernels.hh"
 
 namespace {
 
@@ -128,12 +127,6 @@ void check_case(int type, int heads, int kv_heads, int dimension, int queries,
   std::uint64_t workspace_elements = 0;
   if (nano_attn_workspace_size(&arguments, &workspace_elements) != 0) {
     throw std::runtime_error(nano_attn_error());
-  }
-  if (queries == 1) {
-    // Existing callers of the decode-only sizing API must remain valid after
-    // dispatching D=256 decode to grouped tensor-core partitions.
-    workspace_elements = nanovllm::kernels::cuda::flash_attn_decode_workspace_elements(
-        1, heads, dimension, keys);
   }
   Buffer workspace((workspace_elements + 2 * guard) * sizeof(float));
   upload(workspace, std::vector<float>(workspace_elements + 2 * guard, -37.0f), stream);

@@ -204,8 +204,10 @@ std::vector<std::int32_t> ModelRunner::run(
                          && config_.architecture == ModelArchitecture::Qwen35Moe
                          && config_.num_experts_per_tok <= 8
                          && !params_.profile_experts && temperatures[0] == 0.0f;
-  if (use_whole)
-    table_width = (params_.max_model_len + params_.kvcache_block_size - 1) / params_.kvcache_block_size;
+  if (use_whole) {
+    table_width = (params_.max_model_len + params_.kvcache_block_size - 1)
+                  / params_.kvcache_block_size;
+  }
   std::vector<std::int32_t> tables(seqs.size() * table_width, -1);
   for (std::size_t i = 0; i < seqs.size(); ++i) {
     for (std::size_t j = 0; j < seqs[i]->block_ids.size(); ++j) {
@@ -237,9 +239,13 @@ std::vector<std::int32_t> ModelRunner::run(
     Tensor tensor;
     if (use_whole) {
       auto& cached = whole_metadata_[metadata_index++];
-      if (cached.numel() == 0) cached = Tensor::empty(std::move(shape), dtype, model_->device());
+      if (cached.numel() == 0) {
+        cached = Tensor::empty(std::move(shape), dtype, model_->device());
+      }
       tensor = cached;
-    } else tensor = Tensor::empty(std::move(shape), dtype, model_->device());
+    } else {
+      tensor = Tensor::empty(std::move(shape), dtype, model_->device());
+    }
     if (!data.empty()) {
       check_cuda(
           cudaMemcpyAsync(tensor.data(), data.data(), tensor.size_bytes(),
@@ -259,7 +265,8 @@ std::vector<std::int32_t> ModelRunner::run(
 
   ForwardContext context;
   context.is_prefill = prefill;
-  context.decode_graphs = decode_graphs && !prefill && ids.size() == 1 && !use_whole;
+  context.decode_graphs =
+      decode_graphs && !prefill && ids.size() == 1 && !use_whole;
   context.whole_graph = use_whole;
   context.cu_seqlens_q = boundaries_q.view().as_const();
   context.cu_seqlens_k = boundaries_k.view().as_const();
@@ -286,8 +293,11 @@ std::vector<std::int32_t> ModelRunner::run(
       std::size_t linear = 0;
       for (const auto type : config_.layer_types) {
         if (type == AttentionType::Linear) {
-          whole_states_.push_back(hybrid_cache_->conv_state(linear).slice(0, state_ids[0], 1));
-          whole_states_.push_back(hybrid_cache_->recurrent_state(linear++).slice(0, state_ids[0], 1));
+          whole_states_.push_back(
+              hybrid_cache_->conv_state(linear).slice(0, state_ids[0], 1));
+          whole_states_.push_back(
+              hybrid_cache_->recurrent_state(linear++).slice(0, state_ids[0],
+                                                             1));
         }
       }
       // Decode writes only the current, fresh KV slot. The actual replay
@@ -296,15 +306,22 @@ std::vector<std::int32_t> ModelRunner::run(
     const auto function = [&](bool capturing) -> std::vector<Tensor> {
       auto captured_context = context;
       captured_context.graph_warmup = !capturing;
-      auto hidden = model_->forward(input_ids.view().as_const(), input_positions.view().as_const(), captured_context);
-      auto logits = model_->compute_logits(hidden.view().as_const(), captured_context);
+      auto hidden =
+          model_->forward(input_ids.view().as_const(),
+                          input_positions.view().as_const(), captured_context);
+      auto logits =
+          model_->compute_logits(hidden.view().as_const(), captured_context);
       auto token = Tensor::empty({1}, DataType::Int32, model_->device());
-      kernels::cuda::sample(logits.view().as_const(), temperature.view().as_const(), token.view(), params_.seed, 0, stream_);
+      kernels::cuda::sample(logits.view().as_const(),
+                            temperature.view().as_const(), token.view(),
+                            params_.seed, 0, stream_);
       return {std::move(token)};
     };
-    auto tensors = whole_decode_.run(stream_, {input_ids.data(), block_tables.data(), state_indices.data()},
+    auto tensors = whole_decode_.run(
+        stream_, {input_ids.data(), block_tables.data(), state_indices.data()},
         whole_states_, function, [&] { transformer.reset_hybrid_step(); },
-        [&] { transformer.run_hybrid_cpu(stream_); }, [&] { transformer.abort_hybrid_step(); });
+        [&] { transformer.run_hybrid_cpu(stream_); },
+        [&] { transformer.abort_hybrid_step(); });
     output = std::move(tensors[0]);
     ++sample_step_;
   } else {
@@ -313,18 +330,23 @@ std::vector<std::int32_t> ModelRunner::run(
     auto logits = model_->compute_logits(hidden.view().as_const(), context);
 
     output = Tensor::empty({seqs.size()}, DataType::Int32, model_->device());
-    kernels::cuda::sample(logits.view().as_const(), temperature.view().as_const(),
-                          output.view(), params_.seed, sample_step_++, stream_);
+    kernels::cuda::sample(logits.view().as_const(),
+                          temperature.view().as_const(), output.view(),
+                          params_.seed, sample_step_++, stream_);
   }
 
   check_cuda(cudaMemcpyAsync(result.data(), output.data(), output.size_bytes(),
                              cudaMemcpyDeviceToHost, stream_),
              "download sampled tokens");
   check_cuda(cudaStreamSynchronize(stream_), "complete inference step");
-  if ((context.decode_graphs || use_whole) && config_.architecture == ModelArchitecture::Qwen35Moe) {
-    static_cast<Qwen35ForCausalLM&>(*model_).transformer().finish_decode_step(stream_);
-    if (params_.expert_adaptation.every != 0)
-      check_cuda(cudaStreamSynchronize(stream_), "complete graph expert replacements");
+  if ((context.decode_graphs || use_whole)
+      && config_.architecture == ModelArchitecture::Qwen35Moe) {
+    static_cast<Qwen35ForCausalLM&>(*model_).transformer().finish_decode_step(
+        stream_);
+    if (params_.expert_adaptation.every != 0) {
+      check_cuda(cudaStreamSynchronize(stream_),
+                 "complete graph expert replacements");
+    }
   }
   return result;
 }

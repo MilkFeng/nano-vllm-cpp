@@ -61,7 +61,7 @@ TTFT 单独报告，不能将预热带来的加载、页面或 kernel 初始化�
 
 ## 3. Attention：区分 prefill 与 paged decode
 
-当前 `attention.cu` 支持 FP32/FP16/BF16，Qwen 模型运行链路主要使用 FP32。
+当前 `src/kernels/cuda/attn/attn.cu` 支持 FP32/FP16/BF16，Qwen 模型运行链路主要使用 FP32。
 FP16/BF16、D=128/256 已新增 Tensor Core MMA、GQA KV 复用、异步搬运和
 prefill/decode Split-KV；FP32 及其他维度仍使用 SIMT。全部路径包含新 KV 写入。
 性能结论及适用范围以 [attention 实验记录](../exp/attn/README.md) 为准，不能把

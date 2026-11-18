@@ -126,15 +126,19 @@ Module& Module::module(std::string_view full_name) {
 }
 
 const Module& Module::module(std::string_view full_name) const {
-  if (full_name.empty()) return *this;
+  if (full_name.empty()) {
+    return *this;
+  }
   const auto separator = full_name.find('.');
   const auto found = modules_.find(full_name.substr(0, separator));
   if (found == modules_.end()) {
-    throw std::out_of_range("module was not registered: " + std::string(full_name));
+    throw std::out_of_range("module was not registered: "
+                            + std::string(full_name));
   }
   return separator == std::string_view::npos
              ? *found->second
-             : std::as_const(*found->second).module(full_name.substr(separator + 1));
+             : std::as_const(*found->second)
+                   .module(full_name.substr(separator + 1));
 }
 
 void Module::append_named_parameters(std::string_view prefix,

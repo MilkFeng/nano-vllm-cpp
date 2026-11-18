@@ -41,7 +41,9 @@ bool Device::is_valid() const {
       return index == 0;
 
     case DeviceType::Cuda: {
-      if (index < 0) return false;
+      if (index < 0) {
+        return false;
+      }
 
       int device_count = 0;
       check_cuda(cudaGetDeviceCount(&device_count),

@@ -19,13 +19,17 @@ namespace nanovllm {
 
 class ThreadPool final {
   struct BatchState;
+
  public:
   explicit ThreadPool(std::size_t num_threads, bool physical_affinity = false);
   ~ThreadPool();
   ThreadPool(const ThreadPool&) = delete;
   ThreadPool& operator=(const ThreadPool&) = delete;
 
-  struct Task { void (*function)(void*); void* argument; };
+  struct Task {
+    void (*function)(void*);
+    void* argument;
+  };
   class TaskGroup final {
    public:
     TaskGroup() = default;
@@ -36,6 +40,7 @@ class ThreadPool final {
     TaskGroup& operator=(const TaskGroup&) = delete;
     void wait() const;
     void wait_noexcept() const noexcept;
+
    private:
     friend class ThreadPool;
     explicit TaskGroup(std::shared_ptr<BatchState> state);
@@ -54,6 +59,7 @@ class ThreadPool final {
     ~BusyScope();
     BusyScope(const BusyScope&) = delete;
     BusyScope& operator=(const BusyScope&) = delete;
+
    private:
     ThreadPool* pool_;
   };

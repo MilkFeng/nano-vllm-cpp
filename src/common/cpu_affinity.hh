@@ -17,6 +17,7 @@ class ScopedCpuAffinity final {
   ~ScopedCpuAffinity();
   ScopedCpuAffinity(const ScopedCpuAffinity&) = delete;
   ScopedCpuAffinity& operator=(const ScopedCpuAffinity&) = delete;
+
  private:
   struct Saved;
   std::unique_ptr<Saved> saved_;

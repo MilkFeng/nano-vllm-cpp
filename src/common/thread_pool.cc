@@ -1,8 +1,9 @@
 #include "common/thread_pool.hh"
 
+#include <immintrin.h>
+
 #include <algorithm>
 #include <chrono>
-#include <immintrin.h>
 #include <latch>
 #include <stdexcept>
 #include <utility>
@@ -10,7 +11,8 @@
 namespace nanovllm {
 struct ThreadPool::BatchState {
   explicit BatchState(std::span<const Task> jobs)
-      : tasks(jobs.begin(), jobs.end()), remaining(jobs.size()) {}
+      : tasks(jobs.begin(), jobs.end()),
+        remaining(jobs.size()) {}
   std::vector<Task> tasks;
   std::size_t next = 0; // Protected by the pool queue mutex.
   std::latch remaining;
@@ -19,9 +21,12 @@ struct ThreadPool::BatchState {
 };
 ThreadPool::TaskGroup::TaskGroup(std::shared_ptr<BatchState> state)
     : state_(std::move(state)) {}
-ThreadPool::TaskGroup::~TaskGroup() { wait_noexcept(); }
+ThreadPool::TaskGroup::~TaskGroup() {
+  wait_noexcept();
+}
 ThreadPool::TaskGroup::TaskGroup(TaskGroup&&) noexcept = default;
-ThreadPool::TaskGroup& ThreadPool::TaskGroup::operator=(TaskGroup&& other) noexcept {
+ThreadPool::TaskGroup& ThreadPool::TaskGroup::operator=(
+    TaskGroup&& other) noexcept {
   if (this != &other) {
     wait_noexcept();
     state_ = std::move(other.state_);
@@ -29,10 +34,15 @@ ThreadPool::TaskGroup& ThreadPool::TaskGroup::operator=(TaskGroup&& other) noexc
   return *this;
 }
 void ThreadPool::TaskGroup::wait_noexcept() const noexcept {
-  if (!state_ || state_->remaining.try_wait()) return;
-  const auto until = std::chrono::steady_clock::now() + std::chrono::microseconds(500);
+  if (!state_ || state_->remaining.try_wait()) {
+    return;
+  }
+  const auto until =
+      std::chrono::steady_clock::now() + std::chrono::microseconds(500);
   while (!state_->remaining.try_wait()) {
-    for (int i = 0; i < 32; ++i) _mm_pause();
+    for (int i = 0; i < 32; ++i) {
+      _mm_pause();
+    }
     if (std::chrono::steady_clock::now() >= until) {
       state_->remaining.wait();
       break;
@@ -41,7 +51,9 @@ void ThreadPool::TaskGroup::wait_noexcept() const noexcept {
 }
 void ThreadPool::TaskGroup::wait() const {
   wait_noexcept();
-  if (state_ && state_->error) std::rethrow_exception(state_->error);
+  if (state_ && state_->error) {
+    std::rethrow_exception(state_->error);
+  }
 }
 
 ThreadPool::ThreadPool(std::size_t num_threads, bool physical_affinity) {
@@ -72,7 +84,9 @@ ThreadPool::ThreadPool(std::size_t num_threads, bool physical_affinity) {
     throw;
   }
 }
-ThreadPool::~ThreadPool() { stop(); }
+ThreadPool::~ThreadPool() {
+  stop();
+}
 ScopedCpuAffinity ThreadPool::bind_caller() const {
   return ScopedCpuAffinity(caller_cpu_);
 }
@@ -87,14 +101,18 @@ ThreadPool::BusyScope::BusyScope(ThreadPool& pool, bool enabled)
   }
 }
 ThreadPool::BusyScope::~BusyScope() {
-  if (pool_) pool_->active_scopes_.fetch_sub(1, std::memory_order_release);
+  if (pool_) {
+    pool_->active_scopes_.fetch_sub(1, std::memory_order_release);
+  }
 }
 std::future<void> ThreadPool::submit(std::function<void()> task) {
   std::packaged_task<void()> packaged(std::move(task));
   auto result = packaged.get_future();
   {
     std::lock_guard lock(mutex_);
-    if (stopping_) throw std::logic_error("cannot submit to a stopped pool");
+    if (stopping_) {
+      throw std::logic_error("cannot submit to a stopped pool");
+    }
     tasks_.push({std::move(packaged), {}});
     work_available_.store(true, std::memory_order_release);
   }
@@ -102,14 +120,20 @@ std::future<void> ThreadPool::submit(std::function<void()> task) {
   return result;
 }
 ThreadPool::TaskGroup ThreadPool::submit_batch(std::span<const Task> tasks) {
-  if (tasks.empty()) return {};
+  if (tasks.empty()) {
+    return {};
+  }
   for (const auto& task : tasks) {
-    if (!task.function) throw std::invalid_argument("null CPU task function");
+    if (!task.function) {
+      throw std::invalid_argument("null CPU task function");
+    }
   }
   auto state = std::make_shared<BatchState>(tasks);
   {
     std::lock_guard lock(mutex_);
-    if (stopping_) throw std::logic_error("cannot submit to a stopped pool");
+    if (stopping_) {
+      throw std::logic_error("cannot submit to a stopped pool");
+    }
     tasks_.push({{}, state});
     work_available_.store(true, std::memory_order_release);
   }
@@ -118,7 +142,9 @@ ThreadPool::TaskGroup ThreadPool::submit_batch(std::span<const Task> tasks) {
     // calls can cost more than the queue operations, especially under WSL.
     ready_.notify_all();
   } else {
-    for (std::size_t i = 0; i < tasks.size(); ++i) ready_.notify_one();
+    for (std::size_t i = 0; i < tasks.size(); ++i) {
+      ready_.notify_one();
+    }
   }
   return TaskGroup(std::move(state));
 }
@@ -134,12 +160,16 @@ void ThreadPool::run() {
         // avoids an OS sleep/wake on each layer, then yields to the usual CV
         // when the engine is idle. Queue ownership still uses the mutex.
         lock.unlock();
-        const auto until = std::chrono::steady_clock::now()
-                           + std::chrono::milliseconds(1);
+        const auto until =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
         while (!work_available_.load(std::memory_order_acquire)) {
-          for (int i = 0; i < 32; ++i) _mm_pause();
+          for (int i = 0; i < 32; ++i) {
+            _mm_pause();
+          }
           if (active_scopes_.load(std::memory_order_acquire) == 0
-              && std::chrono::steady_clock::now() >= until) break;
+              && std::chrono::steady_clock::now() >= until) {
+            break;
+          }
         }
         lock.lock();
       }
@@ -148,19 +178,24 @@ void ThreadPool::run() {
                || active_scopes_.load(std::memory_order_acquire) != 0;
       });
       if (tasks_.empty()) {
-        if (stopping_) return;
+        if (stopping_) {
+          return;
+        }
         continue;
       }
       auto& item = tasks_.front();
       if (item.batch) {
         batch = item.batch;
         task = batch->tasks[batch->next++];
-        if (batch->next == batch->tasks.size()) tasks_.pop();
+        if (batch->next == batch->tasks.size()) {
+          tasks_.pop();
+        }
       } else {
         single = std::move(item.single);
         tasks_.pop();
       }
-      work_available_.store(!tasks_.empty() || stopping_, std::memory_order_release);
+      work_available_.store(!tasks_.empty() || stopping_,
+                            std::memory_order_release);
     }
     if (!batch) {
       single();
@@ -170,7 +205,9 @@ void ThreadPool::run() {
       task.function(task.argument);
     } catch (...) {
       std::lock_guard lock(batch->error_mutex);
-      if (!batch->error) batch->error = std::current_exception();
+      if (!batch->error) {
+        batch->error = std::current_exception();
+      }
     }
     batch->remaining.count_down();
   }
@@ -182,6 +219,8 @@ void ThreadPool::stop() noexcept {
     work_available_.store(true, std::memory_order_release);
   }
   ready_.notify_all();
-  for (auto& worker : workers_) worker.join();
+  for (auto& worker : workers_) {
+    worker.join();
+  }
 }
 } // namespace nanovllm

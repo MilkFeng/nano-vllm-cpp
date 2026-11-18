@@ -11,15 +11,17 @@
 
 #include "common/pinned_buffer.hh"
 #include "common/thread_pool.hh"
-#include "core/module.hh"
 #include "core/decode_graph.hh"
+#include "core/module.hh"
 #include "layers/linear.hh"
 #include "layers/swiglu_mlp.hh"
 #include "nanovllm/nanovllm.hh"
 
 namespace nanovllm {
 
-namespace kernels::cuda { struct FP8ExpertWeights; }
+namespace kernels::cuda {
+struct FP8ExpertWeights;
+}
 
 struct ExpertUsage;
 
@@ -225,7 +227,8 @@ class MoE final : public Module {
                                   cudaStream_t stream = nullptr,
                                   MoEPhaseProfile* profile = nullptr,
                                   ExpertUsage* usage = nullptr,
-                                  bool decode_graphs = false, bool defer_cpu = false,
+                                  bool decode_graphs = false,
+                                  bool defer_cpu = false,
                                   bool graph_warmup = false) const;
 
   [[nodiscard]] std::size_t replace_experts(
@@ -243,9 +246,10 @@ class MoE final : public Module {
 
  private:
   struct HybridWorkspace;
-  [[nodiscard]] MoEOutput forward_hybrid(ConstTensorView input, cudaStream_t stream,
-                                          ExpertUsage* usage, bool defer_cpu,
-                                          bool graph_warmup) const;
+  [[nodiscard]] MoEOutput forward_hybrid(ConstTensorView input,
+                                         cudaStream_t stream,
+                                         ExpertUsage* usage, bool defer_cpu,
+                                         bool graph_warmup) const;
   MoEConfig config_;
   Linear gate_;
   ExpertStore experts_;

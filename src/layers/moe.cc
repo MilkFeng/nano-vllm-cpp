@@ -1,14 +1,15 @@
 #include "layers/moe.hh"
 
+#include <immintrin.h>
+
 #include <algorithm>
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <immintrin.h>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -59,14 +60,21 @@ struct CpuExpertJob {
 
 MoEExecutionWorkspace::~MoEExecutionWorkspace() noexcept {
   // In particular, an asynchronous H2D may still be reading host_parts.
-  if (pending_) cudaEventSynchronize(completion_);
-  if (completion_) cudaEventDestroy(completion_);
-  if (host_ready_) cudaEventDestroy(host_ready_);
+  if (pending_) {
+    cudaEventSynchronize(completion_);
+  }
+  if (completion_) {
+    cudaEventDestroy(completion_);
+  }
+  if (host_ready_) {
+    cudaEventDestroy(host_ready_);
+  }
 }
 
 void MoEExecutionWorkspace::synchronize() {
   if (pending_) {
-    check_cuda(cudaEventSynchronize(completion_), "complete MoE workspace uses");
+    check_cuda(cudaEventSynchronize(completion_),
+               "complete MoE workspace uses");
     pending_ = false;
   }
 }
@@ -74,7 +82,9 @@ void MoEExecutionWorkspace::synchronize() {
 void MoEExecutionWorkspace::prepare(cudaStream_t stream) {
   // Same-stream reuse is ordered by the next host-ready event. A different
   // stream must finish the old DMA before touching any shared host staging.
-  if (pending_ && pending_stream_ != stream) synchronize();
+  if (pending_ && pending_stream_ != stream) {
+    synchronize();
+  }
   if (!host_ready_) {
     check_cuda(cudaEventCreateWithFlags(&host_ready_, cudaEventDisableTiming),
                "create MoE host-ready event");
@@ -90,10 +100,13 @@ void MoEExecutionWorkspace::record_host_ready(cudaStream_t stream) {
 }
 
 void MoEExecutionWorkspace::wait_host_ready() {
-  const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
+  const auto until =
+      std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
   auto status = cudaEventQuery(host_ready_);
   while (status == cudaErrorNotReady) {
-    for (int i = 0; i < 32; ++i) _mm_pause();
+    for (int i = 0; i < 32; ++i) {
+      _mm_pause();
+    }
     if (std::chrono::steady_clock::now() >= until) {
       status = cudaEventSynchronize(host_ready_);
       break;
@@ -178,7 +191,8 @@ kernels::cuda::FP8ExpertWeights FP8Expert::device_weights() const {
   return {gate_.weight().view().data<std::uint8_t>(),
           up_.weight().view().data<std::uint8_t>(),
           down_.weight().view().data<std::uint8_t>(),
-          gate_scale_.view().data<float>(), up_scale_.view().data<float>(),
+          gate_scale_.view().data<float>(),
+          up_scale_.view().data<float>(),
           down_scale_.view().data<float>()};
 }
 
@@ -276,30 +290,44 @@ ExpertCache::~ExpertCache() {
 
 void ExpertCache::publish_routes(cudaStream_t stream) {
   if (routes_ready_) {
-    check_cuda(cudaEventSynchronize(routes_ready_), "complete previous routing table DMA");
+    check_cuda(cudaEventSynchronize(routes_ready_),
+               "complete previous routing table DMA");
   } else {
-    check_cuda(cudaEventCreateWithFlags(&routes_ready_, cudaEventDisableTiming), "create routing table DMA event");
+    check_cuda(cudaEventCreateWithFlags(&routes_ready_, cudaEventDisableTiming),
+               "create routing table DMA event");
   }
-  const auto bytes = source_.num_experts() * sizeof(kernels::cuda::FP8ExpertWeights);
-  if (routes_.numel() < bytes)
+  const auto bytes =
+      source_.num_experts() * sizeof(kernels::cuda::FP8ExpertWeights);
+  if (routes_.numel() < bytes) {
     routes_ = Tensor::empty({bytes}, DataType::Float8E4M3FN, Device::cuda(0));
+  }
   host_routes_.reserve(bytes);
-  auto* routes = static_cast<kernels::cuda::FP8ExpertWeights*>(host_routes_.data());
+  auto* routes =
+      static_cast<kernels::cuda::FP8ExpertWeights*>(host_routes_.data());
   std::fill_n(routes, source_.num_experts(), kernels::cuda::FP8ExpertWeights{});
-  for (std::size_t slot = 0; slot < slots_.size(); ++slot)
+  for (std::size_t slot = 0; slot < slots_.size(); ++slot) {
     routes[resident_ids_[slot]] = slots_[slot]->device_weights();
-  check_cuda(cudaMemcpyAsync(routes_.data(), routes, bytes, cudaMemcpyHostToDevice, stream),
+  }
+  check_cuda(cudaMemcpyAsync(routes_.data(), routes, bytes,
+                             cudaMemcpyHostToDevice, stream),
              "publish resident expert routing table");
-  check_cuda(cudaEventRecord(routes_ready_, stream), "record expert routing table DMA");
+  check_cuda(cudaEventRecord(routes_ready_, stream),
+             "record expert routing table DMA");
 }
 
-ConstTensorView ExpertCache::device_routes() const { return routes_.view(); }
+ConstTensorView ExpertCache::device_routes() const {
+  return routes_.view();
+}
 
 std::size_t ExpertCache::replace(
     std::span<const ExpertCacheReplacement> replacements, cudaStream_t stream,
     bool synchronize) {
-  if (!ready_) throw std::logic_error("populate expert cache before replacement");
-  if (replacements.empty()) return 0;
+  if (!ready_) {
+    throw std::logic_error("populate expert cache before replacement");
+  }
+  if (replacements.empty()) {
+    return 0;
+  }
 
   std::vector<bool> used_slots(slots_.size(), false);
   std::vector<bool> used_ids(source_.num_experts(), false);
@@ -307,7 +335,8 @@ std::size_t ExpertCache::replace(
     if (slot >= slots_.size() || id < 0
         || std::size_t(id) >= source_.num_experts() || used_slots[slot]
         || used_ids[id] || expert_to_slot_[id] >= 0) {
-      throw std::invalid_argument("invalid or duplicate expert cache replacement");
+      throw std::invalid_argument(
+          "invalid or duplicate expert cache replacement");
     }
     used_slots[slot] = true;
     used_ids[id] = true;
@@ -321,7 +350,8 @@ std::size_t ExpertCache::replace(
     std::vector<const void*> sources;
     std::vector<std::size_t> sizes;
     for (const auto& [slot, id] : replacements) {
-      for (const auto& [name, parameter] : source_.expert_at(id).named_parameters()) {
+      for (const auto& [name, parameter] :
+           source_.expert_at(id).named_parameters()) {
         const auto source = parameter->view();
         const auto destination = slots_[slot]->parameter(name).view();
         destinations.push_back(destination.data());
@@ -336,18 +366,22 @@ std::size_t ExpertCache::replace(
       cudaMemcpyAttributes attributes{};
       attributes.srcAccessOrder = cudaMemcpySrcAccessOrderAny;
       std::size_t first = 0;
-      check_cuda(cudaMemcpyBatchAsync(destinations.data(), sources.data(), sizes.data(),
-                                      sizes.size(), &attributes, &first, 1, stream),
+      check_cuda(cudaMemcpyBatchAsync(destinations.data(), sources.data(),
+                                      sizes.data(), sizes.size(), &attributes,
+                                      &first, 1, stream),
                  "batch replace GPU expert weights");
     } else
 #endif
     {
-      for (std::size_t i = 0; i < sources.size(); ++i)
-        check_cuda(cudaMemcpyAsync(destinations[i], sources[i], sizes[i], cudaMemcpyHostToDevice, stream),
+      for (std::size_t i = 0; i < sources.size(); ++i) {
+        check_cuda(cudaMemcpyAsync(destinations[i], sources[i], sizes[i],
+                                   cudaMemcpyHostToDevice, stream),
                    "replace GPU expert weights");
+      }
     }
-    if (synchronize)
+    if (synchronize) {
       check_cuda(cudaStreamSynchronize(stream), "complete expert replacements");
+    }
   } catch (...) {
     cudaStreamSynchronize(stream);
     invalidate();
@@ -361,8 +395,10 @@ std::size_t ExpertCache::replace(
   ready_ = true;
   try {
     publish_routes(stream);
-    if (synchronize)
-      check_cuda(cudaStreamSynchronize(stream), "complete expert routing replacement");
+    if (synchronize) {
+      check_cuda(cudaStreamSynchronize(stream),
+                 "complete expert routing replacement");
+    }
   } catch (...) {
     cudaStreamSynchronize(stream);
     invalidate();
@@ -427,8 +463,8 @@ ExpertExecutionStats ExpertExecutor::forward_into(
   workspace.prepare(stream);
   workspace.synchronize();
   try {
-    const auto stats = forward_prepared(input, expert_ids, top_k, expert_outputs,
-                                         workspace, stream, {});
+    const auto stats = forward_prepared(input, expert_ids, top_k,
+                                        expert_outputs, workspace, stream, {});
     workspace.record_completion(stream);
     return stats;
   } catch (...) {
@@ -628,7 +664,9 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
     }
   }
 
-  if (!hits.empty()) workspace.expert.reserve(1, store_.intermediate_size());
+  if (!hits.empty()) {
+    workspace.expert.reserve(1, store_.intermediate_size());
+  }
 
   const auto hidden = store_.hidden_size();
   const bool mixed = !hits.empty() && !misses.empty();
@@ -646,8 +684,12 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
     indices = workspace.order.view().slice(0, 0, assignments);
     auto* order = static_cast<std::int32_t*>(workspace.host_order.data());
     std::size_t row = 0;
-    for (const auto& task : hits) order[row++] = task.rank;
-    for (const auto& task : misses) order[row++] = task.rank;
+    for (const auto& task : hits) {
+      order[row++] = task.rank;
+    }
+    for (const auto& task : misses) {
+      order[row++] = task.rank;
+    }
   }
 
   if (!misses.empty()) {
@@ -667,14 +709,14 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
   }
   auto* jobs = large_jobs.empty() ? small_jobs.data() : large_jobs.data();
   auto* descriptors = large_descriptors.empty() ? small_descriptors.data()
-                                               : large_descriptors.data();
+                                                : large_descriptors.data();
   ThreadPool::TaskGroup cpu_tasks;
   try {
     if (mixed) {
-      check_cuda(cudaMemcpyAsync(indices.data(), workspace.host_order.data(),
-                                 indices.size_bytes(), cudaMemcpyHostToDevice,
-                                 stream),
-                 "upload single-token expert permutation");
+      check_cuda(
+          cudaMemcpyAsync(indices.data(), workspace.host_order.data(),
+                          indices.size_bytes(), cudaMemcpyHostToDevice, stream),
+          "upload single-token expert permutation");
     }
     if (!misses.empty() && host_input.data() == nullptr) {
       check_cuda(
@@ -688,9 +730,10 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
     for (std::size_t i = 0; i < misses.size(); ++i) {
       const auto& task = misses[i];
       const auto* expert = &store_.expert_at(task.expert_id);
-      const auto x = host_input.data() != nullptr
-                         ? host_input
-                         : host_rows(workspace.host_input, 1, hidden).as_const();
+      const auto x =
+          host_input.data() != nullptr
+              ? host_input
+              : host_rows(workspace.host_input, 1, hidden).as_const();
       const auto row =
           host_rows(workspace.host_parts, misses.size(), hidden).slice(0, i, 1);
       jobs[i] = {expert, x, row};
@@ -700,19 +743,23 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
     cpu_tasks = cpu_pool_.submit_batch({descriptors, misses.size()});
 
     if (!hits.empty() && hits.size() <= 8) {
-      reserve_rows(workspace.expert.activated, hits.size(), store_.intermediate_size(), input.device());
+      reserve_rows(workspace.expert.activated, hits.size(),
+                   store_.intermediate_size(), input.device());
       kernels::cuda::FP8ExpertBatch batch;
       batch.count = hits.size();
       for (std::size_t i = 0; i < hits.size(); ++i) {
         batch.weights[i] = cache_.expert_at_slot(hits[i].slot).device_weights();
         batch.rows[i] = mixed ? i : hits[i].rank;
       }
-      kernels::cuda::fp8_experts_decode(input, batch, workspace.expert.activated.view(), parts, stream);
-    } else for (std::size_t i = 0; i < hits.size(); ++i) {
-      const auto& task = hits[i];
-      const auto row = parts.slice(0, mixed ? i : task.rank, 1);
-      cache_.expert_at_slot(task.slot)
-          .forward_into(input, row, workspace.expert, stream);
+      kernels::cuda::fp8_experts_decode(
+          input, batch, workspace.expert.activated.view(), parts, stream);
+    } else {
+      for (std::size_t i = 0; i < hits.size(); ++i) {
+        const auto& task = hits[i];
+        const auto row = parts.slice(0, mixed ? i : task.rank, 1);
+        cache_.expert_at_slot(task.slot).forward_into(input, row,
+                                                      workspace.expert, stream);
+      }
     }
 
     cpu_tasks.wait();
@@ -722,9 +769,9 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
       // alternate with GPU hits. One DMA replaces one upload per CPU expert.
       const auto destination =
           parts.slice(0, mixed ? hits.size() : 0, misses.size());
-      check_cuda(cudaMemcpyAsync(destination.data(), workspace.host_parts.data(),
-                                 destination.size_bytes(),
-                                 cudaMemcpyHostToDevice, stream),
+      check_cuda(cudaMemcpyAsync(
+                     destination.data(), workspace.host_parts.data(),
+                     destination.size_bytes(), cudaMemcpyHostToDevice, stream),
                  "upload single-token CPU expert outputs");
     }
     if (mixed) {
@@ -753,26 +800,41 @@ struct MoE::HybridWorkspace {
   std::size_t gpu_count = 0, cpu_count = 0;
 
   HybridWorkspace(const ExpertStore& s, const ExpertCache& c, ThreadPool& p,
-                    std::size_t k) : store(s), cache(c), pool(p), top_k(k) {
+                  std::size_t k)
+      : store(s),
+        cache(c),
+        pool(p),
+        top_k(k) {
     try {
       ids.reserve(k * sizeof(std::int32_t));
       input.reserve(s.hidden_size() * sizeof(float));
       parts.reserve(k * s.hidden_size() * sizeof(float));
-      flags.reserve(128 + ((s.hidden_size() + 255) / 256) * sizeof(std::uint32_t));
-      std::uninitialized_value_construct_n(static_cast<std::int32_t*>(ids.data()), k);
-      std::uninitialized_value_construct_n(static_cast<float*>(input.data()), s.hidden_size());
-      std::uninitialized_value_construct_n(static_cast<float*>(parts.data()), k * s.hidden_size());
-      std::uninitialized_value_construct_n(static_cast<std::uint32_t*>(flags.data()),
-                                            flags.capacity_bytes() / sizeof(std::uint32_t));
-      activated = Tensor::empty({k, s.intermediate_size()}, DataType::Float32, Device::cuda(0));
-      check_cuda(cudaEventCreateWithFlags(&ready, cudaEventDisableTiming), "create expert host fork");
+      flags.reserve(128
+                    + ((s.hidden_size() + 255) / 256) * sizeof(std::uint32_t));
+      std::uninitialized_value_construct_n(
+          static_cast<std::int32_t*>(ids.data()), k);
+      std::uninitialized_value_construct_n(static_cast<float*>(input.data()),
+                                           s.hidden_size());
+      std::uninitialized_value_construct_n(static_cast<float*>(parts.data()),
+                                           k * s.hidden_size());
+      std::uninitialized_value_construct_n(
+          static_cast<std::uint32_t*>(flags.data()),
+          flags.capacity_bytes() / sizeof(std::uint32_t));
+      activated = Tensor::empty({k, s.intermediate_size()}, DataType::Float32,
+                                Device::cuda(0));
+      check_cuda(cudaEventCreateWithFlags(&ready, cudaEventDisableTiming),
+                 "create expert host fork");
     } catch (...) {
-      if (ready) cudaEventDestroy(ready);
+      if (ready) {
+        cudaEventDestroy(ready);
+      }
       throw;
     }
   }
   ~HybridWorkspace() {
-    if (ready) cudaEventDestroy(ready);
+    if (ready) {
+      cudaEventDestroy(ready);
+    }
   }
   static void compute(void* argument) noexcept {
     auto& w = *static_cast<HybridWorkspace*>(argument);
@@ -786,18 +848,29 @@ struct MoE::HybridWorkspace {
       const auto hidden = w.store.hidden_size();
       for (std::size_t rank = 0; rank < w.top_k; ++rank) {
         const bool gpu = w.cache.slot_of(ids[rank]) >= 0;
-        if (gpu) ++w.gpu_count;
-        else ++w.cpu_count;
+        if (gpu) {
+          ++w.gpu_count;
+        } else {
+          ++w.cpu_count;
+        }
         if (w.usage) {
           ++w.usage->counts[ids[rank]];
-          if (gpu) ++w.usage->gpu_assignments;
-          else ++w.usage->cpu_assignments;
+          if (gpu) {
+            ++w.usage->gpu_assignments;
+          } else {
+            ++w.usage->cpu_assignments;
+          }
         }
-        if (gpu) continue;
-        jobs[count] = {&w.store.expert_at(ids[rank]),
-            ConstTensorView(w.input.data(), DataType::Float32, TensorLayout({1, hidden}), Device::cpu()),
+        if (gpu) {
+          continue;
+        }
+        jobs[count] = {
+            &w.store.expert_at(ids[rank]),
+            ConstTensorView(w.input.data(), DataType::Float32,
+                            TensorLayout({1, hidden}), Device::cpu()),
             TensorView(static_cast<float*>(w.parts.data()) + rank * hidden,
-                       DataType::Float32, TensorLayout({1, hidden}), Device::cpu())};
+                       DataType::Float32, TensorLayout({1, hidden}),
+                       Device::cpu())};
         descriptors[count] = {CpuExpertJob::run, &jobs[count]};
         ++count;
       }
@@ -806,7 +879,8 @@ struct MoE::HybridWorkspace {
     } catch (...) {
       tasks.wait_noexcept();
       w.error = std::current_exception();
-      std::fill_n(static_cast<float*>(w.parts.data()), w.top_k * w.store.hidden_size(), 0.0f);
+      std::fill_n(static_cast<float*>(w.parts.data()),
+                  w.top_k * w.store.hidden_size(), 0.0f);
     }
   }
 };
@@ -814,24 +888,38 @@ struct MoE::HybridWorkspace {
 MoE::~MoE() = default;
 
 void MoE::check_async_error() const {
-  if (hybrid_ && hybrid_->error) std::rethrow_exception(hybrid_->error);
+  if (hybrid_ && hybrid_->error) {
+    std::rethrow_exception(hybrid_->error);
+  }
   if (hybrid_) {
-    const auto* errors = reinterpret_cast<const std::uint32_t*>(static_cast<const char*>(hybrid_->flags.data()) + 128);
-    for (std::size_t i = 0; i < (config_.hidden_size + 255) / 256; ++i)
-      if (errors[i]) throw std::runtime_error("GPU timed out waiting for CPU expert output");
+    const auto* errors = reinterpret_cast<const std::uint32_t*>(
+        static_cast<const char*>(hybrid_->flags.data()) + 128);
+    for (std::size_t i = 0; i < (config_.hidden_size + 255) / 256; ++i) {
+      if (errors[i]) {
+        throw std::runtime_error("GPU timed out waiting for CPU expert output");
+      }
+    }
   }
 }
 
 MoEOutput MoE::forward_hybrid(ConstTensorView hidden, cudaStream_t stream,
-                               ExpertUsage* usage, bool defer_cpu, bool graph_warmup) const {
-  if (!hybrid_) hybrid_ = std::make_unique<HybridWorkspace>(experts_, *cache_, executor_->cpu_pool_, config_.top_k);
+                              ExpertUsage* usage, bool defer_cpu,
+                              bool graph_warmup) const {
+  if (!hybrid_) {
+    hybrid_ = std::make_unique<HybridWorkspace>(
+        experts_, *cache_, executor_->cpu_pool_, config_.top_k);
+  }
   auto& work = *hybrid_;
   work.usage = graph_warmup ? nullptr : usage;
   work.error = nullptr;
-  if (!defer_cpu || graph_warmup) reset_hybrid();
+  if (!defer_cpu || graph_warmup) {
+    reset_hybrid();
+  }
   if (graph_warmup) {
-    std::fill_n(static_cast<float*>(work.parts.data()), config_.top_k * config_.hidden_size, 0.0f);
-    std::atomic_ref(*reinterpret_cast<std::uint32_t*>(static_cast<char*>(work.flags.data()) + 64))
+    std::fill_n(static_cast<float*>(work.parts.data()),
+                config_.top_k * config_.hidden_size, 0.0f);
+    std::atomic_ref(*reinterpret_cast<std::uint32_t*>(
+                        static_cast<char*>(work.flags.data()) + 64))
         .store(1, std::memory_order_release);
   }
   const auto function = [&]() -> std::vector<Tensor> {
@@ -839,38 +927,60 @@ MoEOutput MoE::forward_hybrid(ConstTensorView hidden, cudaStream_t stream,
     auto ids = Tensor::empty({1, config_.top_k}, DataType::Int32, device);
     auto weights = Tensor::empty({1, config_.top_k}, DataType::Float32, device);
     auto logits = gate_.forward(hidden, stream);
-    auto parts = Tensor::empty({config_.top_k, config_.hidden_size}, DataType::Float32, device);
-    auto output = Tensor::empty({1, config_.hidden_size}, DataType::Float32, device);
-    kernels::cuda::moe_route(logits.view().as_const(), ids.view(), weights.view(), stream);
-    check_cuda(cudaMemcpyAsync(work.ids.data(), ids.data(), ids.size_bytes(), cudaMemcpyDeviceToHost, stream), "download graph expert IDs");
-    check_cuda(cudaMemcpyAsync(work.input.data(), hidden.data(), hidden.size_bytes(), cudaMemcpyDeviceToHost, stream), "download graph expert input");
-    kernels::cuda::moe_publish_decode(hidden, ids.view().as_const(),
-        static_cast<float*>(work.input.device_data()), static_cast<std::int32_t*>(work.ids.device_data()),
-        static_cast<volatile std::uint32_t*>(work.flags.device_data()), stream, true);
+    auto parts = Tensor::empty({config_.top_k, config_.hidden_size},
+                               DataType::Float32, device);
+    auto output =
+        Tensor::empty({1, config_.hidden_size}, DataType::Float32, device);
+    kernels::cuda::moe_route(logits.view().as_const(), ids.view(),
+                             weights.view(), stream);
+    check_cuda(cudaMemcpyAsync(work.ids.data(), ids.data(), ids.size_bytes(),
+                               cudaMemcpyDeviceToHost, stream),
+               "download graph expert IDs");
+    check_cuda(
+        cudaMemcpyAsync(work.input.data(), hidden.data(), hidden.size_bytes(),
+                        cudaMemcpyDeviceToHost, stream),
+        "download graph expert input");
+    kernels::cuda::moe_publish_decode(
+        hidden, ids.view().as_const(),
+        static_cast<float*>(work.input.device_data()),
+        static_cast<std::int32_t*>(work.ids.device_data()),
+        static_cast<volatile std::uint32_t*>(work.flags.device_data()), stream,
+        true);
     cudaStreamCaptureStatus status;
     check_cuda(cudaStreamIsCapturing(stream, &status), "query hybrid capture");
     check_cuda(cudaEventRecordWithFlags(work.ready, stream,
-        status == cudaStreamCaptureStatusActive ? cudaEventRecordExternal : 0), "record hybrid input publication");
+                                        status == cudaStreamCaptureStatusActive
+                                            ? cudaEventRecordExternal
+                                            : 0),
+               "record hybrid input publication");
     Tensor shared, gate;
     if (shared_expert_) {
       shared = shared_expert_->forward(hidden, stream);
       gate = shared_expert_gate_->forward(hidden, stream);
     }
-    kernels::cuda::fp8_experts_decode_routed(hidden, ids.view().as_const(), cache_->device_routes(),
+    kernels::cuda::fp8_experts_decode_routed(
+        hidden, ids.view().as_const(), cache_->device_routes(),
         work.activated.view(), parts.view(), stream);
-    kernels::cuda::moe_combine_routed(parts.view(), static_cast<const float*>(work.parts.device_data()),
-        ids.view().as_const(), cache_->device_routes(), weights.view().as_const(), output.view(),
-        shared.view().as_const(), gate.view().as_const(), stream,
-        reinterpret_cast<const volatile std::uint32_t*>(static_cast<char*>(work.flags.device_data()) + 64),
-        reinterpret_cast<volatile std::uint32_t*>(static_cast<char*>(work.flags.device_data()) + 128));
-    return {std::move(output), std::move(logits), std::move(ids), std::move(weights),
-            std::move(parts), std::move(shared), std::move(gate)};
+    kernels::cuda::moe_combine_routed(
+        parts.view(), static_cast<const float*>(work.parts.device_data()),
+        ids.view().as_const(), cache_->device_routes(),
+        weights.view().as_const(), output.view(), shared.view().as_const(),
+        gate.view().as_const(), stream,
+        reinterpret_cast<const volatile std::uint32_t*>(
+            static_cast<char*>(work.flags.device_data()) + 64),
+        reinterpret_cast<volatile std::uint32_t*>(
+            static_cast<char*>(work.flags.device_data()) + 128));
+    return {std::move(output),  std::move(logits), std::move(ids),
+            std::move(weights), std::move(parts),  std::move(shared),
+            std::move(gate)};
   };
   std::vector<Tensor> tensors;
-  if (defer_cpu) tensors = function();
-  else {
+  if (defer_cpu) {
+    tensors = function();
+  } else {
     try {
-      tensors = decode_prefix_.run(stream, {hidden.data(), cache_->device_routes().data()}, function);
+      tensors = decode_prefix_.run(
+          stream, {hidden.data(), cache_->device_routes().data()}, function);
       complete_hybrid_cpu(stream);
     } catch (...) {
       abort_hybrid();
@@ -878,44 +988,64 @@ MoEOutput MoE::forward_hybrid(ConstTensorView hidden, cudaStream_t stream,
       throw;
     }
   }
-  return {std::move(tensors[0]), std::move(tensors[1]), std::move(tensors[2]),
-          std::move(tensors[3]), std::move(tensors[4]), defer_cpu ? 0 : work.gpu_count,
-          defer_cpu ? 0 : work.cpu_count, std::move(tensors[5]), std::move(tensors[6])};
+  return {std::move(tensors[0]),          std::move(tensors[1]),
+          std::move(tensors[2]),          std::move(tensors[3]),
+          std::move(tensors[4]),          defer_cpu ? 0 : work.gpu_count,
+          defer_cpu ? 0 : work.cpu_count, std::move(tensors[5]),
+          std::move(tensors[6])};
 }
 
 void MoE::reset_hybrid() const {
-  if (!hybrid_) return;
+  if (!hybrid_) {
+    return;
+  }
   auto& work = *hybrid_;
   work.error = nullptr;
-  std::atomic_ref(*static_cast<std::uint32_t*>(work.flags.data())).store(0, std::memory_order_release);
-  std::atomic_ref(*reinterpret_cast<std::uint32_t*>(static_cast<char*>(work.flags.data()) + 64)).store(0, std::memory_order_release);
+  std::atomic_ref(*static_cast<std::uint32_t*>(work.flags.data()))
+      .store(0, std::memory_order_release);
+  std::atomic_ref(*reinterpret_cast<std::uint32_t*>(
+                      static_cast<char*>(work.flags.data()) + 64))
+      .store(0, std::memory_order_release);
   std::memset(static_cast<char*>(work.flags.data()) + 128, 0,
               ((config_.hidden_size + 255) / 256) * sizeof(std::uint32_t));
 }
 
 void MoE::abort_hybrid() const noexcept {
-  if (hybrid_)
-    std::atomic_ref(*reinterpret_cast<std::uint32_t*>(static_cast<char*>(hybrid_->flags.data()) + 64)).store(2, std::memory_order_release);
+  if (hybrid_) {
+    std::atomic_ref(*reinterpret_cast<std::uint32_t*>(
+                        static_cast<char*>(hybrid_->flags.data()) + 64))
+        .store(2, std::memory_order_release);
+  }
 }
 
 void MoE::complete_hybrid_cpu(cudaStream_t stream) const {
-  if (!hybrid_) throw std::logic_error("hybrid experts have not been prepared");
+  if (!hybrid_) {
+    throw std::logic_error("hybrid experts have not been prepared");
+  }
   auto& work = *hybrid_;
   auto ready = std::atomic_ref(*static_cast<std::uint32_t*>(work.flags.data()));
-  auto done = std::atomic_ref(*reinterpret_cast<std::uint32_t*>(static_cast<char*>(work.flags.data()) + 64));
+  auto done = std::atomic_ref(*reinterpret_cast<std::uint32_t*>(
+      static_cast<char*>(work.flags.data()) + 64));
   try {
-    const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
+    const auto until =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
     while (ready.load(std::memory_order_acquire) == 0) {
-      for (int i = 0; i < 32; ++i) _mm_pause();
+      for (int i = 0; i < 32; ++i) {
+        _mm_pause();
+      }
       if (std::chrono::steady_clock::now() >= until) {
-        check_cuda(cudaEventSynchronize(work.ready), "complete hybrid input publication");
-        if (ready.load(std::memory_order_acquire) == 0)
+        check_cuda(cudaEventSynchronize(work.ready),
+                   "complete hybrid input publication");
+        if (ready.load(std::memory_order_acquire) == 0) {
           throw std::runtime_error("hybrid route did not publish input");
+        }
         break;
       }
     }
     HybridWorkspace::compute(&work);
-    if (work.error) std::rethrow_exception(work.error);
+    if (work.error) {
+      std::rethrow_exception(work.error);
+    }
     done.store(1, std::memory_order_release);
   } catch (...) {
     done.store(2, std::memory_order_release);
@@ -983,9 +1113,9 @@ void MoE::populate_expert_cache(cudaStream_t stream) {
   cache_->populate(stream);
 }
 
-MoEOutput MoE::forward(ConstTensorView hidden_states,
-                       cudaStream_t stream, MoEPhaseProfile* profile,
-                       ExpertUsage* usage, bool decode_graphs, bool defer_cpu,
+MoEOutput MoE::forward(ConstTensorView hidden_states, cudaStream_t stream,
+                       MoEPhaseProfile* profile, ExpertUsage* usage,
+                       bool decode_graphs, bool defer_cpu,
                        bool graph_warmup) const {
   const auto started = profile ? std::chrono::steady_clock::now()
                                : std::chrono::steady_clock::time_point{};
@@ -1011,9 +1141,11 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
     throw std::invalid_argument("MoE assignment count exceeds Int32 indices");
   }
   const auto assignments = tokens * config_.top_k;
-  if ((decode_graphs || defer_cpu) && tokens == 1 && config_.top_k <= 8 && !profile
-      && cache_->device_routes().numel() != 0)
-    return forward_hybrid(hidden_states, stream, usage, defer_cpu, graph_warmup);
+  if ((decode_graphs || defer_cpu) && tokens == 1 && config_.top_k <= 8
+      && !profile && cache_->device_routes().numel() != 0) {
+    return forward_hybrid(hidden_states, stream, usage, defer_cpu,
+                          graph_warmup);
+  }
   workspace_->prepare(stream);
   workspace_->host_ids.reserve(assignments * sizeof(std::int32_t));
   const auto host_ids = std::span(
@@ -1042,43 +1174,52 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
         tokens == 1 && cache_->num_slots() < config_.num_experts;
     if (prefetch_input) {
       workspace_->host_input.reserve(hidden_states.size_bytes());
-      check_cuda(cudaMemcpyAsync(workspace_->host_input.data(),
-                                 hidden_states.data(), hidden_states.size_bytes(),
-                                 cudaMemcpyDeviceToHost, stream),
-                 "download decode input with MoE routing");
+      check_cuda(
+          cudaMemcpyAsync(workspace_->host_input.data(), hidden_states.data(),
+                          hidden_states.size_bytes(), cudaMemcpyDeviceToHost,
+                          stream),
+          "download decode input with MoE routing");
     }
     workspace_->record_host_ready(stream);
 
     const auto launch_shared = [&] {
       if (shared_expert_) {
         shared_output = shared_expert_->forward(hidden_states, stream);
-        shared_gate_logits = shared_expert_gate_->forward(hidden_states, stream);
+        shared_gate_logits =
+            shared_expert_gate_->forward(hidden_states, stream);
       }
     };
     // Queue independent decode work after the download marker, before the host
-    // waits for it. Shared and cached experts can run while CPU experts execute.
-    if (tokens == 1) launch_shared();
+    // waits for it. Shared and cached experts can run while CPU experts
+    // execute.
+    if (tokens == 1) {
+      launch_shared();
+    }
     workspace_->wait_host_ready();
-    const auto host_input =
-        prefetch_input
-            ? host_rows(workspace_->host_input, 1, config_.hidden_size).as_const()
-            : ConstTensorView{};
-    stats = executor_->forward_prepared(
-        hidden_states, host_ids, config_.top_k, expert_outputs.view(),
-        *workspace_, stream, host_input);
+    const auto host_input = prefetch_input ? host_rows(workspace_->host_input,
+                                                       1, config_.hidden_size)
+                                                 .as_const()
+                                           : ConstTensorView{};
+    stats = executor_->forward_prepared(hidden_states, host_ids, config_.top_k,
+                                        expert_outputs.view(), *workspace_,
+                                        stream, host_input);
     kernels::cuda::moe_combine(expert_outputs.view().as_const(),
                                weights.view().as_const(), output.view(),
                                stream);
 
     // Prefill retains demand-driven input downloads in the batch executor.
-    if (tokens != 1) launch_shared();
+    if (tokens != 1) {
+      launch_shared();
+    }
     if (shared_expert_) {
       kernels::cuda::moe_add_shared(shared_output.view().as_const(),
                                     shared_gate_logits.view().as_const(),
                                     output.view(), stream);
     }
     workspace_->record_completion(stream);
-    if (profile) workspace_->synchronize();
+    if (profile) {
+      workspace_->synchronize();
+    }
   } catch (...) {
     // Executor has drained CPU tasks; keep inputs, outputs, and staging alive
     // until any queued DMA/kernels finish, including failed combine/shared
@@ -1087,22 +1228,29 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
     throw;
   }
   if (usage) {
-    for (const auto id : host_ids) ++usage->counts[id];
+    for (const auto id : host_ids) {
+      ++usage->counts[id];
+    }
     usage->gpu_assignments += stats.gpu_experts;
     usage->cpu_assignments += stats.cpu_experts;
   }
   if (profile) {
     profile->seconds += std::chrono::duration<double>(
-        std::chrono::steady_clock::now() - started).count();
+                            std::chrono::steady_clock::now() - started)
+                            .count();
     ++profile->calls;
     profile->input_tokens += tokens;
     profile->gpu_assignments += stats.gpu_experts;
     profile->cpu_assignments += stats.cpu_experts;
     profile->experts.resize(config_.num_experts);
     std::vector<std::size_t> counts(config_.num_experts, 0);
-    for (const auto id : host_ids) ++counts[id];
+    for (const auto id : host_ids) {
+      ++counts[id];
+    }
     for (std::size_t id = 0; id < counts.size(); ++id) {
-      if (counts[id] == 0) continue;
+      if (counts[id] == 0) {
+        continue;
+      }
       auto& expert = profile->experts[id];
       expert.tokens += counts[id];
       ++expert.calls;
@@ -1123,9 +1271,11 @@ MoEOutput MoE::forward(ConstTensorView hidden_states,
 }
 
 std::size_t MoE::replace_experts(
-    std::span<const ExpertCacheReplacement> replacements,
-    cudaStream_t stream, bool synchronize) const {
-  if (!cache_) throw std::logic_error("CPU MoE has no CUDA expert cache");
+    std::span<const ExpertCacheReplacement> replacements, cudaStream_t stream,
+    bool synchronize) const {
+  if (!cache_) {
+    throw std::logic_error("CPU MoE has no CUDA expert cache");
+  }
   return cache_->replace(replacements, stream, synchronize);
 }
 
@@ -1138,7 +1288,9 @@ const ExpertStore& MoE::expert_store() const noexcept {
 }
 
 const ExpertCache& MoE::expert_cache() const {
-  if (!cache_) throw std::logic_error("CPU MoE has no CUDA expert cache");
+  if (!cache_) {
+    throw std::logic_error("CPU MoE has no CUDA expert cache");
+  }
   return *cache_;
 }
 

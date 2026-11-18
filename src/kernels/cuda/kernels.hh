@@ -37,11 +37,11 @@ struct FP8ExpertBatch {
 };
 // All resident decode experts in two launches: fused Gate/Up/SiLU, then Down.
 void fp8_experts_decode(ConstTensorView input, const FP8ExpertBatch& batch,
-                         TensorView activated, TensorView output,
-                         cudaStream_t stream = nullptr);
+                        TensorView activated, TensorView output,
+                        cudaStream_t stream = nullptr);
 void fp8_experts_decode_routed(ConstTensorView input, ConstTensorView ids,
-                                ConstTensorView routes, TensorView activated,
-                                TensorView output, cudaStream_t stream);
+                               ConstTensorView routes, TensorView activated,
+                               TensorView output, cudaStream_t stream);
 
 // hidden state of the last token of each sequence
 //
@@ -255,15 +255,16 @@ void moe_combine(ConstTensorView expert_outputs, ConstTensorView expert_weights,
 
 // CPU host-node rows are mapped and materialized in expert_outputs.
 void moe_combine_routed(TensorView expert_outputs, const float* cpu_parts,
-                          ConstTensorView ids, ConstTensorView routes,
-                          ConstTensorView expert_weights, TensorView output,
-                          ConstTensorView shared_output, ConstTensorView gate_logits,
-                          cudaStream_t stream, const volatile std::uint32_t* ready = nullptr,
-                          volatile std::uint32_t* error = nullptr);
+                        ConstTensorView ids, ConstTensorView routes,
+                        ConstTensorView expert_weights, TensorView output,
+                        ConstTensorView shared_output,
+                        ConstTensorView gate_logits, cudaStream_t stream,
+                        const volatile std::uint32_t* ready = nullptr,
+                        volatile std::uint32_t* error = nullptr);
 void moe_publish_decode(ConstTensorView input, ConstTensorView ids,
-                          float* mapped_input, std::int32_t* mapped_ids,
-                          volatile std::uint32_t* ready, cudaStream_t stream,
-                          bool publish_only = false);
+                        float* mapped_input, std::int32_t* mapped_ids,
+                        volatile std::uint32_t* ready, cudaStream_t stream,
+                        bool publish_only = false);
 
 // shared_output: [tokens, hidden_size]
 // gate_logits:   [tokens, 1]
@@ -284,10 +285,6 @@ void flash_attn_with_kvcache(
     ConstTensorView cu_seqlens_k, std::size_t max_seqlen_q,
     std::size_t max_seqlen_k, ConstTensorView block_table, TensorView output,
     bool causal, cudaStream_t stream = nullptr, TensorView workspace = {});
-
-[[nodiscard]] std::size_t flash_attn_decode_workspace_elements(
-    std::size_t max_batch, std::size_t query_heads, std::size_t head_dim,
-    std::size_t max_seqlen_k);
 
 // FP32 elements, sufficient for decode and tensor-core prefill at any query
 // length and any batch up to max_batch. Allocate outside CUDA Graph capture.

@@ -182,9 +182,10 @@ ModelConfig ModelConfig::from_json(const nlohmann::json& j) {
       text.at(text.contains("dtype") ? "dtype" : "torch_dtype")
           .get<std::string>());
   if (j.contains("quantization_config")
-      && !j.at("quantization_config").is_null())
+      && !j.at("quantization_config").is_null()) {
     config.quantization_config =
         j.at("quantization_config").get<FP8QuantizationConfig>();
+  }
 
   if (config.architecture != ModelArchitecture::Qwen35Moe) {
     config.intermediate_size = text.at("intermediate_size").get<std::size_t>();
@@ -210,12 +211,13 @@ ModelConfig ModelConfig::from_json(const nlohmann::json& j) {
       config.layer_types =
           text.at("layer_types").get<std::vector<AttentionType>>();
     } else {
-      for (std::size_t i = 0; i < config.num_hidden_layers; ++i)
+      for (std::size_t i = 0; i < config.num_hidden_layers; ++i) {
         if ((i + 1) % config.full_attention_interval == 0) {
           config.layer_types.push_back(AttentionType::Full);
         } else {
           config.layer_types.push_back(AttentionType::Linear);
         }
+      }
     }
 
     config.linear_conv_kernel_dim =

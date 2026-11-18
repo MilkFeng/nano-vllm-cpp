@@ -257,7 +257,7 @@ def generate_report(directory):
         + f"；每项每实现 {options['samples']} 组 CUDA event 样本，目标每批 {options['target_ms']} ms，"
         f"最多 {options['max_calls']} 次调用，预热至少 {options['warmup']} 次。",
         "",
-        "自定义侧统一通过 kernels.hh 调用 src/kernels/cuda/attention.cu；实验目录不包含另一份 CUDA attention 算法。"
+        "自定义侧统一通过 kernels.hh 调用 src/kernels/cuda/attn/attn.cu 及同目录实现头文件；实验目录不包含另一份 CUDA attention 算法。"
         "具体 kernel 版本由 manifest 中的源码与共享库 SHA256 标识；历史版本的内部加速需另做匹配对比。",
         "",
         "## 计时与任务边界",

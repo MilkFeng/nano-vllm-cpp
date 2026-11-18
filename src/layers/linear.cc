@@ -34,7 +34,8 @@ Tensor Linear::forward(ConstTensorView input, cudaStream_t stream) const {
   }
 
   if (weight_scale_inv_) {
-    kernels::cuda::linear_fp8(input, weight, std::as_const(*weight_scale_inv_).view(),
+    kernels::cuda::linear_fp8(input, weight,
+                              std::as_const(*weight_scale_inv_).view(),
                               output.view(), stream);
   } else {
     kernels::cuda::linear(input, weight, output.view(), bias, stream);
@@ -43,13 +44,16 @@ Tensor Linear::forward(ConstTensorView input, cudaStream_t stream) const {
 }
 
 void Linear::use_fp8_weight() {
-  if (weight_scale_inv_) return;
-  if (bias_ || weight_.view().device().type != DeviceType::Cuda) {
-    throw std::invalid_argument("compact FP8 Linear requires CUDA without bias");
+  if (weight_scale_inv_) {
+    return;
   }
-  auto scale = std::make_unique<Parameter>(Tensor::empty(
-      {(out_features_ + 127) / 128, (in_features_ + 127) / 128},
-      DataType::Float32, weight_.view().device()));
+  if (bias_ || weight_.view().device().type != DeviceType::Cuda) {
+    throw std::invalid_argument(
+        "compact FP8 Linear requires CUDA without bias");
+  }
+  auto scale = std::make_unique<Parameter>(
+      Tensor::empty({(out_features_ + 127) / 128, (in_features_ + 127) / 128},
+                    DataType::Float32, weight_.view().device()));
   auto weight = Tensor::empty({out_features_, in_features_},
                               DataType::Float8E4M3FN, weight_.view().device());
   register_parameter("weight_scale_inv", *scale);

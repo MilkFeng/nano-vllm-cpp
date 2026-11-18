@@ -170,7 +170,7 @@ target_compile_definitions(nano-vllm-cpp-comp-gemm PRIVATE
 
 add_library(nano-vllm-cpp-attn-exp SHARED EXCLUDE_FROM_ALL
   exp/attn/attn_bridge.cc
-  src/kernels/cuda/attention.cu
+  src/kernels/cuda/attn/attn.cu
   src/core/device.cc
   src/core/tensor_layout.cc
   src/core/tensor_view.cc
@@ -191,6 +191,10 @@ target_compile_definitions(nano-vllm-cpp-attn-exp PRIVATE
 add_executable(nano-vllm-cpp-attn-check EXCLUDE_FROM_ALL exp/attn/check_native.cc)
 target_include_directories(nano-vllm-cpp-attn-check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(nano-vllm-cpp-attn-check PRIVATE nano-vllm-cpp-attn-exp CUDA::cudart)
+
+add_executable(nano-vllm-cpp-wmma-check EXCLUDE_FROM_ALL exp/attn/check_wmma.cu)
+target_include_directories(nano-vllm-cpp-wmma-check PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(nano-vllm-cpp-wmma-check PRIVATE CUDA::cudart)
 
 # CPU checks/benchmarks do not create a CUDA context.
 add_executable(nano-vllm-cpp-cpu-check EXCLUDE_FROM_ALL exp/cpu/check.cc)

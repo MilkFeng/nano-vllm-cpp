@@ -57,7 +57,7 @@ def custom(bridge, banks):
         "custom",
         launches,
         {
-            "source": "src/kernels/cuda/attention.cu",
+            "source": "src/kernels/cuda/attn/attn.cu",
             "append_included": True,
             "output_layout": "NHD",
             "workspace_bytes": sum(launch.workspace.numel() * 4 for launch in launches),

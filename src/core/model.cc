@@ -42,7 +42,9 @@ void validate_parameter(std::string_view name, const TensorView& destination,
 void copy_parameter(std::string_view name, const TensorView& destination,
                     const Checkpoint& checkpoint) {
   const auto bytes = checkpoint.raw_data(name);
-  if (bytes.empty()) return;
+  if (bytes.empty()) {
+    return;
+  }
 
   const auto device = destination.device();
   if (device.type == DeviceType::Cpu) {

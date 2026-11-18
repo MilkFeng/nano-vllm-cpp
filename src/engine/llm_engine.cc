@@ -172,10 +172,14 @@ class LLMEngine::Impl {
             const auto id = scheduled.seq_ids[i];
             const auto generated =
                 scheduler_.sequence(id).num_generated_tokens();
-            if (generated == previous_outputs[i]) continue; // Partial prefill.
+            if (generated == previous_outputs[i]) {
+              continue; // Partial prefill.
+            }
             auto& request = stats.requests[id];
             const auto latency = elapsed_seconds(submitted_at, completed_at);
-            if (!request.ttft_seconds) request.ttft_seconds = latency;
+            if (!request.ttft_seconds) {
+              request.ttft_seconds = latency;
+            }
             request.output_tokens = generated;
             request.latency_seconds = latency;
             if (generated > 1) {

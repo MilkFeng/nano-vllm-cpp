@@ -154,7 +154,7 @@ Safetensors::Safetensors(const std::filesystem::path& path)
           std::format("failed to open Safetensors file '{}'", path.string()));
     }
 
-    struct stat file_stat{};
+    struct stat file_stat {};
     if (::fstat(fd_, &file_stat) == -1) {
       throw std::system_error(
           errno, std::generic_category(),
