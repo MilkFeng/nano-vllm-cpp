@@ -3,6 +3,7 @@
 #include <cuda_runtime_api.h>
 
 #include <cstddef>
+#include <optional>
 
 #include "core/module.hh"
 
@@ -13,8 +14,9 @@ class LMHead final : public Module {
   LMHead(std::size_t vocab_size, std::size_t hidden_size, DataType dtype,
          Device device, const Tensor* tied_weight = nullptr);
 
-  [[nodiscard]] Tensor forward(ConstTensorView hidden_states,
-                               cudaStream_t stream = nullptr) const;
+  [[nodiscard]] Tensor forward(
+      ConstTensorView hidden_states, cudaStream_t stream = nullptr,
+      std::optional<DataType> output_dtype = std::nullopt) const;
 
   [[nodiscard]] Parameter& weight() noexcept;
   [[nodiscard]] const Parameter& weight() const noexcept;

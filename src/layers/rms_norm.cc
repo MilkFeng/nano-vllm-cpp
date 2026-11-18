@@ -32,7 +32,7 @@ RMSNormOutput RMSNorm::forward(ConstTensorView input, ConstTensorView residual,
   const std::vector<std::size_t> shape(input.shape().begin(),
                                        input.shape().end());
   RMSNormOutput result{Tensor::empty(shape, input.dtype(), input.device()),
-                       Tensor::empty(shape, input.dtype(), input.device())};
+                       Tensor::empty(shape, residual.dtype(), input.device())};
   kernels::cuda::fused_add_rms_norm(
       input, residual, weight, result.hidden_states.view(),
       result.residual.view(), epsilon_, stream, zero_centered_);

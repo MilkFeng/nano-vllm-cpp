@@ -10,15 +10,19 @@
 
 namespace nanovllm::kernels::cuda {
 
+// Convert contiguous floating-point tensors, rounding only at the destination.
+void cast(ConstTensorView input, TensorView output,
+          cudaStream_t stream = nullptr);
+
 // input @ weight^T + bias
 void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
             std::optional<ConstTensorView> bias = std::nullopt,
             cudaStream_t stream = nullptr);
 
-// input:            FP32 [M, K]
+// input:            FP32/BF16 [M, K]
 // weight:           FP8  [N, K]
 // weight_scale_inv: FP32 [N/128, K/128]
-// output:           FP32 [M, N]
+// output:           same as input, or FP32 [M, N]; FP32 accumulation
 //
 // weight_dequant[i][j] = weight[i][j] * weight_scale_inv[i/128][j/128]
 // input @ weight_dequant^T + bias
@@ -36,6 +40,7 @@ struct FP8ExpertBatch {
   unsigned count = 0;
 };
 // All resident decode experts in two launches: fused Gate/Up/SiLU, then Down.
+// input/activated share FP32 or BF16 dtype; output parts are FP32 for merging.
 void fp8_experts_decode(ConstTensorView input, const FP8ExpertBatch& batch,
                         TensorView activated, TensorView output,
                         cudaStream_t stream = nullptr);
@@ -71,6 +76,7 @@ void sample(ConstTensorView logits, ConstTensorView temperatures,
             cudaStream_t stream = nullptr);
 
 // causal depthwise convolution + SiLU
+// input/weight/state/output share FP32 or BF16 dtype; accumulation is FP32.
 //
 // input/output:  [tokens, channels]
 // weight:        [channels, 1, kernel_size]
@@ -98,6 +104,7 @@ void causal_conv1d(ConstTensorView input, ConstTensorView weight,
                    cudaStream_t stream = nullptr);
 
 // gated delta rule
+// qkv/output may be BF16; a/b/A_log/dt_bias/state and internal math are FP32.
 //
 // qkv:           [tokens, 2 * key_heads * key_dim + value_heads * value_dim]
 //                ([[Q Heads, K Heads, V Heads], ...])
@@ -146,6 +153,7 @@ void rms_norm(ConstTensorView input, ConstTensorView weight, TensorView output,
 // output:          [tokens, hidden_size]
 //
 // residual_output = input + residual
+// residual/residual_output may be FP32 with BF16 input/output.
 // if zero-centered:
 //   output = RMSNorm(residual_output) * (1 + weight)
 // else:

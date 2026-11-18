@@ -17,11 +17,12 @@ LMHead::LMHead(std::size_t vocab_size, std::size_t hidden_size, DataType dtype,
   register_parameter("weight", weight_);
 }
 
-Tensor LMHead::forward(ConstTensorView hidden_states,
-                       cudaStream_t stream) const {
+Tensor LMHead::forward(ConstTensorView hidden_states, cudaStream_t stream,
+                       std::optional<DataType> output_dtype) const {
   const auto weight = weight_.view();
   auto logits = Tensor::empty({hidden_states.shape()[0], vocab_size_},
-                              hidden_states.dtype(), hidden_states.device());
+                              output_dtype.value_or(hidden_states.dtype()),
+                              hidden_states.device());
   kernels::cuda::linear(hidden_states, weight, logits.view(), std::nullopt,
                         stream);
   return logits;

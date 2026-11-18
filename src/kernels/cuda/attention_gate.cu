@@ -9,7 +9,8 @@ namespace {
 
 constexpr unsigned kThreads = 256;
 
-__global__ void split_kernel(const float* packed, float* query, float* gate,
+template <typename T>
+__global__ void split_kernel(const T* packed, T* query, T* gate,
                              std::size_t count, std::size_t head_dim) {
   const auto start_index =
       static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
@@ -22,14 +23,16 @@ __global__ void split_kernel(const float* packed, float* query, float* gate,
   }
 }
 
-__global__ void gate_kernel(float* output, const float* gate,
-                            std::size_t count) {
+template <typename T>
+__global__ void gate_kernel(T* output, const T* gate, std::size_t count) {
   const auto start_index =
       static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const auto step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
 
   for (auto index = start_index; index < count; index += step) {
-    output[index] *= 1.0f / (1.0f + __expf(-gate[index]));
+    output[index] = detail::from_float<T>(
+        detail::to_float(output[index])
+        / (1.0f + __expf(-detail::to_float(gate[index]))));
   }
 }
 
@@ -44,8 +47,7 @@ void split_attention_gate(ConstTensorView packed, TensorView query,
   assert(packed.rank() == 2 && query.rank() == 3 && same_shape(query, gate));
   assert(packed.shape()[0] == query.shape()[0]
          && packed.shape()[1] == 2 * query.shape()[1] * query.shape()[2]);
-  assert(packed.dtype() == DataType::Float32
-         && same_dtype(packed, query, gate));
+  assert(same_dtype(packed, query, gate));
   assert(same_device(packed, query, gate));
 
   const auto count = query.numel();
@@ -55,9 +57,11 @@ void split_attention_gate(ConstTensorView packed, TensorView query,
 
   const auto blocks = static_cast<unsigned>(
       std::min<std::size_t>((count + kThreads - 1) / kThreads, 65535));
-  split_kernel<<<blocks, kThreads, 0, stream>>>(
-      packed.data<float>(), query.data<float>(), gate.data<float>(), count,
-      query.shape()[2]);
+  detail::dispatch_float(packed.dtype(), [&]<typename T>() {
+    split_kernel<<<blocks, kThreads, 0, stream>>>(
+        packed.data<T>(), query.data<T>(), gate.data<T>(), count,
+        query.shape()[2]);
+  });
 
   check_cuda(cudaGetLastError(), "split_attention_gate launch");
 }
@@ -67,7 +71,7 @@ void apply_sigmoid_gate(TensorView output, ConstTensorView gate,
   detail::assert_tensor(output);
   detail::assert_tensor(gate);
 
-  assert(output.dtype() == DataType::Float32 && same_dtype(output, gate));
+  assert(same_dtype(output, gate));
   assert(same_shape(output, gate) && same_device(output, gate));
 
   const auto count = output.numel();
@@ -77,8 +81,10 @@ void apply_sigmoid_gate(TensorView output, ConstTensorView gate,
 
   const auto blocks = static_cast<unsigned>(
       std::min<std::size_t>((count + kThreads - 1) / kThreads, 65535));
-  gate_kernel<<<blocks, kThreads, 0, stream>>>(output.data<float>(),
-                                               gate.data<float>(), count);
+  detail::dispatch_float(output.dtype(), [&]<typename T>() {
+    gate_kernel<<<blocks, kThreads, 0, stream>>>(output.data<T>(),
+                                                 gate.data<T>(), count);
+  });
 
   check_cuda(cudaGetLastError(), "apply_sigmoid_gate launch");
 }

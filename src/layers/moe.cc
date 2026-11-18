@@ -18,6 +18,7 @@
 
 #include "common/cuda_utils.hh"
 #include "core/expert_policy.hh"
+#include "core/precision.hh"
 #include "kernels/cpu/expert.hh"
 #include "kernels/cuda/kernels.hh"
 
@@ -32,10 +33,12 @@ std::size_t scale_dimension(std::size_t dimension) {
 }
 
 void reserve_rows(Tensor& tensor, std::size_t rows, std::size_t width,
-                  Device device = Device::cpu()) {
+                  Device device = Device::cpu(),
+                  DataType dtype = DataType::Float32) {
   if (tensor.rank() != 2 || tensor.shape()[1] != width
-      || tensor.device() != device || tensor.shape()[0] < rows) {
-    tensor = Tensor::empty({rows, width}, DataType::Float32, device);
+      || tensor.device() != device || tensor.dtype() != dtype
+      || tensor.shape()[0] < rows) {
+    tensor = Tensor::empty({rows, width}, dtype, device);
   }
 }
 
@@ -129,10 +132,11 @@ FP8ExpertWorkspace::FP8ExpertWorkspace(std::size_t intermediate_size,
 }
 
 void FP8ExpertWorkspace::reserve(std::size_t rows,
-                                 std::size_t intermediate_size) {
-  reserve_rows(gate, rows, intermediate_size, Device::cuda(0));
-  reserve_rows(up, rows, intermediate_size, Device::cuda(0));
-  reserve_rows(activated, rows, intermediate_size, Device::cuda(0));
+                                 std::size_t intermediate_size,
+                                 DataType dtype) {
+  reserve_rows(gate, rows, intermediate_size, Device::cuda(0), dtype);
+  reserve_rows(up, rows, intermediate_size, Device::cuda(0), dtype);
+  reserve_rows(activated, rows, intermediate_size, Device::cuda(0), dtype);
 }
 
 FP8Expert::FP8Expert(std::size_t hidden_size, std::size_t intermediate_size,
@@ -173,6 +177,7 @@ void FP8Expert::forward_into(ConstTensorView input, TensorView output,
                              FP8ExpertWorkspace& workspace,
                              cudaStream_t stream) const {
   const auto rows = input.shape()[0];
+  workspace.reserve(rows, gate_.out_features(), input.dtype());
   const auto gate = workspace.gate.view().slice(0, 0, rows);
   const auto up = workspace.up.view().slice(0, 0, rows);
   const auto activated = workspace.activated.view().slice(0, 0, rows);
@@ -477,7 +482,10 @@ ExpertExecutionStats ExpertExecutor::forward_prepared(
     ConstTensorView input, std::span<const std::int32_t> expert_ids,
     std::size_t top_k, TensorView expert_outputs,
     MoEExecutionWorkspace& workspace, cudaStream_t stream,
-    ConstTensorView host_input) const {
+    ConstTensorView host_input, ConstTensorView gpu_input) const {
+  if (gpu_input.data() == nullptr) {
+    gpu_input = input;
+  }
   const auto tokens = input.shape()[0];
   const auto hidden = store_.hidden_size();
   const auto assignments = tokens * top_k;
@@ -488,7 +496,7 @@ ExpertExecutionStats ExpertExecutor::forward_prepared(
 
   if (tokens == 1) {
     return forward_single_into(input, expert_ids, expert_outputs, workspace,
-                               stream, host_input);
+                               stream, host_input, gpu_input);
   }
 
   struct Group {
@@ -552,8 +560,10 @@ ExpertExecutionStats ExpertExecutor::forward_prepared(
   }
   reserve_rows(workspace.grouped_parts, assignments, hidden, Device::cuda(0));
   if (gpu_rows != 0) {
-    reserve_rows(workspace.grouped_input, gpu_rows, hidden, Device::cuda(0));
-    workspace.expert.reserve(max_gpu_rows, store_.intermediate_size());
+    reserve_rows(workspace.grouped_input, gpu_rows, hidden, Device::cuda(0),
+                 gpu_input.dtype());
+    workspace.expert.reserve(max_gpu_rows, store_.intermediate_size(),
+                             gpu_input.dtype());
   }
   if (cpu_rows != 0) {
     workspace.host_input.reserve(input.size_bytes());
@@ -608,8 +618,9 @@ ExpertExecutionStats ExpertExecutor::forward_prepared(
     if (gpu_rows != 0) {
       const auto grouped_input =
           workspace.grouped_input.view().slice(0, 0, gpu_rows);
-      kernels::cuda::moe_gather(input, indices.as_const().slice(0, 0, gpu_rows),
-                                top_k, grouped_input, stream);
+      kernels::cuda::moe_gather(gpu_input,
+                                indices.as_const().slice(0, 0, gpu_rows), top_k,
+                                grouped_input, stream);
 
       for (const auto& group : hits) {
         cache_.expert_at_slot(group.slot)
@@ -642,7 +653,11 @@ ExpertExecutionStats ExpertExecutor::forward_prepared(
 ExpertExecutionStats ExpertExecutor::forward_single_into(
     ConstTensorView input, std::span<const std::int32_t> expert_ids,
     TensorView expert_outputs, MoEExecutionWorkspace& workspace,
-    cudaStream_t stream, ConstTensorView host_input) const {
+    cudaStream_t stream, ConstTensorView host_input,
+    ConstTensorView gpu_input) const {
+  if (gpu_input.data() == nullptr) {
+    gpu_input = input;
+  }
   struct Task {
     std::size_t rank;
     std::size_t expert_id;
@@ -665,7 +680,7 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
   }
 
   if (!hits.empty()) {
-    workspace.expert.reserve(1, store_.intermediate_size());
+    workspace.expert.reserve(1, store_.intermediate_size(), gpu_input.dtype());
   }
 
   const auto hidden = store_.hidden_size();
@@ -744,7 +759,8 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
 
     if (!hits.empty() && hits.size() <= 8) {
       reserve_rows(workspace.expert.activated, hits.size(),
-                   store_.intermediate_size(), input.device());
+                   store_.intermediate_size(), input.device(),
+                   gpu_input.dtype());
       kernels::cuda::FP8ExpertBatch batch;
       batch.count = hits.size();
       for (std::size_t i = 0; i < hits.size(); ++i) {
@@ -752,12 +768,12 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
         batch.rows[i] = mixed ? i : hits[i].rank;
       }
       kernels::cuda::fp8_experts_decode(
-          input, batch, workspace.expert.activated.view(), parts, stream);
+          gpu_input, batch, workspace.expert.activated.view(), parts, stream);
     } else {
       for (std::size_t i = 0; i < hits.size(); ++i) {
         const auto& task = hits[i];
         const auto row = parts.slice(0, mixed ? i : task.rank, 1);
-        cache_.expert_at_slot(task.slot).forward_into(input, row,
+        cache_.expert_at_slot(task.slot).forward_into(gpu_input, row,
                                                       workspace.expert, stream);
       }
     }
@@ -800,7 +816,7 @@ struct MoE::HybridWorkspace {
   std::size_t gpu_count = 0, cpu_count = 0;
 
   HybridWorkspace(const ExpertStore& s, const ExpertCache& c, ThreadPool& p,
-                  std::size_t k)
+                  std::size_t k, DataType dtype)
       : store(s),
         cache(c),
         pool(p),
@@ -820,8 +836,8 @@ struct MoE::HybridWorkspace {
       std::uninitialized_value_construct_n(
           static_cast<std::uint32_t*>(flags.data()),
           flags.capacity_bytes() / sizeof(std::uint32_t));
-      activated = Tensor::empty({k, s.intermediate_size()}, DataType::Float32,
-                                Device::cuda(0));
+      activated =
+          Tensor::empty({k, s.intermediate_size()}, dtype, Device::cuda(0));
       check_cuda(cudaEventCreateWithFlags(&ready, cudaEventDisableTiming),
                  "create expert host fork");
     } catch (...) {
@@ -902,12 +918,13 @@ void MoE::check_async_error() const {
   }
 }
 
-MoEOutput MoE::forward_hybrid(ConstTensorView hidden, cudaStream_t stream,
+MoEOutput MoE::forward_hybrid(ConstTensorView gpu_hidden, cudaStream_t stream,
                               ExpertUsage* usage, bool defer_cpu,
                               bool graph_warmup) const {
   if (!hybrid_) {
     hybrid_ = std::make_unique<HybridWorkspace>(
-        experts_, *cache_, executor_->cpu_pool_, config_.top_k);
+        experts_, *cache_, executor_->cpu_pool_, config_.top_k,
+        gpu_hidden.dtype());
   }
   auto& work = *hybrid_;
   work.usage = graph_warmup ? nullptr : usage;
@@ -923,6 +940,12 @@ MoEOutput MoE::forward_hybrid(ConstTensorView hidden, cudaStream_t stream,
         .store(1, std::memory_order_release);
   }
   const auto function = [&]() -> std::vector<Tensor> {
+    Tensor promoted;
+    auto hidden = gpu_hidden;
+    if (gpu_hidden.dtype() == DataType::BFloat16) {
+      promoted = cast_tensor(gpu_hidden, DataType::Float32, stream);
+      hidden = promoted.view().as_const();
+    }
     const auto device = hidden.device();
     auto ids = Tensor::empty({1, config_.top_k}, DataType::Int32, device);
     auto weights = Tensor::empty({1, config_.top_k}, DataType::Float32, device);
@@ -955,11 +978,11 @@ MoEOutput MoE::forward_hybrid(ConstTensorView hidden, cudaStream_t stream,
                "record hybrid input publication");
     Tensor shared, gate;
     if (shared_expert_) {
-      shared = shared_expert_->forward(hidden, stream);
+      shared = shared_expert_->forward(gpu_hidden, stream);
       gate = shared_expert_gate_->forward(hidden, stream);
     }
     kernels::cuda::fp8_experts_decode_routed(
-        hidden, ids.view().as_const(), cache_->device_routes(),
+        gpu_hidden, ids.view().as_const(), cache_->device_routes(),
         work.activated.view(), parts.view(), stream);
     kernels::cuda::moe_combine_routed(
         parts.view(), static_cast<const float*>(work.parts.device_data()),
@@ -970,6 +993,10 @@ MoEOutput MoE::forward_hybrid(ConstTensorView hidden, cudaStream_t stream,
             static_cast<char*>(work.flags.device_data()) + 64),
         reinterpret_cast<volatile std::uint32_t*>(
             static_cast<char*>(work.flags.device_data()) + 128));
+    if (gpu_hidden.dtype() == DataType::BFloat16) {
+      output =
+          cast_tensor(output.view().as_const(), DataType::BFloat16, stream);
+    }
     return {std::move(output),  std::move(logits), std::move(ids),
             std::move(weights), std::move(parts),  std::move(shared),
             std::move(gate)};
@@ -980,7 +1007,8 @@ MoEOutput MoE::forward_hybrid(ConstTensorView hidden, cudaStream_t stream,
   } else {
     try {
       tensors = decode_prefix_.run(
-          stream, {hidden.data(), cache_->device_routes().data()}, function);
+          stream, {gpu_hidden.data(), cache_->device_routes().data()},
+          function);
       complete_hybrid_cpu(stream);
     } catch (...) {
       abort_hybrid();
@@ -1061,13 +1089,17 @@ MoE::MoE(MoEConfig config, ThreadPool& cpu_pool, Device device,
             device),
       experts_(config_.hidden_size, config_.intermediate_size,
                config_.num_experts) {
+  if (config_.activation_dtype != DataType::Float32
+      && config_.activation_dtype != DataType::BFloat16) {
+    throw std::invalid_argument("MoE activations must be FP32 or BF16");
+  }
   register_module("gate", gate_);
   register_module("experts", experts_);
 
   if (config_.shared_expert_intermediate_size != 0) {
     shared_expert_ = std::make_unique<SwiGLUMLP>(
         config_.hidden_size, config_.shared_expert_intermediate_size,
-        DataType::Float32, device);
+        config_.activation_dtype, device);
 
     shared_expert_gate_ = std::make_unique<Linear>(
         config_.hidden_size, 1, false, DataType::Float32, device);
@@ -1113,7 +1145,7 @@ void MoE::populate_expert_cache(cudaStream_t stream) {
   cache_->populate(stream);
 }
 
-MoEOutput MoE::forward(ConstTensorView hidden_states, cudaStream_t stream,
+MoEOutput MoE::forward(ConstTensorView gpu_hidden, cudaStream_t stream,
                        MoEPhaseProfile* profile, ExpertUsage* usage,
                        bool decode_graphs, bool defer_cpu,
                        bool graph_warmup) const {
@@ -1123,19 +1155,20 @@ MoEOutput MoE::forward(ConstTensorView hidden_states, cudaStream_t stream,
     throw std::logic_error(
         "call populate_expert_cache after initializing MoE weights");
   }
-  if (hidden_states.rank() != 2 || hidden_states.shape()[0] == 0
-      || hidden_states.shape()[1] != config_.hidden_size
-      || hidden_states.dtype() != DataType::Float32
-      || hidden_states.device() != Device::cuda(0)
-      || !hidden_states.is_contiguous()) {
-    throw std::invalid_argument("MoE input must be nonempty CUDA FP32 [T,H]");
+  if (gpu_hidden.rank() != 2 || gpu_hidden.shape()[0] == 0
+      || gpu_hidden.shape()[1] != config_.hidden_size
+      || gpu_hidden.dtype() != config_.activation_dtype
+      || gpu_hidden.device() != Device::cuda(0)
+      || !gpu_hidden.is_contiguous()) {
+    throw std::invalid_argument(
+        "MoE input must be nonempty CUDA [T,H] with the configured activation "
+        "dtype");
   }
-
-  const auto tokens = hidden_states.shape()[0];
+  const auto tokens = gpu_hidden.shape()[0];
   if (usage && usage->counts.size() != config_.num_experts) {
     throw std::invalid_argument("expert usage must contain every expert");
   }
-  const auto device = hidden_states.device();
+  const auto device = gpu_hidden.device();
   if (config_.top_k == 0
       || tokens > std::numeric_limits<std::int32_t>::max() / config_.top_k) {
     throw std::invalid_argument("MoE assignment count exceeds Int32 indices");
@@ -1143,8 +1176,15 @@ MoEOutput MoE::forward(ConstTensorView hidden_states, cudaStream_t stream,
   const auto assignments = tokens * config_.top_k;
   if ((decode_graphs || defer_cpu) && tokens == 1 && config_.top_k <= 8
       && !profile && cache_->device_routes().numel() != 0) {
-    return forward_hybrid(hidden_states, stream, usage, defer_cpu,
-                          graph_warmup);
+    return forward_hybrid(gpu_hidden, stream, usage, defer_cpu, graph_warmup);
+  }
+  // CPU experts and routing retain FP32; resident experts use the original
+  // BF16 activation. The hybrid path performs its conversion inside capture.
+  Tensor promoted;
+  auto hidden_states = gpu_hidden;
+  if (gpu_hidden.dtype() == DataType::BFloat16) {
+    promoted = cast_tensor(gpu_hidden, DataType::Float32, stream);
+    hidden_states = promoted.view().as_const();
   }
   workspace_->prepare(stream);
   workspace_->host_ids.reserve(assignments * sizeof(std::int32_t));
@@ -1184,7 +1224,7 @@ MoEOutput MoE::forward(ConstTensorView hidden_states, cudaStream_t stream,
 
     const auto launch_shared = [&] {
       if (shared_expert_) {
-        shared_output = shared_expert_->forward(hidden_states, stream);
+        shared_output = shared_expert_->forward(gpu_hidden, stream);
         shared_gate_logits =
             shared_expert_gate_->forward(hidden_states, stream);
       }
@@ -1202,7 +1242,7 @@ MoEOutput MoE::forward(ConstTensorView hidden_states, cudaStream_t stream,
                                            : ConstTensorView{};
     stats = executor_->forward_prepared(hidden_states, host_ids, config_.top_k,
                                         expert_outputs.view(), *workspace_,
-                                        stream, host_input);
+                                        stream, host_input, gpu_hidden);
     kernels::cuda::moe_combine(expert_outputs.view().as_const(),
                                weights.view().as_const(), output.view(),
                                stream);
@@ -1215,6 +1255,10 @@ MoEOutput MoE::forward(ConstTensorView hidden_states, cudaStream_t stream,
       kernels::cuda::moe_add_shared(shared_output.view().as_const(),
                                     shared_gate_logits.view().as_const(),
                                     output.view(), stream);
+    }
+    if (gpu_hidden.dtype() == DataType::BFloat16) {
+      output =
+          cast_tensor(output.view().as_const(), DataType::BFloat16, stream);
     }
     workspace_->record_completion(stream);
     if (profile) {

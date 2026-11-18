@@ -38,7 +38,8 @@ struct FP8ExpertWorkspace {
   FP8ExpertWorkspace() = default;
   explicit FP8ExpertWorkspace(std::size_t intermediate_size,
                               std::size_t rows = 1);
-  void reserve(std::size_t rows, std::size_t intermediate_size);
+  void reserve(std::size_t rows, std::size_t intermediate_size,
+               DataType dtype = DataType::Float32);
 };
 
 struct MoEExecutionWorkspace {
@@ -178,12 +179,13 @@ class ExpertExecutor final {
       ConstTensorView input, std::span<const std::int32_t> expert_ids,
       std::size_t top_k, TensorView expert_outputs,
       MoEExecutionWorkspace& workspace, cudaStream_t stream,
-      ConstTensorView host_input) const;
+      ConstTensorView host_input, ConstTensorView gpu_input = {}) const;
 
   [[nodiscard]] ExpertExecutionStats forward_single_into(
       ConstTensorView input, std::span<const std::int32_t> expert_ids,
       TensorView expert_outputs, MoEExecutionWorkspace& workspace,
-      cudaStream_t stream, ConstTensorView host_input) const;
+      cudaStream_t stream, ConstTensorView host_input,
+      ConstTensorView gpu_input = {}) const;
 
   const ExpertStore& store_;
   const ExpertCache& cache_;
@@ -196,6 +198,7 @@ struct MoEConfig {
   std::size_t num_experts;
   std::size_t top_k;
   std::size_t shared_expert_intermediate_size = 0;
+  DataType activation_dtype = DataType::Float32;
 };
 
 struct MoEOutput {

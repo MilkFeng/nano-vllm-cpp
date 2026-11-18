@@ -201,16 +201,18 @@ python3 tests/benchmark_test.py --model "$HOME/models/Qwen3-0.6B"
 ```
 
 `--max-seqs` 还决定 Qwen3.5 预分配的递推状态槽位数，并限制全部活跃序列数，
-包含分块 prefill 中的序列。35B-A3B 当前每个槽位约 62.8 MiB；不要沿用 dense
-Qwen3 的默认值 512，这会仅为 linear 状态分配约 31.4 GiB。日志分别显示 K/V
+包含分块 prefill 中的序列。35B-A3B 当前每个槽位约 61.4 MiB；不要沿用 dense
+Qwen3 的默认值 512，这会仅为 linear 状态分配约 30.7 GiB。日志分别显示 K/V
 字节数、状态槽位与状态字节数、每层 GPU 专家数。可加 `--gpu-expert-ids 0,2`，
 两个 FP8 routed 专家在 40 层共增加约 240 MiB 常驻权重及少量 scale。
 
 完整 35B 已在约 39 GiB RAM 的 WSL2 上验证单序列运行，配置和结果见
 [Decode 性能记录](docs/decode30-performance.md)。全部 routed FP8 权重约 30 GiB，
 加载还会使用页缓存和 staging。GPU 投影保留 FP8 权重和 FP32 scale，LM head
-保留 checkpoint 的 BF16 存储；读取后以 FP32 计算。其他非专家参数、激活和累加仍为 FP32。
-KV 和递推状态也在 GPU，尚未放到系统 RAM。
+与 Embedding 保留 BF16 存储，GPU 主干激活、KV cache 和卷积历史使用 BF16。
+残差流、DeltaNet 递推状态、路由和衰减参数计算、归一化统计、累加及最终 logits
+保留 FP32；CPU 专家在 FP32 中计算。详细口径与验证见[混合精度](docs/qwen35-precision.md)。
+KV 和递推状态在 GPU。
 
 ### C++ 聊天模板接口
 
@@ -404,7 +406,7 @@ CPU 构造只创建参考权重。`MoEOutput` 的 `gpu_experts`、`cpu_experts` 
 token 选中会分别计数；`expert_cache().num_slots()`
 和 `size_bytes()` 只统计 routed 缓存槽位和权重，不包含 Router、共享专家及工作区。
 
-当前支持多 token、FP32 激活与 FP8 专家、1..1024 个专家、`1 <= top_k <= E`。
+当前支持多 token、FP32/BF16 GPU 激活与 FP8 专家、1..1024 个专家、`1 <= top_k <= E`。
 populate/replace 同步传入的 stream，调用需串行；forward 的 GPU 工作异步提交，
 读取结果或释放模块前需等待相应 stream，开启 profiling 时仍等待本层完成。
 缓存槽位数固定，
@@ -431,8 +433,9 @@ MoE moe(config, cpu_pool, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6}
 每个专家注册六个 CPU 参数：三个 `gate_proj/up_proj/down_proj.weight` 为
 FP8，三个同级 `weight_scale_inv` 为 FP32，按 `128x128` 分块。通过参数接口
 初始化，或把模块注册到 `Model` 后用 `load_ckpt()` 加载；GPU 副本与计算工作区
-不注册为参数。Router、共享专家、门控及激活仍为 FP32。官方 Qwen3.5 FP8
-checkpoint 的 scale 也可以是 BF16，需要用下面的模型专用加载器转换；通用
+不注册为参数。`MoEConfig::activation_dtype` 默认为 FP32，Qwen3.5 设置为 BF16；
+GPU 专家和共享专家使用该激活精度，Router、共享专家门控、专家输出合并以及 CPU 专家
+计算保持 FP32，最后将合并结果转回激活精度。官方 Qwen3.5 FP8 checkpoint 的 scale 也可以是 BF16，需要用下面的模型专用加载器转换；通用
 `Model::load_ckpt()` 的默认实现只接受 dtype 相同的参数，Qwen3.5 模型会覆盖它
 以处理 BF16 和 FP8 转换。
 
@@ -476,12 +479,12 @@ CPU 权重展开缓冲区。全部上传完成后才发布缓存映射。改变 
 
 GPU FP8 专家调用 `kernels::cuda::linear_fp8()`：加载权重时将 E4M3FN 解码成
 FP32，再乘 checkpoint 中对应的 `weight_scale_inv[n/128,k/128]`。
-反量化融合在 GEMM 内，输入激活直接以 FP32 参与计算，无需计算 amax 或
-输入 scale，也不会增加激活量化误差。乘法、累加与输出都保持 FP32。
+反量化融合在 GEMM 内，支持 BF16/FP32 输入，无需计算 amax 或输入 scale。
+乘法和累加使用 FP32；普通投影输出匹配输入精度，专家部分输出保留 FP32 用于合并。
 
 多行输入参考寄存器分块 GEMM：每个 block 计算 `16x64` 输出，每个线程
 计算 `2x4` 小块，沿 K 以 32 为步长预取并双缓冲。FP8 权重加载后解码、
-缩放并转置到 shared memory 的 `[K,N]` tile，与 FP32 输入做 `fmaf`。
+缩放并转置到 shared memory 的 `[K,N]` tile，输入提升到 FP32 后做 `fmaf`。
 `M=1` 时每个 warp 沿 K 并行计算一个输出，直接在寄存器里反量化权重。
 
 一次 Linear 调用只启动一个 kernel，不创建完整 FP32 权重矩阵或全局量化
@@ -535,10 +538,12 @@ forward 需要 CUDA 设备 0。所有参数需完整加载后才能执行。
 报错，可用 `ModelLoadOptions::allow_unexpected_tensors` 放宽。
 
 模型加载器直接读取 safetensors 分片，按实际 dtype 转换。Routed FP8 字节原样
-复制到 RAM，BF16/F32 scale 转成 FP32；其他 BF16/F32 参数转成 FP32，非专家
-FP8 矩阵乘对应的 `128x128` scale 后展开到模型设备。GPU routed 专家复制
-FP8 权重和 FP32 scale，在 GEMM 内融合权重反量化；输入、乘法、累加
-和输出都保持 FP32。非专家模块与 CPU 未命中专家也使用 FP32 激活。
+复制到 RAM，BF16/F32 scale 转成 FP32。GPU 投影与 routed/shared 专家保留 FP8 权重，
+Embedding、普通 RMSNorm 和 LM head 使用 BF16 权重；Router、共享专家门控及
+DeltaNet 的 a/b 投影、A_log、dt_bias 和 gated norm 权重使用 FP32。
+GPU 大投影与专家以 BF16 激活运行，在 kernel 内将 FP8 权重反量化并用 FP32 累加；
+CPU 未命中专家收到转换后的 FP32 激活。合并专家输出使用 FP32，主干输出转回 BF16。
+LM head 接收 BF16 hidden states，直接输出 FP32 logits，避免先舍入成 BF16。
 
 加载先验证全部所需文本 tensor 的名称、shape、dtype 和 scale 网格，再修改参数。
 元数据错误保留原模型；开始复制后若失败，该模型不能再执行，需重新成功加载。
@@ -593,8 +598,9 @@ linear 层的历史和状态，旧 K/V 的可见范围则由 block table 与长�
 prefill。现有 prefix cache 只保存 K/V 块，不能复用 GatedDeltaNet 的递推状态，
 因此 Engine 已对 Qwen3.5 关闭 prefix reuse。
 
-按 35B-A3B 的 10 个 full 层和 30 个 linear 层计算，当前 FP32 K/V 每个逻辑
-token 占 40 KiB；linear 状态每个序列约 62.8 MiB，与上下文长度无关。
+按 35B-A3B 的 10 个 full 层和 30 个 linear 层计算，当前 BF16 K/V 每个逻辑
+token 占 20 KiB；linear 状态每个序列约 61.4 MiB，其中递推矩阵仍为 FP32，
+与上下文长度无关。
 早期小模型验证时，WSL 只有 22 GiB RAM，未加载完整 35B。后续约 39 GiB RAM
 环境的整模型运行与紧凑 GPU 权重实现见 [Decode 性能记录](docs/decode30-performance.md)。
 
@@ -620,10 +626,12 @@ linear 状态。
 
 `RMSNorm` 增加末尾的 `zero_centered` 构造参数，默认 `false` 保持 Qwen3 的
 语义；设为 `true` 时，在 FP32 中完成归一化并乘 `1 + weight`，最后转换到
-输出 dtype。带 residual 的版本先将相加结果舍入到 tensor dtype，再归一化。
+输出 dtype。带 residual 的版本在 FP32 中相加和计算统计；Qwen3.5 的 residual
+输出保留 FP32，归一化输出转为 BF16。
 
 新增 `layers/gated_rms_norm.hh/.cc`，供 GatedDeltaNet 使用。它直接乘 weight，
-再逐元素乘 `SiLU(gate)`，目前只支持 FP32 计算。两种 norm 不可互换：
+再逐元素乘 `SiLU(gate)`，支持 BF16/FP32 输入输出，内部统计和门控计算为 FP32。
+两种 norm 不可互换：
 
 ```text
 zero-centered: y = x / sqrt(mean(x²) + eps) * (1 + weight)

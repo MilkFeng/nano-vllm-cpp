@@ -8,7 +8,8 @@
 
 namespace nanovllm {
 
-GatedDeltaNet::GatedDeltaNet(const ModelConfig& config, Device device)
+GatedDeltaNet::GatedDeltaNet(const ModelConfig& config, Device device,
+                             DataType activation_dtype)
     : hidden_size_(config.hidden_size),
       key_heads_(config.linear_num_key_heads),
       value_heads_(config.linear_num_value_heads),
@@ -16,15 +17,15 @@ GatedDeltaNet::GatedDeltaNet(const ModelConfig& config, Device device)
       value_dim_(config.linear_value_head_dim),
       conv_dim_(2 * key_heads_ * key_dim_ + value_heads_ * value_dim_),
       conv_kernel_(config.linear_conv_kernel_dim),
-      in_proj_qkv_(hidden_size_, conv_dim_, false, DataType::Float32, device),
+      in_proj_qkv_(hidden_size_, conv_dim_, false, activation_dtype, device),
       in_proj_z_(hidden_size_, value_heads_ * value_dim_, false,
-                 DataType::Float32, device),
+                 activation_dtype, device),
       in_proj_a_(hidden_size_, value_heads_, false, DataType::Float32, device),
       in_proj_b_(hidden_size_, value_heads_, false, DataType::Float32, device),
       out_proj_(value_heads_ * value_dim_, hidden_size_, false,
-                DataType::Float32, device),
-      conv_weight_(Tensor::empty({conv_dim_, 1, conv_kernel_},
-                                 DataType::Float32, device)),
+                activation_dtype, device),
+      conv_weight_(Tensor::empty({conv_dim_, 1, conv_kernel_}, activation_dtype,
+                                 device)),
       A_log_(Tensor::empty({value_heads_}, DataType::Float32, device)),
       dt_bias_(Tensor::empty({value_heads_}, DataType::Float32, device)),
       norm_(value_dim_, config.rms_norm_eps, device) {
@@ -60,7 +61,7 @@ Tensor GatedDeltaNet::forward(ConstTensorView hidden_states,
     const auto batch = cu.shape()[0] - 1;
 
     local_conv = Tensor::empty({batch, conv_dim_, conv_kernel_ - 1},
-                               DataType::Float32, hidden_states.device());
+                               hidden_states.dtype(), hidden_states.device());
     local_recurrent = Tensor::empty({batch, value_heads_, key_dim_, value_dim_},
                                     DataType::Float32, hidden_states.device());
 
@@ -78,14 +79,14 @@ Tensor GatedDeltaNet::forward(ConstTensorView hidden_states,
     recurrent = local_recurrent.view();
     state_indices = {};
   }
-  auto convolved = Tensor::empty({tokens, conv_dim_}, DataType::Float32,
+  auto convolved = Tensor::empty({tokens, conv_dim_}, hidden_states.dtype(),
                                  hidden_states.device());
 
   kernels::cuda::causal_conv1d(qkv.view().as_const(), conv_weight_.view(), conv,
                                cu, state_indices, convolved.view(), stream);
 
   auto output = Tensor::empty({tokens, value_heads_, value_dim_},
-                              DataType::Float32, hidden_states.device());
+                              hidden_states.dtype(), hidden_states.device());
 
   kernels::cuda::gated_delta_rule(
       convolved.view().as_const(), a.view().as_const(), b.view().as_const(),

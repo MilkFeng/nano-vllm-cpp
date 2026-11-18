@@ -25,7 +25,10 @@ Linear::Linear(std::size_t in_features, std::size_t out_features, bool bias,
 Tensor Linear::forward(ConstTensorView input, cudaStream_t stream) const {
   const auto weight = weight_.view();
 
-  auto output = Tensor::empty({input.shape()[0], out_features_}, input.dtype(),
+  // FP32 parameters are used by the small, sensitive routing/decay projections.
+  const auto output_dtype =
+      weight.dtype() == DataType::Float32 ? DataType::Float32 : input.dtype();
+  auto output = Tensor::empty({input.shape()[0], out_features_}, output_dtype,
                               input.device());
 
   std::optional<ConstTensorView> bias;

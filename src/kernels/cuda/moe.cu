@@ -98,11 +98,12 @@ __global__ void route_kernel(const float* __restrict__ logits,
   }
 }
 
-__global__ void moe_gather_kernel(const float* __restrict__ input,
+template <typename T>
+__global__ void moe_gather_kernel(const T* __restrict__ input,
                                   const std::int32_t* __restrict__ order,
-                                  float* __restrict__ grouped,
-                                  std::size_t count, std::size_t width,
-                                  std::size_t tokens, std::size_t top_k) {
+                                  T* __restrict__ grouped, std::size_t count,
+                                  std::size_t width, std::size_t tokens,
+                                  std::size_t top_k) {
   const std::size_t start =
       static_cast<std::size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
   const std::size_t step = static_cast<std::size_t>(blockDim.x) * gridDim.x;
@@ -151,7 +152,8 @@ __global__ void combine_kernel(const float* __restrict__ parts,
   }
 }
 
-__global__ void add_shared_kernel(const float* __restrict__ shared_output,
+template <typename T>
+__global__ void add_shared_kernel(const T* __restrict__ shared_output,
                                   const float* __restrict__ gate_logits,
                                   float* __restrict__ output,
                                   std::size_t hidden_size, std::size_t tokens) {
@@ -164,14 +166,15 @@ __global__ void add_shared_kernel(const float* __restrict__ shared_output,
     const float exponential = expf(-fabsf(logit));
     const float weight = logit >= 0.0f ? 1.0f / (1.0f + exponential)
                                        : exponential / (1.0f + exponential);
-    output[index] += weight * shared_output[index];
+    output[index] += weight * detail::to_float(shared_output[index]);
   }
 }
 
+template <typename T>
 __global__ void combine_mapped_kernel(
     float* parts, const float* cpu_parts, const float* weights, float* output,
-    const float* shared, const float* gate, std::size_t hidden,
-    std::size_t top_k, const std::int32_t* ids, const FP8ExpertWeights* routes,
+    const T* shared, const float* gate, std::size_t hidden, std::size_t top_k,
+    const std::int32_t* ids, const FP8ExpertWeights* routes,
     const volatile std::uint32_t* ready, volatile std::uint32_t* error) {
   __shared__ int usable;
   if (threadIdx.x == 0) {
@@ -221,7 +224,7 @@ __global__ void combine_mapped_kernel(
     const float exponential = expf(-fabsf(logit));
     const float weight = logit >= 0.0f ? 1.0f / (1.0f + exponential)
                                        : exponential / (1.0f + exponential);
-    sum += weight * shared[d];
+    sum += weight * detail::to_float(shared[d]);
   }
   output[d] = sum;
 }
@@ -287,7 +290,7 @@ void moe_gather(ConstTensorView input, ConstTensorView order, std::size_t top_k,
   detail::assert_tensor(grouped);
 
   assert(same_device(input, order, grouped));
-  assert(input.dtype() == DataType::Float32 && same_dtype(input, grouped));
+  assert(same_dtype(input, grouped));
   assert(input.rank() == 2 && grouped.rank() == 2 && order.rank() == 1);
   assert(order.dtype() == DataType::Int32
          && order.numel() == grouped.shape()[0]);
@@ -300,9 +303,11 @@ void moe_gather(ConstTensorView input, ConstTensorView order, std::size_t top_k,
 
   const auto blocks = static_cast<unsigned>(std::min<std::size_t>(
       (grouped.numel() + kThreads - 1) / kThreads, 65535));
-  moe_gather_kernel<<<blocks, kThreads, 0, stream>>>(
-      input.data<float>(), order.data<std::int32_t>(), grouped.data<float>(),
-      grouped.numel(), input.shape()[1], input.shape()[0], top_k);
+  detail::dispatch_float(input.dtype(), [&]<typename T>() {
+    moe_gather_kernel<<<blocks, kThreads, 0, stream>>>(
+        input.data<T>(), order.data<std::int32_t>(), grouped.data<T>(),
+        grouped.numel(), input.shape()[1], input.shape()[0], top_k);
+  });
   check_cuda(cudaGetLastError(), "MoE gather kernel launch");
 }
 
@@ -373,7 +378,7 @@ void moe_add_shared(ConstTensorView shared_output, ConstTensorView gate_logits,
   detail::assert_tensor(output);
 
   assert(same_device(shared_output, gate_logits, output));
-  assert(same_dtype(shared_output, gate_logits, output));
+  assert(same_dtype(gate_logits, output));
   assert(output.dtype() == DataType::Float32);
   assert(output.rank() == 2);
 
@@ -388,9 +393,11 @@ void moe_add_shared(ConstTensorView shared_output, ConstTensorView gate_logits,
 
   const auto blocks = static_cast<unsigned>(
       std::min<std::size_t>((output.numel() + kThreads - 1) / kThreads, 65535));
-  add_shared_kernel<<<blocks, kThreads, 0, stream>>>(
-      shared_output.data<float>(), gate_logits.data<float>(),
-      output.data<float>(), hidden_size, tokens);
+  detail::dispatch_float(shared_output.dtype(), [&]<typename T>() {
+    add_shared_kernel<<<blocks, kThreads, 0, stream>>>(
+        shared_output.data<T>(), gate_logits.data<float>(),
+        output.data<float>(), hidden_size, tokens);
+  });
   check_cuda(cudaGetLastError(), "MoE shared branch kernel launch");
 }
 
@@ -402,11 +409,16 @@ void moe_combine_routed(TensorView expert_outputs, const float* cpu_parts,
                         const volatile std::uint32_t* ready,
                         volatile std::uint32_t* error) {
   const auto hidden = output.shape()[1];
-  combine_mapped_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
-      expert_outputs.data<float>(), cpu_parts, expert_weights.data<float>(),
-      output.data<float>(), shared_output.data<float>(),
-      gate_logits.data<float>(), hidden, ids.numel(), ids.data<std::int32_t>(),
-      reinterpret_cast<const FP8ExpertWeights*>(routes.data()), ready, error);
+  const auto dtype =
+      shared_output.numel() ? shared_output.dtype() : DataType::Float32;
+  detail::dispatch_float(dtype, [&]<typename T>() {
+    combine_mapped_kernel<<<(hidden + 255) / 256, 256, 0, stream>>>(
+        expert_outputs.data<float>(), cpu_parts, expert_weights.data<float>(),
+        output.data<float>(), shared_output.data<T>(),
+        gate_logits.data<float>(), hidden, ids.numel(),
+        ids.data<std::int32_t>(),
+        reinterpret_cast<const FP8ExpertWeights*>(routes.data()), ready, error);
+  });
   check_cuda(cudaGetLastError(), "routed mapped combine launch");
 }
 

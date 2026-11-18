@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 #include "common/cuda_utils.hh"
 #include "kernels/cuda/common.cuh"
@@ -17,23 +18,25 @@ constexpr std::size_t kBlockSize = kWarps * 32;
 
 constexpr unsigned kVectorSize = 4;
 
+template <typename T>
 __device__ __forceinline__ float4
-load_input4_or_zero(const float* __restrict__ input, std::size_t M,
-                    std::size_t K, std::size_t m, std::size_t k) {
+load_input4_or_zero(const T* __restrict__ input, std::size_t M, std::size_t K,
+                    std::size_t m, std::size_t k) {
   if (m >= M || k >= K) {
     return make_float4(0, 0, 0, 0);
   }
 
   const auto* address = input + m * K + k;
-
-  if (K - k >= kVectorSize
-      && (reinterpret_cast<std::uintptr_t>(address) & 15) == 0) {
-    return *reinterpret_cast<const float4*>(address);
-  } else {
-    return make_float4(address[0], K - k > 1 ? address[1] : 0.0f,
-                       K - k > 2 ? address[2] : 0.0f,
-                       K - k > 3 ? address[3] : 0.0f);
+  if constexpr (std::is_same_v<T, float>) {
+    if (K - k >= kVectorSize
+        && (reinterpret_cast<std::uintptr_t>(address) & 15) == 0) {
+      return *reinterpret_cast<const float4*>(address);
+    }
   }
+  return make_float4(detail::to_float(address[0]),
+                     K - k > 1 ? detail::to_float(address[1]) : 0.0f,
+                     K - k > 2 ? detail::to_float(address[2]) : 0.0f,
+                     K - k > 3 ? detail::to_float(address[3]) : 0.0f);
 }
 
 __device__ __forceinline__ std::uint32_t load_weight4_or_zero(
@@ -68,10 +71,11 @@ __device__ __forceinline__ float4 dequantize4(std::uint32_t packed,
                      decoded.w * scale);
 }
 
-__global__ void gemv_kernel(const float* __restrict__ input,
+template <typename T, typename O>
+__global__ void gemv_kernel(const T* __restrict__ input,
                             const std::uint8_t* __restrict__ weight,
                             const float* __restrict__ weight_scale_inv,
-                            float* __restrict__ output, std::size_t N,
+                            O* __restrict__ output, std::size_t N,
                             std::size_t K, std::size_t weight_stride) {
   const unsigned lane = threadIdx.x % 32;
   const auto n =
@@ -101,15 +105,16 @@ __global__ void gemv_kernel(const float* __restrict__ input,
   sum = detail::warp_sum_reduce<float, false>(sum);
 
   if (lane == 0) {
-    output[n] = sum;
+    output[n] = detail::from_float<O>(sum);
   }
 }
 
-template <unsigned BX, unsigned BY, unsigned TM, unsigned TN, unsigned KS>
-__global__ void matmul_kernel(const float* __restrict__ input,
+template <unsigned BX, unsigned BY, unsigned TM, unsigned TN, unsigned KS,
+          typename T, typename O>
+__global__ void matmul_kernel(const T* __restrict__ input,
                               const std::uint8_t* __restrict__ weight,
                               const float* __restrict__ weight_scale_inv,
-                              float* __restrict__ output, std::size_t M,
+                              O* __restrict__ output, std::size_t M,
                               std::size_t N, std::size_t K,
                               std::size_t weight_stride) {
   constexpr unsigned BM = BY * TM;
@@ -265,14 +270,15 @@ __global__ void matmul_kernel(const float* __restrict__ input,
     for (unsigned j = 0; j < TN; ++j) {
       const auto n = n_begin + thread_n + j;
       if (m < M && n < N) {
-        output[m * N + n] = acc[i][j];
+        output[m * N + n] = detail::from_float<O>(acc[i][j]);
       }
     }
   }
 }
 
-__global__ void expert_gate_up_kernel(const float* input, FP8ExpertBatch batch,
-                                      float* activated, std::size_t hidden,
+template <typename T>
+__global__ void expert_gate_up_kernel(const T* input, FP8ExpertBatch batch,
+                                      T* activated, std::size_t hidden,
                                       std::size_t intermediate,
                                       const FP8ExpertWeights* routes = nullptr,
                                       const std::int32_t* ids = nullptr) {
@@ -309,11 +315,16 @@ __global__ void expert_gate_up_kernel(const float* input, FP8ExpertBatch batch,
   gate = detail::warp_sum_reduce<float, false>(gate);
   up = detail::warp_sum_reduce<float, false>(up);
   if (lane == 0) {
-    activated[expert * intermediate + n] = (gate / (1.0f + __expf(-gate))) * up;
+    // Match the BF16 intermediate boundaries of the unfused expert path.
+    gate = detail::to_float(detail::from_float<T>(gate));
+    up = detail::to_float(detail::from_float<T>(up));
+    activated[expert * intermediate + n] =
+        detail::from_float<T>((gate / (1.0f + __expf(-gate))) * up);
   }
 }
 
-__global__ void expert_down_kernel(const float* activated, FP8ExpertBatch batch,
+template <typename T>
+__global__ void expert_down_kernel(const T* activated, FP8ExpertBatch batch,
                                    float* output, std::size_t hidden,
                                    std::size_t intermediate,
                                    const FP8ExpertWeights* routes = nullptr,
@@ -356,19 +367,21 @@ void fp8_experts_decode(ConstTensorView input, const FP8ExpertBatch& batch,
                         cudaStream_t stream) {
   assert(batch.count > 0 && batch.count <= 8);
   assert(input.rank() == 2 && input.shape()[0] == 1);
-  assert(input.dtype() == DataType::Float32
-         && same_dtype(input, activated, output));
+  assert((input.dtype() == DataType::Float32
+          || input.dtype() == DataType::BFloat16)
+         && same_dtype(input, activated)
+         && output.dtype() == DataType::Float32);
   assert(activated.rank() == 2 && activated.shape()[0] >= batch.count);
   const auto hidden = input.shape()[1], intermediate = activated.shape()[1];
-  expert_gate_up_kernel<<<dim3((intermediate + 3) / 4, batch.count), 128, 0,
-                          stream>>>(input.data<float>(), batch,
-                                    activated.data<float>(), hidden,
-                                    intermediate);
-  check_cuda(cudaGetLastError(), "batched FP8 Gate/Up decode launch");
-  expert_down_kernel<<<dim3((hidden + 3) / 4, batch.count), 128, 0, stream>>>(
-      activated.data<float>(), batch, output.data<float>(), hidden,
-      intermediate);
-  check_cuda(cudaGetLastError(), "batched FP8 Down decode launch");
+  detail::dispatch_float(input.dtype(), [&]<typename T>() {
+    expert_gate_up_kernel<<<dim3((intermediate + 3) / 4, batch.count), 128, 0,
+                            stream>>>(
+        input.data<T>(), batch, activated.data<T>(), hidden, intermediate);
+    check_cuda(cudaGetLastError(), "batched FP8 Gate/Up decode launch");
+    expert_down_kernel<<<dim3((hidden + 3) / 4, batch.count), 128, 0, stream>>>(
+        activated.data<T>(), batch, output.data<float>(), hidden, intermediate);
+    check_cuda(cudaGetLastError(), "batched FP8 Down decode launch");
+  });
 }
 
 void fp8_experts_decode_routed(ConstTensorView input, ConstTensorView ids,
@@ -378,15 +391,18 @@ void fp8_experts_decode_routed(ConstTensorView input, ConstTensorView ids,
   batch.count = ids.numel();
   const auto hidden = input.shape()[1], intermediate = activated.shape()[1];
   const auto* table = reinterpret_cast<const FP8ExpertWeights*>(routes.data());
-  expert_gate_up_kernel<<<dim3((intermediate + 3) / 4, batch.count), 128, 0,
-                          stream>>>(
-      input.data<float>(), batch, activated.data<float>(), hidden, intermediate,
-      table, ids.data<std::int32_t>());
-  check_cuda(cudaGetLastError(), "routed FP8 Gate/Up launch");
-  expert_down_kernel<<<dim3((hidden + 3) / 4, batch.count), 128, 0, stream>>>(
-      activated.data<float>(), batch, output.data<float>(), hidden,
-      intermediate, table, ids.data<std::int32_t>());
-  check_cuda(cudaGetLastError(), "routed FP8 Down launch");
+  assert(same_dtype(input, activated) && output.dtype() == DataType::Float32);
+  detail::dispatch_float(input.dtype(), [&]<typename T>() {
+    expert_gate_up_kernel<<<dim3((intermediate + 3) / 4, batch.count), 128, 0,
+                            stream>>>(input.data<T>(), batch,
+                                      activated.data<T>(), hidden, intermediate,
+                                      table, ids.data<std::int32_t>());
+    check_cuda(cudaGetLastError(), "routed FP8 Gate/Up launch");
+    expert_down_kernel<<<dim3((hidden + 3) / 4, batch.count), 128, 0, stream>>>(
+        activated.data<T>(), batch, output.data<float>(), hidden, intermediate,
+        table, ids.data<std::int32_t>());
+    check_cuda(cudaGetLastError(), "routed FP8 Down launch");
+  });
 }
 
 void linear_fp8(ConstTensorView input, ConstTensorView weight,
@@ -398,7 +414,9 @@ void linear_fp8(ConstTensorView input, ConstTensorView weight,
   detail::assert_tensor(output);
 
   assert(input.dtype() == DataType::Float32
-         && output.dtype() == DataType::Float32);
+         || input.dtype() == DataType::BFloat16);
+  assert(output.dtype() == input.dtype()
+         || output.dtype() == DataType::Float32);
   assert(weight.dtype() == DataType::Float8E4M3FN);
   assert(weight_scale_inv.dtype() == DataType::Float32);
   assert(same_device(input, weight, weight_scale_inv, output));
@@ -421,22 +439,30 @@ void linear_fp8(ConstTensorView input, ConstTensorView weight,
     return;
   }
 
-  if (M == 1) {
-    gemv_kernel<<<static_cast<unsigned>((N + kWarps - 1) / kWarps), kWarps * 32,
-                  0, stream>>>(input.data<float>(), weight.data<std::uint8_t>(),
-                               weight_scale_inv.data<float>(),
-                               output.data<float>(), N, K, weight.shape()[1]);
+  const auto launch = [&]<typename T, typename O>() {
+    if (M == 1) {
+      gemv_kernel<<<static_cast<unsigned>((N + kWarps - 1) / kWarps),
+                    kWarps * 32, 0, stream>>>(
+          input.data<T>(), weight.data<std::uint8_t>(),
+          weight_scale_inv.data<float>(), output.data<O>(), N, K,
+          weight.shape()[1]);
+    } else {
+      constexpr unsigned BX = 16, BY = 8, TM = 2, TN = 4, KS = 32;
+      const dim3 block(BX, BY);
+      const dim3 grid((N + BX * TN - 1) / (BX * TN),
+                      (M + BY * TM - 1) / (BY * TM));
+      matmul_kernel<BX, BY, TM, TN, KS><<<grid, block, 0, stream>>>(
+          input.data<T>(), weight.data<std::uint8_t>(),
+          weight_scale_inv.data<float>(), output.data<O>(), M, N, K,
+          weight.shape()[1]);
+    }
+  };
+  if (input.dtype() == DataType::Float32) {
+    launch.template operator()<float, float>();
+  } else if (output.dtype() == DataType::Float32) {
+    launch.template operator()<__nv_bfloat16, float>();
   } else {
-    constexpr unsigned BX = 16, BY = 8, TM = 2, TN = 4, KS = 32;
-
-    const dim3 block(BX, BY);
-    const dim3 grid((N + BX * TN - 1) / (BX * TN),
-                    (M + BY * TM - 1) / (BY * TM));
-
-    matmul_kernel<BX, BY, TM, TN, KS><<<grid, block, 0, stream>>>(
-        input.data<float>(), weight.data<std::uint8_t>(),
-        weight_scale_inv.data<float>(), output.data<float>(), M, N, K,
-        weight.shape()[1]);
+    launch.template operator()<__nv_bfloat16, __nv_bfloat16>();
   }
   check_cuda(cudaGetLastError(), "fused FP8 weight dequantization GEMM launch");
 }

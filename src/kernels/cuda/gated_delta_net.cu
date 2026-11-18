@@ -36,10 +36,10 @@ std::size_t assert_sequences(std::size_t tokens, std::size_t slots,
   return batch;
 }
 
-__global__ void conv_kernel(const float* input, const float* weight,
-                            float* state, const std::int32_t* cu,
-                            const std::int32_t* ids, float* output,
-                            std::size_t tokens, std::size_t batch,
+template <typename T>
+__global__ void conv_kernel(const T* input, const T* weight, T* state,
+                            const std::int32_t* cu, const std::int32_t* ids,
+                            T* output, std::size_t tokens, std::size_t batch,
                             std::size_t channels, std::size_t kernel,
                             std::size_t slots) {
   const auto start_index =
@@ -56,33 +56,36 @@ __global__ void conv_kernel(const float* input, const float* weight,
     const auto end = cu ? cu[sequence + 1] : begin + 1;
     assert(begin >= 0 && end >= begin && end <= tokens);
 
-    float* history =
+    T* history =
         kernel > 1 ? state
                          + (static_cast<std::size_t>(slot) * channels + channel)
                                * (kernel - 1)
                    : nullptr;
     for (auto token = begin; token < end; ++token) {
       const auto n = static_cast<std::size_t>(token) * channels + channel;
-      const float current = input[n];
-      float sum = current * weight[channel * kernel + kernel - 1];
+      const float current = detail::to_float(input[n]);
+      float sum =
+          current * detail::to_float(weight[channel * kernel + kernel - 1]);
       for (std::size_t j = 0; j + 1 < kernel; ++j) {
-        sum += history[j] * weight[channel * kernel + j];
+        sum += detail::to_float(history[j])
+               * detail::to_float(weight[channel * kernel + j]);
       }
       for (std::size_t j = 0; j + 2 < kernel; ++j) {
         history[j] = history[j + 1];
       }
       if (kernel > 1) {
-        history[kernel - 2] = current;
+        history[kernel - 2] = detail::from_float<T>(current);
       }
-      output[n] = sum / (1.0f + expf(-sum));
+      output[n] = detail::from_float<T>(sum / (1.0f + expf(-sum)));
     }
   }
 }
 
-__global__ void delta_kernel(const float* qkv, const float* a, const float* b,
+template <typename T>
+__global__ void delta_kernel(const T* qkv, const float* a, const float* b,
                              const float* A_log, const float* dt_bias,
                              float* state, const std::int32_t* cu,
-                             const std::int32_t* ids, float* output,
+                             const std::int32_t* ids, T* output,
                              std::size_t tokens, std::size_t slots,
                              std::size_t key_heads, std::size_t value_heads,
                              std::size_t key_dim, std::size_t value_dim) {
@@ -108,9 +111,13 @@ __global__ void delta_kernel(const float* qkv, const float* a, const float* b,
 
   for (auto token = begin; token < end; ++token) {
     const auto row = std::size_t(token) * width;
-    const float q = lane < key_dim ? qkv[row + key_head * key_dim + lane] : 0;
+    const float q = lane < key_dim
+                        ? detail::to_float(qkv[row + key_head * key_dim + lane])
+                        : 0;
     const float k =
-        lane < key_dim ? qkv[row + key_size + key_head * key_dim + lane] : 0;
+        lane < key_dim
+            ? detail::to_float(qkv[row + key_size + key_head * key_dim + lane])
+            : 0;
     const float q_sum = detail::block_sum_reduce<float, kThreads>(q * q);
     const float k_sum = detail::block_sum_reduce<float, kThreads>(k * k);
     if (lane < key_dim) {
@@ -135,7 +142,8 @@ __global__ void delta_kernel(const float* qkv, const float* a, const float* b,
         memory *= decay;
         prediction += key[i] * memory;
       }
-      const float v = qkv[row + 2 * key_size + head * value_dim + lane];
+      const float v =
+          detail::to_float(qkv[row + 2 * key_size + head * value_dim + lane]);
       const float delta = (v - prediction) * beta;
       float result = 0;
       for (std::size_t i = 0; i < key_dim; ++i) {
@@ -144,7 +152,7 @@ __global__ void delta_kernel(const float* qkv, const float* a, const float* b,
         result += query[i] * memory;
       }
       output[(static_cast<std::size_t>(token) * value_heads + head) * value_dim
-             + lane] = result;
+             + lane] = detail::from_float<T>(result);
     }
     __syncthreads();
   }
@@ -155,10 +163,11 @@ void causal_conv1d(ConstTensorView input, ConstTensorView weight,
                    TensorView state, ConstTensorView cu_seqlens,
                    ConstTensorView state_indices, TensorView output,
                    cudaStream_t stream) {
-  assert_float(input);
-  assert_float(weight);
-  assert_float(state);
-  assert_float(output);
+  detail::assert_tensor(input);
+  detail::assert_tensor(weight);
+  detail::assert_tensor(state);
+  detail::assert_tensor(output);
+  assert(same_dtype(input, weight, state, output));
 
   assert(input.rank() == 2 && weight.rank() == 3 && state.rank() == 3);
   assert(weight.shape()[0] == input.shape()[1] && weight.shape()[1] == 1
@@ -178,12 +187,13 @@ void causal_conv1d(ConstTensorView input, ConstTensorView weight,
   const auto blocks = static_cast<unsigned>(
       std::min<std::size_t>((work + kThreads - 1) / kThreads, 65535));
 
-  conv_kernel<<<blocks, kThreads, 0, stream>>>(
-      input.data<float>(), weight.data<float>(), state.data<float>(),
-      cu_seqlens.numel() ? cu_seqlens.data<std::int32_t>() : nullptr,
-      state_indices.numel() ? state_indices.data<std::int32_t>() : nullptr,
-      output.data<float>(), input.shape()[0], batch, input.shape()[1],
-      weight.shape()[2], state.shape()[0]);
+  detail::dispatch_float(input.dtype(), [&]<typename T>() {
+    conv_kernel<<<blocks, kThreads, 0, stream>>>(
+        input.data<T>(), weight.data<T>(), state.data<T>(),
+        cu_seqlens.data<std::int32_t>(), state_indices.data<std::int32_t>(),
+        output.data<T>(), input.shape()[0], batch, input.shape()[1],
+        weight.shape()[2], state.shape()[0]);
+  });
   check_cuda(cudaGetLastError(), "causal_conv1d launch");
 }
 
@@ -192,13 +202,14 @@ void gated_delta_rule(ConstTensorView qkv, ConstTensorView a, ConstTensorView b,
                       TensorView state, ConstTensorView cu_seqlens,
                       ConstTensorView state_indices, std::size_t key_heads,
                       TensorView output, cudaStream_t stream) {
-  assert_float(qkv);
+  detail::assert_tensor(qkv);
   assert_float(a);
   assert_float(b);
   assert_float(A_log);
   assert_float(dt_bias);
   assert_float(state);
-  assert_float(output);
+  detail::assert_tensor(output);
+  assert(same_dtype(qkv, output));
 
   assert(qkv.rank() == 2 && a.rank() == 2 && state.rank() == 4
          && output.rank() == 3);
@@ -221,14 +232,14 @@ void gated_delta_rule(ConstTensorView qkv, ConstTensorView a, ConstTensorView b,
     return;
   }
 
-  delta_kernel<<<unsigned(batch * heads), kThreads, 0, stream>>>(
-      qkv.data<float>(), a.data<float>(), b.data<float>(), A_log.data<float>(),
-      dt_bias.data<float>(), state.data<float>(),
-      cu_seqlens.numel() ? cu_seqlens.data<std::int32_t>() : nullptr,
-      state_indices.numel() ? state_indices.data<std::int32_t>() : nullptr,
-      output.data<float>(), qkv.shape()[0], state.shape()[0], key_heads, heads,
-      kd, vd);
-
+  detail::dispatch_float(qkv.dtype(), [&]<typename T>() {
+    delta_kernel<<<static_cast<unsigned>(batch * heads), kThreads, 0, stream>>>(
+        qkv.data<T>(), a.data<float>(), b.data<float>(), A_log.data<float>(),
+        dt_bias.data<float>(), state.data<float>(),
+        cu_seqlens.data<std::int32_t>(), state_indices.data<std::int32_t>(),
+        output.data<T>(), qkv.shape()[0], state.shape()[0], key_heads, heads,
+        kd, vd);
+  });
   check_cuda(cudaGetLastError(), "gated_delta_rule launch");
 }
 } // namespace nanovllm::kernels::cuda

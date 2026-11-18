@@ -66,8 +66,8 @@ __device__ __forceinline__ float4 load_vector(const T* matrix, int row,
   return result;
 }
 
-template <typename T>
-__device__ __forceinline__ void store_vector(T* output, const T* bias,
+template <typename T, typename B>
+__device__ __forceinline__ void store_vector(T* output, const B* bias,
                                              float4 value, int row, int col,
                                              int m, int n) {
   if (row >= m || col >= n) {
@@ -146,11 +146,11 @@ __device__ __forceinline__ int swizzle_weight_col(int row, int col) {
   return ((swizzled_vector * kVectorSize) | (col & 3)) ^ (k_group << 3);
 }
 
-template <int BX, int BY, int TM, int TN, typename T, typename W>
+template <int BX, int BY, int TM, int TN, typename T, typename W, typename O>
 __global__ void linear_gemm_kernel(const T* __restrict__ input,
                                    const W* __restrict__ weight,
-                                   T* __restrict__ output,
-                                   const T* __restrict__ bias, int m, int n,
+                                   O* __restrict__ output,
+                                   const W* __restrict__ bias, int m, int n,
                                    int k) {
   constexpr int threads = BX * BY;
   constexpr int BM = BY * TM;
@@ -332,11 +332,11 @@ __global__ void linear_gemm_kernel(const T* __restrict__ input,
 }
 
 // Decode avoids filling a GEMM tile with a single input row.
-template <typename T, typename W>
+template <typename T, typename W, typename O>
 __global__ void linear_gemv_kernel(const T* __restrict__ input,
                                    const W* __restrict__ weight,
-                                   T* __restrict__ output,
-                                   const T* __restrict__ bias, int n, int k) {
+                                   O* __restrict__ output,
+                                   const W* __restrict__ bias, int n, int k) {
   constexpr int warps_per_block = 4;
 
   const int lane = threadIdx.x & 31;
@@ -367,12 +367,12 @@ __global__ void linear_gemv_kernel(const T* __restrict__ input,
       sum += detail::to_float(bias[row]);
     }
 
-    output[row] = detail::from_float<T>(sum);
+    output[row] = detail::from_float<O>(sum);
   }
 }
 
-template <int BX, int BY, int TM, int TN, typename T, typename W>
-void launch_gemm(const T* input, const W* weight, T* output, const T* bias,
+template <int BX, int BY, int TM, int TN, typename T, typename W, typename O>
+void launch_gemm(const T* input, const W* weight, O* output, const W* bias,
                  int m, int n, int k, cudaStream_t stream) {
   const dim3 block(BX, BY);
   const dim3 grid(ceil_div(n, BX * TN), ceil_div(m, BY * TM));
@@ -389,10 +389,14 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
   detail::assert_tensor(weight);
   detail::assert_tensor(output);
 
-  assert(same_dtype(input, output));
+  assert(output.dtype() == input.dtype()
+         || (input.dtype() == DataType::BFloat16
+             && output.dtype() == DataType::Float32));
   assert(weight.dtype() == input.dtype()
          || (input.dtype() == DataType::Float32
-             && weight.dtype() == DataType::BFloat16));
+             && weight.dtype() == DataType::BFloat16)
+         || (input.dtype() == DataType::BFloat16
+             && weight.dtype() == DataType::Float32));
   assert(input.rank() == 2 && weight.rank() == 2 && output.rank() == 2);
 
   const auto m = input.shape()[0];
@@ -405,7 +409,7 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
 
   if (bias) {
     detail::assert_tensor(*bias);
-    assert(same_dtype(*bias, input));
+    assert(same_dtype(*bias, weight));
     assert(bias->rank() == 1 && bias->shape()[0] == n);
   }
 
@@ -413,11 +417,11 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
     return;
   }
 
-  const auto launch = [&]<typename T, typename W>() {
+  const auto launch = [&]<typename T, typename W, typename O>() {
     const T* x = input.data<T>();
     const W* w = weight.data<W>();
-    const T* b = bias ? bias->data<T>() : nullptr;
-    T* y = output.data<T>();
+    const W* b = bias ? bias->data<W>() : nullptr;
+    O* y = output.data<O>();
 
     if (m == 1) {
       linear_gemv_kernel<<<ceil_div(n, 4), 128, 0, stream>>>(x, w, y, b, n, k);
@@ -431,10 +435,23 @@ void linear(ConstTensorView input, ConstTensorView weight, TensorView output,
   };
   if (input.dtype() == DataType::Float32
       && weight.dtype() == DataType::BFloat16) {
-    launch.template operator()<float, __nv_bfloat16>();
+    launch.template operator()<float, __nv_bfloat16, float>();
+  } else if (input.dtype() == DataType::BFloat16) {
+    const auto launch_bf16 = [&]<typename W>() {
+      if (output.dtype() == DataType::Float32) {
+        launch.template operator()<__nv_bfloat16, W, float>();
+      } else {
+        launch.template operator()<__nv_bfloat16, W, __nv_bfloat16>();
+      }
+    };
+    if (weight.dtype() == DataType::Float32) {
+      launch_bf16.template operator()<float>();
+    } else {
+      launch_bf16.template operator()<__nv_bfloat16>();
+    }
   } else {
     detail::dispatch_float(input.dtype(), [&]<typename T>() {
-      launch.template operator()<T, T>();
+      launch.template operator()<T, T, T>();
     });
   }
 

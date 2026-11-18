@@ -9,7 +9,8 @@ namespace nanovllm {
 
 class GatedDeltaNet final : public Module {
  public:
-  GatedDeltaNet(const ModelConfig& config, Device device);
+  GatedDeltaNet(const ModelConfig& config, Device device,
+                DataType activation_dtype = DataType::Float32);
 
   [[nodiscard]] Tensor forward(ConstTensorView hidden_states,
                                const ForwardContext& context) const;

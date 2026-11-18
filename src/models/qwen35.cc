@@ -16,25 +16,44 @@
 #include "common/cuda_utils.hh"
 #include "core/checkpoint.hh"
 #include "core/device.hh"
+#include "core/precision.hh"
 #include "kernels/cpu/fp8_dequant.hh"
 #include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 namespace {
 
+std::uint16_t bfloat16_bits(float value) {
+  const auto bits = std::bit_cast<std::uint32_t>(value);
+  // Round to nearest, ties to even, preserving NaNs.
+  if ((bits & 0x7fffffffU) > 0x7f800000U) {
+    return (bits >> 16) | 0x40U;
+  }
+  return (bits + 0x7fffU + ((bits >> 16) & 1U)) >> 16;
+}
+
 void copy_float(const Checkpoint& checkpoint, std::string_view name,
                 TensorView output) {
   const auto& source = checkpoint.tensor(name);
   const auto bytes = checkpoint.raw_data(name);
-  if (source.dtype == DataType::Float32) {
+  if (source.dtype == output.dtype()) {
     std::memcpy(output.data(), bytes.data(), bytes.size());
     return;
   }
-  auto* result = output.data<float>();
   for (std::size_t i = 0; i < output.numel(); ++i) {
-    std::uint16_t bits;
-    std::memcpy(&bits, bytes.data() + i * sizeof(bits), sizeof(bits));
-    result[i] = std::bit_cast<float>(static_cast<std::uint32_t>(bits) << 16);
+    if (output.dtype() == DataType::Float32) {
+      std::uint16_t bits;
+      std::memcpy(&bits, bytes.data() + i * sizeof(bits), sizeof(bits));
+      output.data<float>()[i] =
+          std::bit_cast<float>(static_cast<std::uint32_t>(bits) << 16);
+    } else {
+      assert(output.dtype() == DataType::BFloat16
+             && source.dtype == DataType::Float32);
+      std::uint32_t bits;
+      std::memcpy(&bits, bytes.data() + i * sizeof(bits), sizeof(bits));
+      output.data<std::uint16_t>()[i] =
+          bfloat16_bits(std::bit_cast<float>(bits));
+    }
   }
 }
 
@@ -149,8 +168,19 @@ void fill_cpu(const Checkpoint& checkpoint, const LoadEntry& entry,
     const auto& info = checkpoint.tensor(entry.name);
     ConstTensorView weight(checkpoint.raw_data(entry.name).data(), info.dtype,
                            TensorLayout(info.shape), Device::cpu());
-    kernels::cpu::dequantize_fp8(weight, scale.view().as_const(), output,
-                                 blocks[0], blocks[1]);
+    if (output.dtype() == DataType::Float32) {
+      kernels::cpu::dequantize_fp8(weight, scale.view().as_const(), output,
+                                   blocks[0], blocks[1]);
+    } else {
+      auto expanded = Tensor::empty(info.shape, DataType::Float32);
+      kernels::cpu::dequantize_fp8(weight, scale.view().as_const(),
+                                   expanded.view(), blocks[0], blocks[1]);
+      assert(output.dtype() == DataType::BFloat16);
+      for (std::size_t i = 0; i < output.numel(); ++i) {
+        output.data<std::uint16_t>()[i] =
+            bfloat16_bits(expanded.view().data<float>()[i]);
+      }
+    }
   } else if (output.dtype() == checkpoint.tensor(entry.name).dtype) {
     const auto bytes = checkpoint.raw_data(entry.name);
     std::memcpy(output.data(), bytes.data(), bytes.size());
@@ -186,6 +216,7 @@ MoEConfig qwen35_moe_config(const ModelConfig& config) {
       config.num_experts,
       config.num_experts_per_tok,
       config.shared_expert_intermediate_size,
+      DataType::BFloat16,
   };
 }
 
@@ -217,15 +248,15 @@ Qwen35Attention::Qwen35Attention(const ModelConfig& config, Device device)
       head_dim_(config.head_dim),
       q_size_(config.q_size()),
       q_proj_(hidden_size_, 2 * q_size_, config.attention_bias,
-              DataType::Float32, device),
+              DataType::BFloat16, device),
       k_proj_(hidden_size_, config.kv_size(), config.attention_bias,
-              DataType::Float32, device),
+              DataType::BFloat16, device),
       v_proj_(hidden_size_, config.kv_size(), config.attention_bias,
-              DataType::Float32, device),
-      o_proj_(q_size_, hidden_size_, config.attention_bias, DataType::Float32,
+              DataType::BFloat16, device),
+      o_proj_(q_size_, hidden_size_, config.attention_bias, DataType::BFloat16,
               device),
-      q_norm_(head_dim_, config.rms_norm_eps, DataType::Float32, device, true),
-      k_norm_(head_dim_, config.rms_norm_eps, DataType::Float32, device, true),
+      q_norm_(head_dim_, config.rms_norm_eps, DataType::BFloat16, device, true),
+      k_norm_(head_dim_, config.rms_norm_eps, DataType::BFloat16, device, true),
       rotary_emb_(config.max_position_embeddings, head_dim_, config.rope_theta,
                   device, config.rotary_dim()) {
   register_module("q_proj", q_proj_);
@@ -244,10 +275,10 @@ Tensor Qwen35Attention::forward(ConstTensorView positions,
   const auto device = hidden_states.device();
 
   auto packed = q_proj_.forward(hidden_states, stream);
-  auto query_heads =
-      Tensor::empty({tokens, num_heads_, head_dim_}, DataType::Float32, device);
-  auto gate =
-      Tensor::empty({tokens, num_heads_, head_dim_}, DataType::Float32, device);
+  auto query_heads = Tensor::empty({tokens, num_heads_, head_dim_},
+                                   DataType::BFloat16, device);
+  auto gate = Tensor::empty({tokens, num_heads_, head_dim_}, DataType::BFloat16,
+                            device);
 
   kernels::cuda::split_attention_gate(packed.view().as_const(),
                                       query_heads.view(), gate.view(), stream);
@@ -263,8 +294,8 @@ Tensor Qwen35Attention::forward(ConstTensorView positions,
   auto key = k_norm_.forward(key_heads.view(), stream);
 
   rotary_emb_.forward(positions, query.view(), key.view(), stream);
-  auto output =
-      Tensor::empty({tokens, num_heads_, head_dim_}, DataType::Float32, device);
+  auto output = Tensor::empty({tokens, num_heads_, head_dim_},
+                              DataType::BFloat16, device);
 
   kernels::cuda::flash_attn_with_kvcache(
       query.view().as_const(), key_cache_, value_cache_, key.view().as_const(),
@@ -310,13 +341,13 @@ Qwen35Cache::Qwen35Cache(const ModelConfig& config, std::size_t num_blocks,
 
   key_ = Tensor::empty({full, num_blocks, block_size,
                         config.num_key_value_heads, config.head_dim},
-                       DataType::Float32, device);
+                       DataType::BFloat16, device);
   value_ = Tensor::empty({full, num_blocks, block_size,
                           config.num_key_value_heads, config.head_dim},
-                         DataType::Float32, device);
+                         DataType::BFloat16, device);
   conv_ = Tensor::empty(
       {linear, state_slots, conv_dim, config.linear_conv_kernel_dim - 1},
-      DataType::Float32, device);
+      DataType::BFloat16, device);
   recurrent_ =
       Tensor::empty({linear, state_slots, config.linear_num_value_heads,
                      config.linear_key_head_dim, config.linear_value_head_dim},
@@ -369,14 +400,15 @@ Qwen35DecoderLayer::Qwen35DecoderLayer(
     : mlp_(qwen35_moe_config(config), cpu_pool, device, gpu_expert_ids,
            &workspace),
       input_layernorm_(config.hidden_size, config.rms_norm_eps,
-                       DataType::Float32, device, true),
+                       DataType::BFloat16, device, true),
       post_attention_layernorm_(config.hidden_size, config.rms_norm_eps,
-                                DataType::Float32, device, true) {
+                                DataType::BFloat16, device, true) {
   if (config.layer_types.at(index) == AttentionType::Full) {
     self_attn_ = std::make_unique<Qwen35Attention>(config, device);
     register_module("self_attn", *self_attn_);
   } else {
-    linear_attn_ = std::make_unique<GatedDeltaNet>(config, device);
+    linear_attn_ =
+        std::make_unique<GatedDeltaNet>(config, device, DataType::BFloat16);
     register_module("linear_attn", *linear_attn_);
   }
   register_module("mlp", mlp_);
@@ -398,6 +430,9 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
     } else {
       before.hidden_states =
           input_layernorm_.forward(hidden_states, context.stream);
+      before.residual =
+          cast_tensor(hidden_states, DataType::Float32, context.stream);
+      residual_view = before.residual.view().as_const();
     }
 
     auto attention =
@@ -450,9 +485,9 @@ Qwen35Model::Qwen35Model(const ModelConfig& config, Device device,
                          ExpertAdaptationParams expert_adaptation,
                          bool cpu_affinity)
     : cpu_pool_(cpu_threads, cpu_affinity),
-      embed_tokens_(config.vocab_size, config.hidden_size, DataType::Float32,
+      embed_tokens_(config.vocab_size, config.hidden_size, DataType::BFloat16,
                     device),
-      norm_(config.hidden_size, config.rms_norm_eps, DataType::Float32, device,
+      norm_(config.hidden_size, config.rms_norm_eps, DataType::BFloat16, device,
             true),
       expert_adaptation_(config.num_hidden_layers, config.num_experts,
                          expert_adaptation) {
@@ -631,7 +666,7 @@ Qwen35ForCausalLM::Qwen35ForCausalLM(
       model_(config_, device_, cpu_threads, gpu_expert_ids_by_layer,
              profile_experts, expert_adaptation, cpu_affinity),
       lm_head_(
-          config_.vocab_size, config_.hidden_size, DataType::Float32, device_,
+          config_.vocab_size, config_.hidden_size, DataType::BFloat16, device_,
           config_.tie_word_embeddings ? &model_.embed_tokens().weight().tensor()
                                       : nullptr) {
   register_module("model", model_);
@@ -689,13 +724,14 @@ Tensor Qwen35ForCausalLM::compute_logits(ConstTensorView hidden_states,
                                          const ForwardContext& context) const {
   if (context.is_prefill) {
     const auto batch = context.cu_seqlens_q.shape()[0] - 1;
-    auto last =
-        Tensor::empty({batch, config_.hidden_size}, DataType::Float32, device_);
+    auto last = Tensor::empty({batch, config_.hidden_size},
+                              hidden_states.dtype(), device_);
     kernels::cuda::gather_last_hidden(hidden_states, context.cu_seqlens_q,
                                       last.view(), context.stream);
-    return lm_head_.forward(last.view().as_const(), context.stream);
+    return lm_head_.forward(last.view().as_const(), context.stream,
+                            DataType::Float32);
   }
-  return lm_head_.forward(hidden_states, context.stream);
+  return lm_head_.forward(hidden_states, context.stream, DataType::Float32);
 }
 
 const ModelConfig& Qwen35ForCausalLM::config() const noexcept {
@@ -703,7 +739,7 @@ const ModelConfig& Qwen35ForCausalLM::config() const noexcept {
 }
 
 DataType Qwen35ForCausalLM::dtype() const noexcept {
-  return DataType::Float32;
+  return DataType::BFloat16;
 }
 
 Device Qwen35ForCausalLM::device() const noexcept {
