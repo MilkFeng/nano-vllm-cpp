@@ -12,8 +12,8 @@
 
 #include "common/cuda_utils.hh"
 #include "core/expert_policy.hh"
-#include "core/precision.hh"
 #include "core/tensor_pool.hh"
+#include "functions/cast.hh"
 #include "layers/moe.hh"
 #include "models/qwen35.hh"
 

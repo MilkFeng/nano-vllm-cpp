@@ -18,7 +18,7 @@
 
 #include "common/cuda_utils.hh"
 #include "core/expert_policy.hh"
-#include "core/precision.hh"
+#include "functions/cast.hh"
 #include "kernels/cpu/expert.hh"
 #include "kernels/cuda/kernels.hh"
 

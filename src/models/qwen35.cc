@@ -16,7 +16,7 @@
 #include "common/cuda_utils.hh"
 #include "core/checkpoint.hh"
 #include "core/device.hh"
-#include "core/precision.hh"
+#include "functions/cast.hh"
 #include "kernels/cpu/fp8_dequant.hh"
 #include "kernels/cuda/kernels.hh"
 

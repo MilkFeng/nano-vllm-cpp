@@ -36,6 +36,7 @@ GatedDeltaNet::GatedDeltaNet(const ModelConfig& config, Device device,
   register_module("out_proj", out_proj_);
   register_module("norm", norm_);
   register_module("conv1d", conv1d_);
+
   register_parameter("A_log", A_log_);
   register_parameter("dt_bias", dt_bias_);
 
@@ -57,6 +58,7 @@ Tensor GatedDeltaNet::forward(ConstTensorView hidden_states,
   Tensor local_conv, local_recurrent;
   auto conv = conv_state_, recurrent = recurrent_state_;
   auto state_indices = context.state_indices;
+
   if (recurrent.numel() == 0) {
     const auto batch = cu.shape()[0] - 1;
 
@@ -79,6 +81,7 @@ Tensor GatedDeltaNet::forward(ConstTensorView hidden_states,
     recurrent = local_recurrent.view();
     state_indices = {};
   }
+
   auto convolved = Tensor::empty({tokens, conv_dim_}, hidden_states.dtype(),
                                  hidden_states.device());
 
