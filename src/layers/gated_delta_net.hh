@@ -11,8 +11,7 @@ namespace nanovllm {
 
 class GatedDeltaNet final : public Module {
  public:
-  GatedDeltaNet(const ModelConfig& config, Device device,
-                DataType activation_dtype = DataType::Float32);
+  GatedDeltaNet(const ModelConfig& config, Device device);
 
   [[nodiscard]] Tensor forward(ConstTensorView hidden_states,
                                ConstTensorView cu_seqlens = {},
@@ -41,7 +40,9 @@ class GatedDeltaNet final : public Module {
   // in_proj_b_:   [v_heads,                                   hidden_size]
   //
   // out_proj_:    [hidden_size,                        v_heads*v_head_dim]
-  Linear in_proj_qkv_, in_proj_z_, in_proj_a_, in_proj_b_, out_proj_;
+  FP8Linear in_proj_qkv_, in_proj_z_;
+  Linear in_proj_a_, in_proj_b_;
+  FP8Linear out_proj_;
 
   CausalConv1d conv1d_;
   Parameter A_log_, dt_bias_;

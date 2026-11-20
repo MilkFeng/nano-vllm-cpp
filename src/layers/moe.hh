@@ -88,8 +88,7 @@ class FP8Expert final : public Module {
   [[nodiscard]] kernels::cuda::FP8ExpertWeights device_weights() const;
 
  private:
-  Linear gate_, up_, down_;
-  Parameter gate_scale_, up_scale_, down_scale_;
+  FP8Linear gate_, up_, down_;
 };
 
 class ExpertStore final : public Module {
@@ -105,8 +104,7 @@ class ExpertStore final : public Module {
   [[nodiscard]] std::size_t size_bytes() const;
 
  private:
-  std::size_t hidden_size_;
-  std::size_t intermediate_size_;
+  std::size_t hidden_size_, intermediate_size_;
   std::vector<std::unique_ptr<FP8Expert>> experts_;
 };
 
@@ -256,7 +254,7 @@ class MoE final : public Module {
   MoEConfig config_;
   Linear gate_;
   ExpertStore experts_;
-  std::unique_ptr<SwiGLUMLP> shared_expert_;
+  std::unique_ptr<FP8SwiGLUMLP> shared_expert_;
   std::unique_ptr<Linear> shared_expert_gate_;
   std::unique_ptr<MoEExecutionWorkspace> owned_workspace_;
   MoEExecutionWorkspace* workspace_ = nullptr;

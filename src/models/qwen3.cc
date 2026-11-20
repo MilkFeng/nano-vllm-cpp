@@ -62,6 +62,10 @@ Qwen3Attention::Qwen3Attention(const ModelConfig& config, DataType dtype,
   }
 }
 
+void Qwen3Attention::build_rope_cache(cudaStream_t stream) {
+  rotary_emb_.build_cache(stream);
+}
+
 Tensor Qwen3Attention::forward(ConstTensorView positions,
                                ConstTensorView hidden_states,
                                const ForwardContext& context) const {
@@ -222,6 +226,12 @@ Qwen3Model::Qwen3Model(const ModelConfig& config, DataType dtype, Device device)
   const auto num_layers = config.num_hidden_layers;
   for (std::size_t index = 0; index < num_layers; ++index) {
     layers_.emplace_back<Qwen3DecoderLayer>(config, dtype, device);
+  }
+}
+
+void Qwen3Model::build_rope_cache(cudaStream_t stream) {
+  for (std::size_t i = 0; i < layers_.size(); ++i) {
+    layer(i).self_attention().build_rope_cache(stream);
   }
 }
 

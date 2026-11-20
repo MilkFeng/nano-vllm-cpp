@@ -51,12 +51,17 @@ ModelRunner::ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
     temporary_pool_ = std::make_unique<TensorPool>(Device::cuda(0), stream_);
     // load model ckpt
     if (config_.architecture == ModelArchitecture::Qwen35Moe) {
-      model_ = std::make_unique<Qwen35ForCausalLM>(
+      auto model = std::make_unique<Qwen35ForCausalLM>(
           config_, Device::cuda(0), params_.cpu_threads, placement,
           params_.profile_experts, params_.expert_adaptation,
           params_.cpu_affinity);
+      model->transformer().build_rope_cache(stream_);
+      model_ = std::move(model);
     } else {
-      model_ = std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda(0));
+      auto model =
+          std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda(0));
+      model->transformer().build_rope_cache(stream_);
+      model_ = std::move(model);
     }
 
     model_->load_ckpt(checkpoint);

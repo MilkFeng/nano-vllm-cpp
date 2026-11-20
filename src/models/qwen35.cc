@@ -78,39 +78,6 @@ struct LoadPlan {
   }
 };
 
-void retain_checkpoint_weights(Module& module, const Checkpoint& checkpoint,
-                               std::string_view prefix) {
-  // Snapshot the registry before adding each Linear's scale parameter.
-  for (const auto& [name, parameter] : module.named_parameters()) {
-    if (!name.ends_with("weight")
-        || parameter->view().device().type != DeviceType::Cuda) {
-      continue;
-    }
-    const auto source_name = std::string(prefix) + "." + name;
-    const auto& source = checkpoint.tensor(source_name);
-    if (!std::ranges::equal(source.shape, parameter->view().shape())) {
-      throw std::runtime_error("unexpected checkpoint weight shape: "
-                               + source_name);
-    }
-    const auto separator = name.rfind('.');
-    auto& owner =
-        module.module(separator == std::string::npos
-                          ? std::string_view{}
-                          : std::string_view(name).substr(0, separator));
-    if (source.dtype == DataType::Float8E4M3FN) {
-      if (auto* linear = dynamic_cast<Linear*>(&owner);
-          linear && !linear->bias()) {
-        linear->use_fp8_weight();
-      }
-    } else if (source.dtype == DataType::BFloat16
-               && dynamic_cast<LMHead*>(&owner)
-               && parameter->view().dtype() != DataType::BFloat16) {
-      parameter->tensor() =
-          Tensor::empty(source.shape, source.dtype, parameter->view().device());
-    }
-  }
-}
-
 LoadPlan plan_load(Module& module, const Checkpoint& checkpoint,
                    std::string_view prefix) {
   std::string stem(prefix);
@@ -129,10 +96,6 @@ LoadPlan plan_load(Module& module, const Checkpoint& checkpoint,
       throw std::runtime_error(
           std::format("tensor '{}' has an unexpected shape", entry.name));
     }
-
-    // FP8 -> CPU FP8
-    // FP8 - dequant -> FP32
-    // BF16/FP32 -> FP32
 
     if (destination.dtype() == DataType::Float8E4M3FN) {
       if (source.dtype != DataType::Float8E4M3FN) {
@@ -247,24 +210,25 @@ Qwen35Attention::Qwen35Attention(const ModelConfig& config, Device device)
       num_kv_heads_(config.num_key_value_heads),
       head_dim_(config.head_dim),
       q_size_(config.q_size()),
-      q_proj_(hidden_size_, 2 * q_size_, config.attention_bias,
-              DataType::BFloat16, device),
-      k_proj_(hidden_size_, config.kv_size(), config.attention_bias,
-              DataType::BFloat16, device),
-      v_proj_(hidden_size_, config.kv_size(), config.attention_bias,
-              DataType::BFloat16, device),
-      o_proj_(q_size_, hidden_size_, config.attention_bias, DataType::BFloat16,
-              device),
+      q_proj_(hidden_size_, 2 * q_size_, device),
+      k_proj_(hidden_size_, config.kv_size(), device),
+      v_proj_(hidden_size_, config.kv_size(), device),
+      o_proj_(q_size_, hidden_size_, device),
       q_norm_(head_dim_, config.rms_norm_eps, DataType::BFloat16, device, true),
       k_norm_(head_dim_, config.rms_norm_eps, DataType::BFloat16, device, true),
       rotary_emb_(config.max_position_embeddings, head_dim_, config.rope_theta,
                   device, config.rotary_dim()) {
+  assert(!config.attention_bias);
   register_module("q_proj", q_proj_);
   register_module("k_proj", k_proj_);
   register_module("v_proj", v_proj_);
   register_module("o_proj", o_proj_);
   register_module("q_norm", q_norm_);
   register_module("k_norm", k_norm_);
+}
+
+void Qwen35Attention::build_rope_cache(cudaStream_t stream) {
+  rotary_emb_.build_cache(stream);
 }
 
 Tensor Qwen35Attention::forward(ConstTensorView positions,
@@ -407,8 +371,7 @@ Qwen35DecoderLayer::Qwen35DecoderLayer(
     self_attn_ = std::make_unique<Qwen35Attention>(config, device);
     register_module("self_attn", *self_attn_);
   } else {
-    linear_attn_ =
-        std::make_unique<GatedDeltaNet>(config, device, DataType::BFloat16);
+    linear_attn_ = std::make_unique<GatedDeltaNet>(config, device);
     register_module("linear_attn", *linear_attn_);
   }
   register_module("mlp", mlp_);
@@ -503,6 +466,14 @@ Qwen35Model::Qwen35Model(const ModelConfig& config, Device device,
   }
   if (profile_experts) {
     expert_profile_.resize(config.num_hidden_layers);
+  }
+}
+
+void Qwen35Model::build_rope_cache(cudaStream_t stream) {
+  for (std::size_t i = 0; i < layers_.size(); ++i) {
+    if (auto* attention = layer(i).self_attention()) {
+      attention->build_rope_cache(stream);
+    }
   }
 }
 
@@ -682,10 +653,6 @@ ModelLoadResult Qwen35ForCausalLM::load_ckpt(
       config_.architectures[0] == "Qwen3_5MoeForConditionalGeneration"
           ? "model.language_model"
           : "model";
-  retain_checkpoint_weights(model_, checkpoint, prefix);
-  if (!config_.tie_word_embeddings) {
-    retain_checkpoint_weights(lm_head_, checkpoint, "lm_head");
-  }
   auto plan = plan_load(model_, checkpoint, prefix);
   if (!config_.tie_word_embeddings
       || checkpoint.weight_map().contains("lm_head.weight")) {

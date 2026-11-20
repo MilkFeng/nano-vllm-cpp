@@ -282,6 +282,7 @@ dtype 与 Qwen3 模型一致。`key_cache(layer)` / `value_cache(layer)` 返回�
 直接调用模型时，在加载权重后构造缓存并绑定：
 
 ```cpp
+model.transformer().build_rope_cache(/*stream=*/nullptr);
 Qwen3Cache cache(config, /*num_blocks=*/128, /*block_size=*/16,
                  model.device());
 model.transformer().set_cache(cache);
@@ -554,6 +555,7 @@ const auto config = ModelConfig::read_from_file(model_dir);
 Qwen35ForCausalLM model(config, Device::cuda(0),
                         std::vector<std::int32_t>{0, 2});
 const auto loaded = model.load_ckpt(model_dir);
+model.transformer().build_rope_cache(/*stream=*/nullptr);
 Qwen35Cache cache(config, /*num_blocks=*/128, /*block_size=*/16,
                   /*state_slots=*/4);
 model.transformer().set_cache(cache);
@@ -575,6 +577,13 @@ forward 需要 CUDA 设备 0。所有参数需完整加载后才能执行。
 复制到 RAM，BF16/F32 scale 转成 FP32。GPU 投影与 routed/shared 专家保留 FP8 权重，
 Embedding、普通 RMSNorm 和 LM head 使用 BF16 权重；Router、共享专家门控及
 DeltaNet 的 a/b 投影、A_log、dt_bias 和 gated norm 权重使用 FP32。
+`linear.hh/.cc` 将普通 `Linear` 与 `FP8Linear` 分开：full attention 的
+Q/K/V/O、DeltaNet 的 QKV/Z/out，以及 routed/shared 专家的 gate/up/down
+显式声明为 `FP8Linear`；a/b、Router 和共享专家门控继续使用 `Linear`。
+共享专家使用 `FP8SwiGLUMLP`，dense Qwen3 继续使用普通 `SwiGLUMLP`。
+`FP8Linear` 构造时直接注册 FP8 `weight` 和 FP32 `weight_scale_inv`，CPU/GPU
+存储一致；加载器只验证和复制参数，不再通过 `retain_checkpoint_weights()`
+或运行时类型转换改变层的权重格式。
 GPU 大投影与专家以 BF16 激活运行，在 kernel 内将 FP8 权重反量化并用 FP32 累加；
 CPU 未命中专家收到转换后的 FP32 激活。合并专家输出使用 FP32，主干输出转回 BF16。
 LM head 接收 BF16 hidden states，直接输出 FP32 logits，避免先舍入成 BF16。
@@ -676,6 +685,13 @@ gated:         y = x / sqrt(mean(x²) + eps) * weight * SiLU(gate)
 35B-A3B 的 head_dim=256，partial_rotary_factor=0.25，实际旋转 64 维，
 配对 `(i,i+32)`；后面的 192 维保持原值。当前只实现文本位置，配置中的
 `mrope_section/mrope_interleaved` 已保留，尚不处理图像/视频的三轴位置。
+
+`RotaryEmbedding` 构造函数只在传入的 CUDA Device 上分配缓存。
+首次 forward 前需显式调用 `build_cache(stream)`，它在指定 stream 上异步填充缓存，
+不做 host 同步。
+Engine 在推理 stream 上统一调用 `transformer().build_rope_cache(stream)`。
+直接使用模型或 Attention 时也需先调用对应的 `build_rope_cache(stream)`；
+forward 使用相同 stream，或由调用方建立跨 stream 的依赖。
 
 这些算子注册的参数由 `Qwen35ForCausalLM::load_ckpt()` 统一加载，不再
 公开单独的 Qwen3.5 模块加载函数。

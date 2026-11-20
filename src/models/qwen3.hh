@@ -20,6 +20,8 @@ class Qwen3Attention final : public Module {
  public:
   Qwen3Attention(const ModelConfig& config, DataType dtype, Device device);
 
+  void build_rope_cache(cudaStream_t stream);
+
   [[nodiscard]] Tensor forward(ConstTensorView positions,
                                ConstTensorView hidden_states,
                                const ForwardContext& context = {}) const;
@@ -101,6 +103,8 @@ class Qwen3DecoderLayer final : public Module {
 class Qwen3Model final : public Module {
  public:
   Qwen3Model(const ModelConfig& config, DataType dtype, Device device);
+
+  void build_rope_cache(cudaStream_t stream);
 
   [[nodiscard]] Tensor forward(ConstTensorView input_ids,
                                ConstTensorView positions,

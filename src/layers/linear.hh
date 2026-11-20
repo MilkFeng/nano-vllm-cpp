@@ -26,8 +26,6 @@ class Linear final : public Module {
   [[nodiscard]] Parameter* bias() noexcept;
   [[nodiscard]] const Parameter* bias() const noexcept;
 
-  void use_fp8_weight();
-
  private:
   std::size_t in_features_, out_features_;
 
@@ -35,7 +33,31 @@ class Linear final : public Module {
   Parameter weight_;
 
   std::optional<Parameter> bias_;
-  std::optional<Parameter> weight_scale_inv_;
+};
+
+// FP8 weights and FP32 scales in 128x128 blocks. Storage supports CPU and CUDA;
+// forward operations require CUDA tensors.
+class FP8Linear final : public Module {
+ public:
+  FP8Linear(std::size_t in_features, std::size_t out_features, Device device);
+
+  [[nodiscard]] Tensor forward(ConstTensorView input,
+                               cudaStream_t stream = nullptr) const;
+  void forward_into(ConstTensorView input, TensorView output,
+                    cudaStream_t stream = nullptr) const;
+
+  [[nodiscard]] std::size_t in_features() const noexcept;
+  [[nodiscard]] std::size_t out_features() const noexcept;
+
+  [[nodiscard]] Parameter& weight() noexcept;
+  [[nodiscard]] const Parameter& weight() const noexcept;
+
+  [[nodiscard]] Parameter& weight_scale_inv() noexcept;
+  [[nodiscard]] const Parameter& weight_scale_inv() const noexcept;
+
+ private:
+  std::size_t in_features_, out_features_;
+  Parameter weight_, weight_scale_inv_;
 };
 
 } // namespace nanovllm

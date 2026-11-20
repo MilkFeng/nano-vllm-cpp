@@ -14,6 +14,7 @@
 #include "core/expert_policy.hh"
 #include "core/tensor_pool.hh"
 #include "functions/cast.hh"
+#include "kernels/cpu/fp8_dequant.hh"
 #include "layers/moe.hh"
 #include "models/qwen35.hh"
 
@@ -105,6 +106,39 @@ DenseWeights initialize(Module& module) {
       }
     }
     seed += 17;
+  }
+  // Build the shared expert reference from the initialized FP8 bytes/scales.
+  for (const auto* projection : {"gate_proj", "up_proj", "down_proj"}) {
+    const auto name = std::string("shared_expert.") + projection + ".weight";
+    if (!module.has_parameter(name)) {
+      continue;
+    }
+    const auto weight_view = module.parameter(name).view();
+    const auto scale_view = module.parameter(name + "_scale_inv").view();
+    auto weight = Tensor::empty(
+        {weight_view.shape().begin(), weight_view.shape().end()},
+        DataType::Float8E4M3FN);
+    auto scale = Tensor::empty(
+        {scale_view.shape().begin(), scale_view.shape().end()},
+        DataType::Float32);
+    for (const auto pair : {std::pair{weight_view, weight.view()},
+                            std::pair{scale_view, scale.view()}}) {
+      if (pair.first.device().type == DeviceType::Cuda) {
+        check_cuda(cudaMemcpy(pair.second.data(), pair.first.data(),
+                              pair.first.size_bytes(), cudaMemcpyDeviceToHost),
+                   "read shared expert reference weights");
+      } else {
+        std::memcpy(pair.second.data(), pair.first.data(),
+                    pair.first.size_bytes());
+      }
+    }
+    auto expanded = Tensor::empty(
+        {weight_view.shape().begin(), weight_view.shape().end()},
+        DataType::Float32);
+    kernels::cpu::dequantize_fp8(weight.view().as_const(),
+                                 scale.view().as_const(), expanded.view());
+    const auto* values = expanded.view().data<float>();
+    dense[name] = std::vector<float>(values, values + expanded.numel());
   }
   return dense;
 }

@@ -82,6 +82,76 @@ void compare(const std::vector<float>& actual,
   }
 }
 
+void check_rotary_cache() {
+  cudaStream_t stream;
+  check_cuda(cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking),
+             "create RoPE check stream");
+  constexpr std::size_t tokens = 3, head_dim = 8;
+  constexpr float theta = 10000;
+  const std::vector<std::int32_t> positions{0, 3, 15};
+  auto ids = Tensor::empty({tokens}, DataType::Int32, gpu);
+  upload(ids.view(), positions.data());
+  for (const auto rotary_dim : {head_dim, std::size_t{4}}) {
+    RotaryEmbedding rope(16, head_dim, theta, gpu,
+                          rotary_dim == head_dim ? 0 : rotary_dim);
+    cudaGraph_t graph = nullptr;
+    cudaGraphExec_t executable = nullptr;
+    check_cuda(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal),
+               "capture RoPE cache build");
+    rope.build_cache(stream);
+    check_cuda(cudaStreamEndCapture(stream, &graph), "finish RoPE capture");
+    std::size_t nodes = 0;
+    check_cuda(cudaGraphGetNodes(graph, nullptr, &nodes), "inspect RoPE graph");
+    require(nodes == 1, "cache build must use the supplied stream");
+    check_cuda(cudaGraphInstantiate(&executable, graph, 0),
+               "instantiate RoPE cache build");
+    for (const auto dtype : {DataType::Float32, DataType::BFloat16}) {
+      auto query = Tensor::empty({tokens, 2, head_dim}, dtype, gpu);
+      auto key = Tensor::empty({tokens, 1, head_dim}, dtype, gpu);
+      std::vector<float> q(query.numel()), k(key.numel());
+      for (std::size_t i = 0; i < q.size(); ++i) {
+        q[i] = 0.2f * std::sin(float(i));
+        if (dtype == DataType::BFloat16) q[i] = bf16(q[i]);
+      }
+      for (std::size_t i = 0; i < k.size(); ++i) {
+        k[i] = 0.3f * std::cos(float(i));
+        if (dtype == DataType::BFloat16) k[i] = bf16(k[i]);
+      }
+      upload_float(query.view(), q);
+      upload_float(key.view(), k);
+      // Forward follows the build on a nonblocking stream without a host wait.
+      check_cuda(cudaGraphLaunch(executable, stream),
+                 "build captured RoPE cache");
+      rope.forward(ids.view().as_const(), query.view(), key.view(), stream);
+      check_cuda(cudaStreamSynchronize(stream), "complete RoPE check");
+      const auto rotate = [&](std::vector<float> values, std::size_t heads) {
+        const auto half = rotary_dim / 2;
+        for (std::size_t token = 0; token < tokens; ++token) {
+          for (std::size_t head = 0; head < heads; ++head) {
+            for (std::size_t i = 0; i < half; ++i) {
+              const auto index = (token * heads + head) * head_dim + i;
+              const float angle =
+                  positions[token] / std::pow(theta, float(i) / half);
+              const float x = values[index], y = values[index + half];
+              const float a = x * std::cos(angle) - y * std::sin(angle);
+              const float b = y * std::cos(angle) + x * std::sin(angle);
+              values[index] = dtype == DataType::BFloat16 ? bf16(a) : a;
+              values[index + half] = dtype == DataType::BFloat16 ? bf16(b) : b;
+            }
+          }
+        }
+        return values;
+      };
+      const auto tolerance = dtype == DataType::BFloat16 ? 0.002f : 2e-6f;
+      compare(read(query.view()), rotate(q, 2), tolerance, tolerance);
+      compare(read(key.view()), rotate(k, 1), tolerance, tolerance);
+    }
+    check_cuda(cudaGraphExecDestroy(executable), "destroy RoPE executable");
+    check_cuda(cudaGraphDestroy(graph), "destroy RoPE graph");
+  }
+  check_cuda(cudaStreamDestroy(stream), "destroy RoPE check stream");
+}
+
 void check_linear(std::size_t m, std::size_t n, std::size_t k) {
   auto x = Tensor::empty({m, k}, DataType::BFloat16, gpu);
   std::vector<float> input(m * k);
@@ -102,15 +172,12 @@ void check_linear(std::size_t m, std::size_t n, std::size_t k) {
   auto expanded = Tensor::empty({n, k}, DataType::Float32);
   kernels::cpu::dequantize_fp8(weight_cpu.view().as_const(),
                                scale_cpu.view().as_const(), expanded.view());
-  auto w = Tensor::empty({n, k}, DataType::Float8E4M3FN, gpu);
-  auto scale =
-      Tensor::empty({(n + 127) / 128, (k + 127) / 128}, DataType::Float32, gpu);
-  upload(w.view(), weight_cpu.data());
-  upload(scale.view(), scale_cpu.data());
+  FP8Linear projection(k, n, gpu);
+  upload(projection.weight().view(), weight_cpu.data());
+  upload(projection.weight_scale_inv().view(), scale_cpu.data());
   for (const auto dtype : {DataType::Float32, DataType::BFloat16}) {
     auto output = Tensor::empty({m, n}, dtype, gpu);
-    kernels::cuda::linear_fp8(x.view().as_const(), w.view().as_const(),
-                              scale.view().as_const(), output.view());
+    projection.forward_into(x.view().as_const(), output.view());
     std::vector<float> expected(m * n);
     for (std::size_t row = 0; row < m; ++row) {
       for (std::size_t col = 0; col < n; ++col) {
@@ -333,7 +400,7 @@ void check_cache() {
   config.linear_key_head_dim = 8;
   config.linear_value_head_dim = 8;
   config.linear_conv_kernel_dim = 4;
-  GatedDeltaNet layer(config, gpu, DataType::BFloat16);
+  GatedDeltaNet layer(config, gpu);
   require(layer.has_parameter("conv1d.weight"), "conv checkpoint parameter name");
   Qwen35Cache cache(config, 4, 16, 2, gpu);
   require(cache.key_cache(0).dtype() == DataType::BFloat16, "key cache dtype");
@@ -345,10 +412,66 @@ void check_cache() {
           "recurrent cache dtype");
   require(cache.kv_bytes() == 2 * 4 * 16 * 2 * 16 * 2, "BF16 KV byte count");
 }
+
+void check_projection_layout() {
+  ModelConfig config;
+  config.hidden_size = 16;
+  config.num_attention_heads = 2;
+  config.num_key_value_heads = 1;
+  config.head_dim = 8;
+  config.max_position_embeddings = 16;
+  config.rope_theta = 10000;
+  config.rms_norm_eps = 1e-6f;
+  config.linear_num_key_heads = 1;
+  config.linear_num_value_heads = 2;
+  config.linear_key_head_dim = 8;
+  config.linear_value_head_dim = 8;
+  config.linear_conv_kernel_dim = 4;
+  const auto cpu = Device::cpu();
+  GatedDeltaNet delta(config, cpu);
+  Qwen35Attention attention(config, gpu);
+  FP8SwiGLUMLP shared(16, 17, cpu);
+  FP8Expert expert(16, 17, cpu);
+  const auto check_fp8 = [](Module& module, const char* name) {
+    auto* projection = dynamic_cast<FP8Linear*>(&module.module(name));
+    require(projection != nullptr, "explicit FP8 projection type");
+    require(projection->named_parameters().size() == 2,
+            "FP8 parameters registered at construction");
+    require(projection->weight().view().dtype() == DataType::Float8E4M3FN,
+            "FP8 weight storage before loading");
+    const auto scale = projection->weight_scale_inv().view();
+    require(scale.dtype() == DataType::Float32 && scale.shape()[0] == 1
+                && scale.shape()[1] == 1,
+            "FP32 block scales before loading");
+  };
+  for (const auto* name : {"in_proj_qkv", "in_proj_z", "out_proj"}) {
+    check_fp8(delta, name);
+  }
+  for (const auto* name : {"q_proj", "k_proj", "v_proj", "o_proj"}) {
+    check_fp8(attention, name);
+  }
+  for (const auto* name : {"gate_proj", "up_proj", "down_proj"}) {
+    check_fp8(shared, name);
+    check_fp8(expert, name);
+  }
+  for (const auto* name : {"in_proj_a", "in_proj_b"}) {
+    auto* projection = dynamic_cast<Linear*>(&delta.module(name));
+    require(projection != nullptr
+                && projection->weight().view().dtype() == DataType::Float32
+                && !projection->has_parameter("weight_scale_inv"),
+            "decay projections keep ordinary FP32 Linear");
+  }
+  Linear biased(16, 17, true, DataType::BFloat16, cpu);
+  require(biased.bias() && biased.named_parameters().size() == 2
+              && !biased.has_parameter("weight_scale_inv"),
+          "ordinary Linear bias parameters");
+}
 } // namespace
 
 int main() {
   try {
+    check_rotary_cache();
+    check_projection_layout();
     for (auto m : {1, 3, 17, 129}) {
       check_linear(m, 33, 130);
       check_linear(m, 128, 2048);
@@ -358,7 +481,8 @@ int main() {
     check_delta();
     check_cache();
     std::cout
-        << "Mixed precision checks passed: BF16/FP8 linear and FP32 logits, "
+        << "Mixed precision checks passed: streamed/captured full/partial RoPE, "
+           "BF16/FP8 linear and FP32 logits, "
            "FP32 residual, 513-token FP64 recurrence reference, chunk/decode "
            "parity through CausalConv1d, checkpoint names, cache dtypes\n";
   } catch (const std::exception& error) {

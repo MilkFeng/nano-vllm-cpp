@@ -27,11 +27,6 @@ namespace {
 
 constexpr std::size_t kExpertFP8BlockSize = 128;
 
-std::size_t scale_dimension(std::size_t dimension) {
-  return dimension / kExpertFP8BlockSize
-         + (dimension % kExpertFP8BlockSize != 0);
-}
-
 void reserve_rows(Tensor& tensor, std::size_t rows, std::size_t width,
                   Device device = Device::cpu(),
                   DataType dtype = DataType::Float32) {
@@ -141,25 +136,9 @@ void FP8ExpertWorkspace::reserve(std::size_t rows,
 
 FP8Expert::FP8Expert(std::size_t hidden_size, std::size_t intermediate_size,
                      Device device)
-    : gate_(hidden_size, intermediate_size, false, DataType::Float8E4M3FN,
-            device),
-      up_(hidden_size, intermediate_size, false, DataType::Float8E4M3FN,
-          device),
-      down_(intermediate_size, hidden_size, false, DataType::Float8E4M3FN,
-            device),
-      gate_scale_(Tensor::empty(
-          {scale_dimension(intermediate_size), scale_dimension(hidden_size)},
-          DataType::Float32, device)),
-      up_scale_(Tensor::empty(
-          {scale_dimension(intermediate_size), scale_dimension(hidden_size)},
-          DataType::Float32, device)),
-      down_scale_(Tensor::empty(
-          {scale_dimension(hidden_size), scale_dimension(intermediate_size)},
-          DataType::Float32, device)) {
-  gate_.register_parameter("weight_scale_inv", gate_scale_);
-  up_.register_parameter("weight_scale_inv", up_scale_);
-  down_.register_parameter("weight_scale_inv", down_scale_);
-
+    : gate_(hidden_size, intermediate_size, device),
+      up_(hidden_size, intermediate_size, device),
+      down_(intermediate_size, hidden_size, device) {
   register_module("gate_proj", gate_);
   register_module("up_proj", up_);
   register_module("down_proj", down_);
@@ -169,7 +148,8 @@ void FP8Expert::forward_into(ConstTensorView input, TensorView output) const {
   kernels::cpu::expert_forward(
       input,
       {gate_.weight().view(), up_.weight().view(), down_.weight().view(),
-       gate_scale_.view(), up_scale_.view(), down_scale_.view()},
+       gate_.weight_scale_inv().view(), up_.weight_scale_inv().view(),
+       down_.weight_scale_inv().view()},
       output, kExpertFP8BlockSize);
 }
 
@@ -182,23 +162,20 @@ void FP8Expert::forward_into(ConstTensorView input, TensorView output,
   const auto up = workspace.up.view().slice(0, 0, rows);
   const auto activated = workspace.activated.view().slice(0, 0, rows);
 
-  kernels::cuda::linear_fp8(input, gate_.weight().view(), gate_scale_.view(),
-                            gate, stream);
-  kernels::cuda::linear_fp8(input, up_.weight().view(), up_scale_.view(), up,
-                            stream);
+  gate_.forward_into(input, gate, stream);
+  up_.forward_into(input, up, stream);
   kernels::cuda::silu_and_mul(gate.as_const(), up.as_const(), activated,
                               stream);
-  kernels::cuda::linear_fp8(activated.as_const(), down_.weight().view(),
-                            down_scale_.view(), output, stream);
+  down_.forward_into(activated.as_const(), output, stream);
 }
 
 kernels::cuda::FP8ExpertWeights FP8Expert::device_weights() const {
   return {gate_.weight().view().data<std::uint8_t>(),
           up_.weight().view().data<std::uint8_t>(),
           down_.weight().view().data<std::uint8_t>(),
-          gate_scale_.view().data<float>(),
-          up_scale_.view().data<float>(),
-          down_scale_.view().data<float>()};
+          gate_.weight_scale_inv().view().data<float>(),
+          up_.weight_scale_inv().view().data<float>(),
+          down_.weight_scale_inv().view().data<float>()};
 }
 
 ExpertStore::ExpertStore(std::size_t hidden_size, std::size_t intermediate_size,
@@ -1097,9 +1074,8 @@ MoE::MoE(MoEConfig config, ThreadPool& cpu_pool, Device device,
   register_module("experts", experts_);
 
   if (config_.shared_expert_intermediate_size != 0) {
-    shared_expert_ = std::make_unique<SwiGLUMLP>(
-        config_.hidden_size, config_.shared_expert_intermediate_size,
-        config_.activation_dtype, device);
+    shared_expert_ = std::make_unique<FP8SwiGLUMLP>(
+        config_.hidden_size, config_.shared_expert_intermediate_size, device);
 
     shared_expert_gate_ = std::make_unique<Linear>(
         config_.hidden_size, 1, false, DataType::Float32, device);

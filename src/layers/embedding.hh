@@ -15,6 +15,7 @@ class Embedding final : public Module {
 
   [[nodiscard]] Tensor forward(ConstTensorView input_ids,
                                cudaStream_t stream = nullptr) const;
+
   [[nodiscard]] Parameter& weight() noexcept;
   [[nodiscard]] const Parameter& weight() const noexcept;
 

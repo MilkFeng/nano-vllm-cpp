@@ -24,6 +24,8 @@ class Qwen35Attention final : public Module {
  public:
   Qwen35Attention(const ModelConfig& config, Device device);
 
+  void build_rope_cache(cudaStream_t stream);
+
   [[nodiscard]] Tensor forward(ConstTensorView positions,
                                ConstTensorView hidden_states,
                                const ForwardContext& context) const;
@@ -36,7 +38,7 @@ class Qwen35Attention final : public Module {
 
  private:
   std::size_t hidden_size_, num_heads_, num_kv_heads_, head_dim_, q_size_;
-  Linear q_proj_, k_proj_, v_proj_, o_proj_;
+  FP8Linear q_proj_, k_proj_, v_proj_, o_proj_;
   RMSNorm q_norm_, k_norm_;
   RotaryEmbedding rotary_emb_;
   TensorView key_cache_, value_cache_;
@@ -102,6 +104,8 @@ class Qwen35Model final : public Module {
               bool profile_experts = false,
               ExpertAdaptationParams expert_adaptation = {},
               bool cpu_affinity = false);
+
+  void build_rope_cache(cudaStream_t stream);
 
   [[nodiscard]] Tensor forward(ConstTensorView input_ids,
                                ConstTensorView positions,

@@ -7,8 +7,7 @@
 
 namespace nanovllm {
 
-GatedDeltaNet::GatedDeltaNet(const ModelConfig& config, Device device,
-                             DataType activation_dtype)
+GatedDeltaNet::GatedDeltaNet(const ModelConfig& config, Device device)
     : hidden_size_(config.hidden_size),
       key_heads_(config.linear_num_key_heads),
       value_heads_(config.linear_num_value_heads),
@@ -16,14 +15,12 @@ GatedDeltaNet::GatedDeltaNet(const ModelConfig& config, Device device,
       value_dim_(config.linear_value_head_dim),
       conv_dim_(2 * key_heads_ * key_dim_ + value_heads_ * value_dim_),
       conv_kernel_(config.linear_conv_kernel_dim),
-      in_proj_qkv_(hidden_size_, conv_dim_, false, activation_dtype, device),
-      in_proj_z_(hidden_size_, value_heads_ * value_dim_, false,
-                 activation_dtype, device),
+      in_proj_qkv_(hidden_size_, conv_dim_, device),
+      in_proj_z_(hidden_size_, value_heads_ * value_dim_, device),
       in_proj_a_(hidden_size_, value_heads_, false, DataType::Float32, device),
       in_proj_b_(hidden_size_, value_heads_, false, DataType::Float32, device),
-      out_proj_(value_heads_ * value_dim_, hidden_size_, false,
-                activation_dtype, device),
-      conv1d_(conv_dim_, conv_kernel_, activation_dtype, device),
+      out_proj_(value_heads_ * value_dim_, hidden_size_, device),
+      conv1d_(conv_dim_, conv_kernel_, DataType::BFloat16, device),
       A_log_(Tensor::empty({value_heads_}, DataType::Float32, device)),
       dt_bias_(Tensor::empty({value_heads_}, DataType::Float32, device)),
       norm_(value_dim_, config.rms_norm_eps, device) {

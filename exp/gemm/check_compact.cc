@@ -39,9 +39,7 @@ void check(std::size_t m, std::size_t n, std::size_t k) {
   for (std::size_t i = 0; i < x.size(); ++i) x[i] = std::sin(float(i) * 1.234f);
   store(input.view(), x.data());
   Linear dense(k, n, false, DataType::Float32, device);
-  Linear compact(k, n, false, DataType::Float32, device);
-  compact.use_fp8_weight();
-  compact.use_fp8_weight(); // Reload preparation must not duplicate registration.
+  FP8Linear compact(k, n, device);
   auto weights = Tensor::empty({n, k}, DataType::Float8E4M3FN);
   auto scales = Tensor::empty({(n + 127) / 128, (k + 127) / 128}, DataType::Float32);
   auto expanded = Tensor::empty({n, k}, DataType::Float32);
@@ -52,7 +50,7 @@ void check(std::size_t m, std::size_t n, std::size_t k) {
   kernels::cpu::dequantize_fp8(weights.view().as_const(), scales.view().as_const(), expanded.view(), 128, 128);
   store(dense.weight().view(), expanded.data());
   store(compact.weight().view(), weights.data());
-  store(compact.parameter("weight_scale_inv").view(), scales.data());
+  store(compact.weight_scale_inv().view(), scales.data());
   auto reference = dense.forward(input.view().as_const());
   auto actual = compact.forward(input.view().as_const());
   compare(actual.view().as_const(), reference.view().as_const());
