@@ -3,7 +3,7 @@
 #include <cuda_runtime_api.h>
 
 #include <cstddef>
-#include <memory>
+#include <optional>
 
 #include "core/module.hh"
 
@@ -26,16 +26,16 @@ class Linear final : public Module {
   [[nodiscard]] Parameter* bias() noexcept;
   [[nodiscard]] const Parameter* bias() const noexcept;
 
-  // Retain checkpoint FP8 weights; activations, scaling and accumulation stay
-  // FP32.
   void use_fp8_weight();
 
  private:
-  std::size_t in_features_;
-  std::size_t out_features_;
+  std::size_t in_features_, out_features_;
+
+  // weight_: [out_features, in_features]
   Parameter weight_;
-  std::unique_ptr<Parameter> bias_;
-  std::unique_ptr<Parameter> weight_scale_inv_;
+
+  std::optional<Parameter> bias_;
+  std::optional<Parameter> weight_scale_inv_;
 };
 
 } // namespace nanovllm

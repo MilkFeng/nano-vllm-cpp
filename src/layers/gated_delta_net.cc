@@ -3,7 +3,6 @@
 #include <array>
 #include <cassert>
 
-#include "common/cuda_utils.hh"
 #include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
@@ -24,8 +23,7 @@ GatedDeltaNet::GatedDeltaNet(const ModelConfig& config, Device device,
       in_proj_b_(hidden_size_, value_heads_, false, DataType::Float32, device),
       out_proj_(value_heads_ * value_dim_, hidden_size_, false,
                 activation_dtype, device),
-      conv_weight_(Tensor::empty({conv_dim_, 1, conv_kernel_}, activation_dtype,
-                                 device)),
+      conv1d_(conv_dim_, conv_kernel_, activation_dtype, device),
       A_log_(Tensor::empty({value_heads_}, DataType::Float32, device)),
       dt_bias_(Tensor::empty({value_heads_}, DataType::Float32, device)),
       norm_(value_dim_, config.rms_norm_eps, device) {
@@ -39,70 +37,59 @@ GatedDeltaNet::GatedDeltaNet(const ModelConfig& config, Device device,
 
   register_parameter("A_log", A_log_);
   register_parameter("dt_bias", dt_bias_);
-
-  conv1d_.register_parameter("weight", conv_weight_);
 }
 
 Tensor GatedDeltaNet::forward(ConstTensorView hidden_states,
-                              const ForwardContext& context) const {
-  const auto tokens = hidden_states.shape()[0];
-  const auto stream = context.stream;
+                              ConstTensorView cu_seqlens,
+                              ConstTensorView state_indices,
+                              cudaStream_t stream) const {
+  assert(conv_state_.rank() == 3 && recurrent_state_.numel() != 0);
 
-  const auto cu = context.is_prefill ? context.cu_seqlens_q : ConstTensorView{};
+  const auto tokens = hidden_states.shape()[0];
+
+  // input: [tokens, hidden_size]
+  //
+  // qkv:   [tokens, 2*qk_heads*qk_head_dim+v_heads*v_head_dim]
+  // z:     [tokens,                        v_heads*v_head_dim]
+  // a:     [tokens,                                   v_heads]
+  // b:     [tokens,                                   v_heads]
 
   auto qkv = in_proj_qkv_.forward(hidden_states, stream);
   auto z = in_proj_z_.forward(hidden_states, stream);
   auto a = in_proj_a_.forward(hidden_states, stream);
   auto b = in_proj_b_.forward(hidden_states, stream);
 
-  Tensor local_conv, local_recurrent;
-  auto conv = conv_state_, recurrent = recurrent_state_;
-  auto state_indices = context.state_indices;
-
-  if (recurrent.numel() == 0) {
-    const auto batch = cu.shape()[0] - 1;
-
-    local_conv = Tensor::empty({batch, conv_dim_, conv_kernel_ - 1},
-                               hidden_states.dtype(), hidden_states.device());
-    local_recurrent = Tensor::empty({batch, value_heads_, key_dim_, value_dim_},
-                                    DataType::Float32, hidden_states.device());
-
-    if (local_conv.size_bytes()) {
-      check_cuda(cudaMemsetAsync(local_conv.data(), 0, local_conv.size_bytes(),
-                                 stream),
-                 "zero local conv history");
-    }
-
-    check_cuda(cudaMemsetAsync(local_recurrent.data(), 0,
-                               local_recurrent.size_bytes(), stream),
-               "zero local recurrent state");
-
-    conv = local_conv.view();
-    recurrent = local_recurrent.view();
-    state_indices = {};
-  }
-
-  auto convolved = Tensor::empty({tokens, conv_dim_}, hidden_states.dtype(),
-                                 hidden_states.device());
-
-  kernels::cuda::causal_conv1d(qkv.view().as_const(), conv_weight_.view(), conv,
-                               cu, state_indices, convolved.view(), stream);
+  // 对 qkv 做一下 Causal Depthwise Convolution
+  //
+  // convolved: [tokens, 2*qk_heads*qk_head_dim+v_heads*v_head_dim]
+  //            最后一维按照顺序存放 Q、K、V
+  auto convolved = conv1d_.forward(qkv.view().as_const(), conv_state_,
+                                   cu_seqlens, state_indices, stream);
 
   auto output = Tensor::empty({tokens, value_heads_, value_dim_},
                               hidden_states.dtype(), hidden_states.device());
 
+  // 更新递归记忆，并生成每个 token 的输出
   kernels::cuda::gated_delta_rule(
       convolved.view().as_const(), a.view().as_const(), b.view().as_const(),
-      A_log_.view(), dt_bias_.view(), recurrent, cu, state_indices, key_heads_,
-      output.view(), stream);
+      A_log_.view(), dt_bias_.view(), recurrent_state_, cu_seqlens,
+      state_indices, key_heads_, output.view(), stream);
 
+  // z:       [tokens, v_heads*v_head_dim]
+  // z_heads: [tokens, v_heads, v_head_dim]
   const auto z_heads = z.reshape(std::array{tokens, value_heads_, value_dim_});
 
+  // 每个 head 内做 RMSNorm，再应用 z 门控
+  //
+  // normalized: [tokens, v_heads, v_head_dim]
   auto normalized =
       norm_.forward(output.view().as_const(), z_heads.view(), stream);
 
+  // 最后两维合并一下
   const auto flattened =
       normalized.reshape(std::array{tokens, value_heads_ * value_dim_});
+
+  // 应用 out_proj_
   return out_proj_.forward(flattened.view(), stream);
 }
 

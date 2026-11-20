@@ -11,6 +11,7 @@
 #include "functions/cast.hh"
 #include "kernels/cpu/fp8_dequant.hh"
 #include "kernels/cuda/kernels.hh"
+#include "layers/causal_conv1d.hh"
 #include "layers/lm_head.hh"
 #include "models/qwen35.hh"
 
@@ -192,7 +193,8 @@ void check_delta() {
   constexpr std::size_t tokens = 513, kd = 8, vd = 8, heads = 2;
   constexpr std::size_t channels = 2 * kd + heads * vd;
   auto qkv = Tensor::empty({tokens, channels}, DataType::BFloat16, gpu);
-  auto weight = Tensor::empty({channels, 1, 4}, DataType::BFloat16, gpu);
+  CausalConv1d conv1d(channels, 4, DataType::BFloat16, gpu);
+  auto weight = conv1d.weight().view();
   auto history = Tensor::empty({2, channels, 3}, DataType::BFloat16, gpu);
   auto state = Tensor::empty({2, heads, kd, vd}, DataType::Float32, gpu);
   auto conv = Tensor::empty({tokens, channels}, DataType::BFloat16, gpu);
@@ -212,7 +214,7 @@ void check_delta() {
     weights[i] = bf16(0.25f * std::cos(float(i)));
   }
   upload_float(qkv.view(), values);
-  upload_float(weight.view(), weights);
+  upload_float(weight, weights);
   upload_float(a.view(), std::vector<float>(a.numel(), -2.f));
   upload_float(b.view(), std::vector<float>(b.numel(), 0.1f));
   upload_float(log_a.view(), std::vector<float>(heads, -3.f));
@@ -226,7 +228,7 @@ void check_delta() {
   reset();
   for (std::size_t t = 0; t < tokens; ++t) {
     kernels::cuda::causal_conv1d(
-        qkv.view().as_const().slice(0, t, 1), weight.view().as_const(),
+        qkv.view().as_const().slice(0, t, 1), weight.as_const(),
         history.view(), {}, slot.view().as_const(), conv.view().slice(0, t, 1));
     kernels::cuda::gated_delta_rule(
         conv.view().as_const().slice(0, t, 1),
@@ -303,12 +305,11 @@ void check_delta() {
     auto cu = Tensor::empty({2}, DataType::Int32, gpu);
     const std::int32_t boundaries[]{0, static_cast<std::int32_t>(count)};
     upload(cu.view(), boundaries);
-    kernels::cuda::causal_conv1d(qkv.view().as_const().slice(0, begin, count),
-                                 weight.view().as_const(), history.view(),
-                                 cu.view().as_const(), slot.view().as_const(),
-                                 conv.view().slice(0, begin, count));
+    auto chunk = conv1d.forward(qkv.view().as_const().slice(0, begin, count),
+                                history.view(), cu.view().as_const(),
+                                slot.view().as_const());
     kernels::cuda::gated_delta_rule(
-        conv.view().as_const().slice(0, begin, count),
+        chunk.view().as_const(),
         a.view().as_const().slice(0, begin, count),
         b.view().as_const().slice(0, begin, count), log_a.view().as_const(),
         bias.view().as_const(), state.view(), cu.view().as_const(),
@@ -321,6 +322,7 @@ void check_delta() {
 
 void check_cache() {
   ModelConfig config;
+  config.hidden_size = 16;
   config.num_hidden_layers = 4;
   config.layer_types = {AttentionType::Linear, AttentionType::Linear,
                         AttentionType::Linear, AttentionType::Full};
@@ -331,6 +333,8 @@ void check_cache() {
   config.linear_key_head_dim = 8;
   config.linear_value_head_dim = 8;
   config.linear_conv_kernel_dim = 4;
+  GatedDeltaNet layer(config, gpu, DataType::BFloat16);
+  require(layer.has_parameter("conv1d.weight"), "conv checkpoint parameter name");
   Qwen35Cache cache(config, 4, 16, 2, gpu);
   require(cache.key_cache(0).dtype() == DataType::BFloat16, "key cache dtype");
   require(cache.value_cache(0).dtype() == DataType::BFloat16,
@@ -356,7 +360,7 @@ int main() {
     std::cout
         << "Mixed precision checks passed: BF16/FP8 linear and FP32 logits, "
            "FP32 residual, 513-token FP64 recurrence reference, chunk/decode "
-           "parity, cache dtypes\n";
+           "parity through CausalConv1d, checkpoint names, cache dtypes\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

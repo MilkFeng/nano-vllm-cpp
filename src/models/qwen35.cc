@@ -439,8 +439,10 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
         self_attn_
             ? self_attn_->forward(
                   positions, before.hidden_states.view().as_const(), context)
-            : linear_attn_->forward(before.hidden_states.view().as_const(),
-                                    context);
+            : linear_attn_->forward(
+                  before.hidden_states.view().as_const(),
+                  context.is_prefill ? context.cu_seqlens_q : ConstTensorView{},
+                  context.state_indices, context.stream);
     auto after = post_attention_layernorm_.forward(
         attention.view().as_const(), residual_view, context.stream);
     return {std::move(after.hidden_states), std::move(after.residual)};

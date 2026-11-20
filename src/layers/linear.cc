@@ -16,8 +16,7 @@ Linear::Linear(std::size_t in_features, std::size_t out_features, bool bias,
       weight_(Tensor::empty({out_features_, in_features_}, dtype, device)) {
   register_parameter("weight", weight_);
   if (bias) {
-    bias_ = std::make_unique<Parameter>(
-        Tensor::empty({out_features_}, dtype, device));
+    bias_.emplace(Tensor::empty({out_features_}, dtype, device));
     register_parameter("bias", *bias_);
   }
 }
@@ -50,18 +49,23 @@ void Linear::use_fp8_weight() {
   if (weight_scale_inv_) {
     return;
   }
+
   if (bias_ || weight_.view().device().type != DeviceType::Cuda) {
     throw std::invalid_argument(
         "compact FP8 Linear requires CUDA without bias");
   }
-  auto scale = std::make_unique<Parameter>(
+
+  if (weight_.tensor().dtype() != DataType::Float8E4M3FN) {
+    weight_.tensor() =
+        Tensor::empty({out_features_, in_features_}, DataType::Float8E4M3FN,
+                      weight_.view().device());
+  }
+
+  weight_scale_inv_.emplace(
       Tensor::empty({(out_features_ + 127) / 128, (in_features_ + 127) / 128},
                     DataType::Float32, weight_.view().device()));
-  auto weight = Tensor::empty({out_features_, in_features_},
-                              DataType::Float8E4M3FN, weight_.view().device());
-  register_parameter("weight_scale_inv", *scale);
-  weight_scale_inv_ = std::move(scale);
-  weight_.tensor() = std::move(weight);
+
+  register_parameter("weight_scale_inv", *weight_scale_inv_);
 }
 
 std::size_t Linear::in_features() const noexcept {
@@ -81,11 +85,11 @@ const Parameter& Linear::weight() const noexcept {
 }
 
 Parameter* Linear::bias() noexcept {
-  return bias_.get();
+  return bias_ ? &*bias_ : nullptr;
 }
 
 const Parameter* Linear::bias() const noexcept {
-  return bias_.get();
+  return bias_ ? &*bias_ : nullptr;
 }
 
 } // namespace nanovllm
