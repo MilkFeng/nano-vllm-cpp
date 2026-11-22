@@ -220,40 +220,54 @@ void check_linear(std::size_t m, std::size_t n, std::size_t k) {
 void check_norm() {
   constexpr std::size_t width = 257;
   auto input = Tensor::empty({2, width}, DataType::BFloat16, gpu);
-  auto residual = Tensor::empty({2, width}, DataType::Float32, gpu);
   RMSNorm norm(width, 1e-6f, DataType::BFloat16, gpu, true);
   std::vector<float> x(2 * width), r(2 * width), w(width), expected(x.size()),
       sums(x.size());
   for (std::size_t i = 0; i < x.size(); ++i) {
     x[i] = bf16(1.f + float(i % 5) * 0.125f);
     r[i] = 256.f + float(i % 3) * 0.03125f;
-    sums[i] = x[i] + r[i];
   }
   for (std::size_t i = 0; i < width; ++i) {
     w[i] = bf16(0.02f * std::sin(float(i)));
   }
   upload_float(input.view(), x);
-  upload_float(residual.view(), r);
   upload_float(norm.weight().view(), w);
-  auto output =
-      norm.forward(input.view().as_const(), residual.view().as_const());
-  require(output.hidden_states.dtype() == DataType::BFloat16,
-          "norm activation dtype");
-  require(output.residual.dtype() == DataType::Float32,
-          "residual must stay FP32");
-  compare(read(output.residual.view()), sums, 0, 0);
-  for (std::size_t row = 0; row < 2; ++row) {
-    double square = 0;
-    for (std::size_t j = 0; j < width; ++j) {
-      square += double(sums[row * width + j]) * sums[row * width + j];
+
+  // A residual input of any supported dtype must start an FP32 stream; a BF16
+  // input has to match casting to FP32 before the add bit for bit.
+  const auto check_residual = [&](DataType residual_dtype,
+                                  const std::vector<float>& residual_values) {
+    auto residual = Tensor::empty({2, width}, residual_dtype, gpu);
+    upload_float(residual.view(), residual_values);
+    for (std::size_t i = 0; i < sums.size(); ++i) {
+      sums[i] = x[i] + residual_values[i];
     }
-    const auto inv = float(1.0 / std::sqrt(square / width + 1e-6));
-    for (std::size_t j = 0; j < width; ++j) {
-      expected[row * width + j] =
-          bf16(sums[row * width + j] * inv * (1.f + w[j]));
+    auto output = norm.forward(input.view().as_const(),
+                               residual.view().as_const(), DataType::Float32);
+    require(output.hidden_states.dtype() == DataType::BFloat16,
+            "norm activation dtype");
+    require(output.residual.dtype() == DataType::Float32,
+            "residual must stay FP32");
+    compare(read(output.residual.view()), sums, 0, 0);
+    for (std::size_t row = 0; row < 2; ++row) {
+      double square = 0;
+      for (std::size_t j = 0; j < width; ++j) {
+        square += double(sums[row * width + j]) * sums[row * width + j];
+      }
+      const auto inv = float(1.0 / std::sqrt(square / width + 1e-6));
+      for (std::size_t j = 0; j < width; ++j) {
+        expected[row * width + j] =
+            bf16(sums[row * width + j] * inv * (1.f + w[j]));
+      }
     }
+    compare(read(output.hidden_states.view()), expected, 1e-6f, 0.008f);
+  };
+  check_residual(DataType::Float32, r);
+  auto rounded = r;
+  for (auto& value : rounded) {
+    value = bf16(value);
   }
-  compare(read(output.hidden_states.view()), expected, 1e-6f, 0.008f);
+  check_residual(DataType::BFloat16, rounded);
 }
 
 void check_delta() {

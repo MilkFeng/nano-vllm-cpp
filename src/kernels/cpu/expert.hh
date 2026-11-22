@@ -13,7 +13,7 @@ struct ExpertWeights {
   ConstTensorView down_scale;
 };
 
-// FP32 input/output [rows, H], using one expert's FP8 weights for all rows.
+// BF16 or FP32 input [rows, H], FP32 output, with one expert's FP8 weights.
 void expert_forward(ConstTensorView input, const ExpertWeights& weights,
                     TensorView output, std::size_t block_size);
 

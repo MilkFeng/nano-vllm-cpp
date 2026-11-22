@@ -28,11 +28,17 @@ Tensor RMSNorm::forward(ConstTensorView input, cudaStream_t stream) const {
 
 RMSNormOutput RMSNorm::forward(ConstTensorView input, ConstTensorView residual,
                                cudaStream_t stream) const {
+  return forward(input, residual, residual.dtype(), stream);
+}
+
+RMSNormOutput RMSNorm::forward(ConstTensorView input, ConstTensorView residual,
+                               DataType residual_dtype,
+                               cudaStream_t stream) const {
   const auto weight = weight_.view();
   const std::vector<std::size_t> shape(input.shape().begin(),
                                        input.shape().end());
   RMSNormOutput result{Tensor::empty(shape, input.dtype(), input.device()),
-                       Tensor::empty(shape, residual.dtype(), input.device())};
+                       Tensor::empty(shape, residual_dtype, input.device())};
   kernels::cuda::fused_add_rms_norm(
       input, residual, weight, result.hidden_states.view(),
       result.residual.view(), epsilon_, stream, zero_centered_);

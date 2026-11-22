@@ -1,7 +1,9 @@
 #include "kernels/cpu/expert.hh"
 
+#include <bit>
 #include <cassert>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 #include "kernels/cpu/fp8_dot.hh"
@@ -29,6 +31,31 @@ void validate_matrix(const BasicTensorView<IsConst>& matrix, DataType dtype,
   assert(matrix.shape()[0] == rows && matrix.shape()[1] == columns);
 }
 
+const float* float_input(const ConstTensorView& input, std::size_t elements) {
+  if (input.dtype() == DataType::Float32) {
+    return input.data<float>();
+  }
+
+  // Expand once before the dot products reuse each activation across channels.
+  constexpr std::size_t alignment = 64;
+  const auto capacity = elements + alignment / sizeof(float) - 1;
+  thread_local std::vector<float> expanded;
+  if (expanded.size() < capacity) {
+    expanded.resize(capacity);
+  }
+  void* storage = expanded.data();
+  auto space = expanded.size() * sizeof(float);
+  auto* output = static_cast<float*>(
+      std::align(alignment, elements * sizeof(float), storage, space));
+  assert(output != nullptr);
+
+  const auto* source = input.data<std::uint16_t>();
+  for (std::size_t i = 0; i < elements; ++i) {
+    output[i] = std::bit_cast<float>(std::uint32_t(source[i]) << 16);
+  }
+  return output;
+}
+
 } // namespace
 
 void expert_forward(ConstTensorView input, const ExpertWeights& weights,
@@ -47,7 +74,9 @@ void expert_forward(ConstTensorView input, const ExpertWeights& weights,
   assert(same_device(input, output, weights.gate, weights.up, weights.down,
                      weights.gate_scale, weights.up_scale, weights.down_scale));
 
-  validate_matrix(input, DataType::Float32, tokens, hidden_size);
+  assert(input.dtype() == DataType::Float32
+         || input.dtype() == DataType::BFloat16);
+  validate_matrix(input, input.dtype(), tokens, hidden_size);
   validate_matrix(output, DataType::Float32, tokens, hidden_size);
   validate_matrix(weights.gate, DataType::Float8E4M3FN, intermediate_size,
                   hidden_size);
@@ -65,7 +94,6 @@ void expert_forward(ConstTensorView input, const ExpertWeights& weights,
   thread_local std::vector<float> activated;
   activated.resize(tokens * intermediate_size);
 
-  const auto* x = input.data<float>();
   const auto* gate = weights.gate.data<std::uint8_t>();
   const auto* up = weights.up.data<std::uint8_t>();
   const auto* gate_scale = weights.gate_scale.data<float>();
@@ -75,13 +103,23 @@ void expert_forward(ConstTensorView input, const ExpertWeights& weights,
   auto* result = output.data<float>();
 
   if (tokens == 1) {
-    fp8_gate_up(gate, up, gate_scale, up_scale, x, intermediate_size,
-                hidden_size, block_size, activated.data());
+    const bool used_bf16 =
+        input.dtype() == DataType::BFloat16 && block_size == 128
+        && hidden_size % 128 == 0 && intermediate_size % 4 == 0
+        && try_fp8_gate_up_bf16(gate, up, gate_scale, up_scale,
+                                input.data<std::uint16_t>(), intermediate_size,
+                                hidden_size, activated.data());
+    if (!used_bf16) {
+      fp8_gate_up(gate, up, gate_scale, up_scale,
+                  float_input(input, hidden_size), intermediate_size,
+                  hidden_size, block_size, activated.data());
+    }
     fp8_matvec(down, down_scale, activated.data(), hidden_size,
                intermediate_size, block_size, result);
     return;
   }
 
+  const auto* x = float_input(input, tokens * hidden_size);
   for (std::size_t row = 0; row < intermediate_size; ++row) {
     const auto scale_offset = (row / block_size) * hidden_blocks;
     for (std::size_t token = 0; token < tokens;) {

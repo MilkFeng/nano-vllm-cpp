@@ -363,12 +363,12 @@ FP8 权重直接借用 mmap 字节；scale 复制到 Tensor，保证浮点访问
 CPU routed 专家的计算直接在点积内部解码。
 `ExpertStore` 支持保存 FP8 权重和 scale，CPU 未命中专家在点积内部解码，GPU
 固定缓存直接复制原始 FP8 权重和 FP32 scale。Qwen3.5 模型加载器可直接读取官方 FP8
-checkpoint；GPU routed 专家在 FP32 GEMV/GEMM 内融合 FP8 权重反量化，
-激活和累加保持 FP32。
+checkpoint；GPU routed 专家在 GEMV/GEMM 内融合 FP8 权重反量化，使用 BF16
+激活和 FP32 累加。
 
 ## 学习用 MoE
 
-`src/layers/moe.hh/.cc` 实现一个独立的 routed MoE 层，支持 FP32 的 `[T,H]`
+`src/layers/moe/moe.hh` 和 `moe.cc` 实现独立的 routed MoE 层，支持 CUDA BF16 的 `[T,H]`
 输入，`T > 0`。维度由 `MoEConfig` 指定，例如 `H=128, I=64, E=16, K=2`。
 `T` 是本次输入的 token 总数；每个 token 的 FFN 独立计算，可以来自不同请求，
 不需要 attention 的序列边界或 KV 元数据。
@@ -405,7 +405,7 @@ combine。Router 的整批专家编号一次下载到 CPU，构造稳定的专�
 
 ```text
 批量 Router → expert_ids[T,K]
-            → ExpertExecutor::forward_into(input[T,H], ids[T*K])
+            → ExpertExecutor 按 ids[T*K] 分组
                 ├── GPU 专家组 → gather → FP8Expert(input[M_e,H])
                 └── CPU 专家组 → 打包 → expert_forward(input[M_e,H])
             → 一次上传 CPU 输出 → scatter 恢复 expert_outputs[T*K,H]
@@ -441,7 +441,7 @@ CPU 构造只创建参考权重。`MoEOutput` 的 `gpu_experts`、`cpu_experts` 
 token 选中会分别计数；`expert_cache().num_slots()`
 和 `size_bytes()` 只统计 routed 缓存槽位和权重，不包含 Router、共享专家及工作区。
 
-当前支持多 token、FP32/BF16 GPU 激活与 FP8 专家、1..1024 个专家、`1 <= top_k <= E`。
+当前支持多 token、BF16 GPU 激活与 FP8 专家、1..1024 个专家、`1 <= top_k <= E`。
 populate/replace 同步传入的 stream，调用需串行；forward 的 GPU 工作异步提交，
 读取结果或释放模块前需等待相应 stream，开启 profiling 时仍等待本层完成。
 缓存槽位数固定，
@@ -468,9 +468,9 @@ MoE moe(config, cpu_pool, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6}
 每个专家注册六个 CPU 参数：三个 `gate_proj/up_proj/down_proj.weight` 为
 FP8，三个同级 `weight_scale_inv` 为 FP32，按 `128x128` 分块。通过参数接口
 初始化，或把模块注册到 `Model` 后用 `load_ckpt()` 加载；GPU 副本与计算工作区
-不注册为参数。`MoEConfig::activation_dtype` 默认为 FP32，Qwen3.5 设置为 BF16；
-GPU 专家和共享专家使用该激活精度，Router、共享专家门控、专家输出合并以及 CPU 专家
-计算保持 FP32，最后将合并结果转回激活精度。官方 Qwen3.5 FP8 checkpoint 的 scale 也可以是 BF16，需要用下面的模型专用加载器转换；通用
+不注册为参数。GPU 专家和共享专家使用 BF16 激活。Router、共享专家门控、专家输出
+合并以及 CPU 专家计算使用 FP32，最后将合并结果转回 BF16。官方 Qwen3.5 FP8
+checkpoint 的 scale 也可以是 BF16，需要用下面的模型专用加载器转换；通用
 `Model::load_ckpt()` 的默认实现只接受 dtype 相同的参数，Qwen3.5 模型会覆盖它
 以处理 BF16 和 FP8 转换。
 
@@ -494,7 +494,8 @@ Qwen3.5 模型持有一个线程池，所有 MoE 层的 `ExpertExecutor` 共用�
 避免工作线程继续访问已经释放或复用的缓冲。
 点积逐行、逐 128 列块计算；每个块读取一次 scale，用共享的 256 项 FP32
 查表解码 FP8 值，立即做乘加，不创建完整 FP32 权重矩阵。查表占 1 KiB，
-输入、SiLU、累加与输出保持 FP32，CPU 路径不额外量化激活。
+CPU 专家接收 BF16 或 FP32 输入，并用 FP32 做 SiLU、累加和输出。AVX-512 的对齐
+BF16 单 token 输入在 SIMD 寄存器中展开，其余路径在专家计算开始前展开一次。
 
 CPU 点积逐行计算 gate/up，同一权重行连续服务多个 token，直接写出 SwiGLU
 中间激活。每个计算线程通过 `thread_local` 复用 `[M_e,I]` 的 FP32 缓冲，
@@ -525,10 +526,8 @@ FP32，再乘 checkpoint 中对应的 `weight_scale_inv[n/128,k/128]`。
 一次 Linear 调用只启动一个 kernel，不创建完整 FP32 权重矩阵或全局量化
 激活缓冲，也无需 BLAS workspace。M、N、K 可以不是 tile 的整数倍；
 尾部加载做边界判断，不申请 padding 缓冲。GPU 缓存也直接保存原始 `[N,K]`
-权重，无需补齐到 128 的倍数。executor 只保留 gate/up/activated 三个
-FP32 中间张量。
-CPU 与 GPU 都使用原始 FP32 激活，结果仍可能因累加顺序不同而有浮点差异。
-未测量整模型加速。
+权重，无需补齐到 128 的倍数。GPU 专家使用 BF16 的 gate/up/activated 中间张量。
+CPU 与 GPU 都接收原始 BF16 激活，结果可能因累加顺序和中间张量舍入而有差异。
 
 令 `Sr=ceil(I/128), Sc=ceil(H/128)`，RAM 权重字节数为
 `E*(3*H*I + 3*Sr*Sc*sizeof(float))`，GPU routed 权重和 scale 字节数为
@@ -585,7 +584,7 @@ Q/K/V/O、DeltaNet 的 QKV/Z/out，以及 routed/shared 专家的 gate/up/down
 存储一致；加载器只验证和复制参数，不再通过 `retain_checkpoint_weights()`
 或运行时类型转换改变层的权重格式。
 GPU 大投影与专家以 BF16 激活运行，在 kernel 内将 FP8 权重反量化并用 FP32 累加；
-CPU 未命中专家收到转换后的 FP32 激活。合并专家输出使用 FP32，主干输出转回 BF16。
+CPU 未命中专家直接接收 BF16 激活并用 FP32 计算。合并专家输出使用 FP32，主干输出转回 BF16。
 LM head 接收 BF16 hidden states，直接输出 FP32 logits，避免先舍入成 BF16。
 
 加载先验证全部所需文本 tensor 的名称、shape、dtype 和 scale 网格，再修改参数。
@@ -736,9 +735,8 @@ GPU 构造时这四个参数常驻 GPU，不占 routed expert cache 的槽位；
 `(3 * H * Is + H) * sizeof(float)`，不含激活和临时工作区。初始化参数仍然通过
 `named_parameters()`；`populate_expert_cache()` 只上传 routed 专家的缓存副本。
 
-这一版先完成 routed dispatch 和 combine，再用现有层计算共享专家、门控，并
-通过 `kernels::cuda::moe_add_shared()` 原地加入输出。共享分支尚未加入
-CPU/GPU 计算重叠，工作区使用现有层的临时分配。
+共享专家和门控算完后，合并 kernel 在 FP32 中累加 routed 输出与共享分支，并
+在写出时舍入为 BF16。单 token 路径提前提交共享分支，以便和 CPU 专家重叠执行。
 
 `MoEOutput::shared_expert_output` 返回未经门控的 `[T,H]` 输出，
 `shared_gate_logits` 返回 sigmoid 之前的 `[T,1]` logits；关闭分支时两者为空。
@@ -746,7 +744,7 @@ CPU/GPU 计算重叠，工作区使用现有层的临时分配。
 
 ### CPU/GPU 重叠执行
 
-`ExpertExecutor::forward_into()` 统一使用 CPU/GPU 重叠执行，无需选择执行模式：
+`MoE::forward()` 通过内部 `ExpertExecutor` 重叠执行 CPU 和 GPU 专家：
 
 ```cpp
 ThreadPool cpu_pool(8);
@@ -759,8 +757,8 @@ executor 将 `[T,K]` 的分派按专家计数分组，先提交 CPU 专家任务
 使用同一个 stream 排序。executor 返回前完成全部 CPU 任务，GPU 工作可以仍在
 排队。`MoE::forward()` 的单 token 路径把路由 ID 与输入一起下载，只等待下载
 完成事件；共享专家提前提交，与 CPU 专家重叠。层末记录完成事件后异步返回，
-下一层通过同一 stream 排序与下载事件安全复用工作区。工作区切换到另一 stream
-或析构时等待先前使用完成；profiling 保留层末等待以维持计时口径。
+共享同一工作区的调用始终使用同一条 stream，下一层通过下载事件确认前一层的
+工作已经完成。工作区析构和 profiling 都会等待层末完成事件。
 内部 executor 的 cache 就绪状态、张量形状及专家编号是调用方的前置条件，
 Debug 构建通过断言检查；Release 测试只传入满足这些条件的分派。
 
@@ -781,11 +779,10 @@ RAM；单 token 输入/输出保留小规模普通 RAM 暂存路径。GPU 分组
 在未命中的多 token 场景，整层 MoE 的显式 stream 同步从约 `2*T+2` 次减少到
 3 次；显存分配器和其他模块可能还有同步，不能据此直接推导耗时缩减比例。
 
-三个辅助类与 `MoE` 一起放在 `src/layers/moe.hh/.cc`。建议在 `.cc` 中按
-`ExpertStore` 的 RAM 权重 → `ExpertCache` 的固定 GPU 槽位 →
-`ExpertExecutor` 的分派 → `MoE::forward` 的路由与合并阅读。运行时 CPU 专家
-使用 `kernels::cpu::expert_forward()` 和 FP32 累加；仅供旧测试使用的完整 CPU
-MoE 对照实现已移除。
+`src/layers/moe/` 中的 `expert.hh/.cc` 定义 FP8 专家及 RAM 权重存储，
+`expert_cache.hh/.cc` 管理 GPU 缓存槽位，`expert_executor.hh/.cc` 负责专家分派，
+`workspace.hh/.cc` 管理临时缓冲区。`moe.hh/.cc` 是 MoE 层的入口，负责路由和
+合并。运行时 CPU 专家使用 `kernels::cpu::expert_forward()` 和 FP32 累加。
 
 ## MoE 分组执行验证
 

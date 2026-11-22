@@ -1,6 +1,7 @@
 #include <immintrin.h>
 
 #include <array>
+#include <cassert>
 
 #include "kernels/cpu/fp8_matvec.hh"
 
@@ -14,6 +15,11 @@ Wide broadcast(float x) {
 }
 Wide load(const float* x) {
   return _mm512_loadu_ps(x);
+}
+Wide load(const std::uint16_t* x) {
+  const auto packed = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(x));
+  return _mm512_castsi512_ps(
+      _mm512_slli_epi32(_mm512_cvtepu16_epi32(packed), 16));
 }
 alignas(64) constexpr auto kHalfValues = [] {
   std::array<std::uint16_t, 128> table{};
@@ -69,5 +75,14 @@ void gate_up_avx512(const std::uint8_t* g, const std::uint8_t* u,
                     const float* gs, const float* us, const float* x,
                     std::size_t n, std::size_t k, std::size_t b, float* y) {
   gate_up_impl(g, u, gs, us, x, n, k, b, y);
+}
+void gate_up_bf16_avx512(const std::uint8_t* g, const std::uint8_t* u,
+                         const float* gs, const float* us,
+                         const std::uint16_t* x, std::size_t n, std::size_t k,
+                         float* y) {
+  assert(n % kGateRows == 0 && k % 128 == 0);
+  for (std::size_t row = 0; row < n; row += kGateRows) {
+    tile<kGateRows, true>(g, u, gs, us, x, row, k, y);
+  }
 }
 } // namespace nanovllm::kernels::cpu::detail

@@ -10,7 +10,8 @@
 #include "kernels/cpu/fp8_dequant.hh"
 #include "kernels/cuda/kernels.hh"
 #include "layers/linear.hh"
-#include "layers/moe.hh"
+#include "layers/moe/expert.hh"
+#include "layers/moe/workspace.hh"
 
 using namespace nanovllm;
 

@@ -143,6 +143,19 @@ void check_experts() {
       expert_forward(view(x.data(),DataType::Float32,tokens,h),weights,
                      TensorView(y.data(),DataType::Float32,
                                   TensorLayout({tokens,h}),Device::cpu()),128);
+      std::vector<std::uint16_t> bf16_input(x.size());
+      for (std::size_t i = 0; i < x.size(); ++i) {
+        bf16_input[i] = std::bit_cast<std::uint32_t>(x[i]) >> 16;
+      }
+      std::vector<float> bf16_output(y.size());
+      expert_forward(view(bf16_input.data(), DataType::BFloat16, tokens, h),
+                     weights,
+                     TensorView(bf16_output.data(), DataType::Float32,
+                                TensorLayout({tokens, h}), Device::cpu()),
+                     128);
+      for (std::size_t i = 0; i < y.size(); ++i) {
+        require(equal(bf16_output[i], y[i]), "BF16 expert input parity");
+      }
 #ifdef NANOVLLM_CPU_REFERENCE
       std::vector<float> previous(y.size());
       nanovllm::kernels::cpu::reference::expert_forward(

@@ -17,9 +17,9 @@ float reduce8(__m256 sum) {
 
 // A 16-lane accumulator keeps exactly the old two 8-lane accumulation chains.
 // The final reduction therefore has the same order on both ISAs.
-template <std::size_t Rows, bool GateUp>
+template <std::size_t Rows, bool GateUp, typename Input>
 void tile(const std::uint8_t* weight, const std::uint8_t* up,
-          const float* scales, const float* up_scales, const float* input,
+          const float* scales, const float* up_scales, const Input* input,
           std::size_t first, std::size_t columns, float* output) {
   constexpr auto indices = std::make_index_sequence<Rows>{};
   Wide sums[Rows];

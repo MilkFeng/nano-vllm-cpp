@@ -34,16 +34,19 @@ struct FP8ExpertWeights {
   const std::uint8_t *gate, *up, *down;
   const float *gate_scale, *up_scale, *down_scale;
 };
+
 struct FP8ExpertBatch {
   FP8ExpertWeights weights[8];
   unsigned rows[8];
   unsigned count = 0;
 };
+
 // All resident decode experts in two launches: fused Gate/Up/SiLU, then Down.
 // input/activated share FP32 or BF16 dtype; output parts are FP32 for merging.
 void fp8_experts_decode(ConstTensorView input, const FP8ExpertBatch& batch,
                         TensorView activated, TensorView output,
                         cudaStream_t stream = nullptr);
+
 void fp8_experts_decode_routed(ConstTensorView input, ConstTensorView ids,
                                ConstTensorView routes, TensorView activated,
                                TensorView output, cudaStream_t stream);
@@ -153,7 +156,9 @@ void rms_norm(ConstTensorView input, ConstTensorView weight, TensorView output,
 // output:          [tokens, hidden_size]
 //
 // residual_output = input + residual
-// residual/residual_output may be FP32 with BF16 input/output.
+// residual/residual_output may be FP32 with BF16 input/output. The residual
+// input and output may use different dtypes (e.g. a BF16 residual input that
+// starts an FP32 residual stream).
 // if zero-centered:
 //   output = RMSNorm(residual_output) * (1 + weight)
 // else:
@@ -254,14 +259,19 @@ void moe_scatter(ConstTensorView grouped, ConstTensorView order,
 
 // expert_outputs: [tokens * topk, hidden_size]
 // expert_weights: [tokens, topk]
-// output:         [tokens, hidden_size]
+// output:         BF16 [tokens, hidden_size]
+// shared_output:  BF16 [tokens, hidden_size], optional
+// gate_logits:    FP32 [tokens, 1] when shared_output is provided
 //
 // output[tok][i] = sum(
 //   expert_weights[tok][j] * expert_outputs[tok * topk + j][i])
+//   + sigmoid(gate_logits[tok]) * shared_output[tok][i] (when provided)
 void moe_combine(ConstTensorView expert_outputs, ConstTensorView expert_weights,
-                 TensorView output, cudaStream_t stream = nullptr);
+                 TensorView output, ConstTensorView shared_output,
+                 ConstTensorView gate_logits, cudaStream_t stream = nullptr);
 
-// CPU host-node rows are mapped and materialized in expert_outputs.
+// CPU host-node rows are mapped and materialized in expert_outputs. The final
+// output is BF16, with optional BF16 shared_output and FP32 gate_logits.
 void moe_combine_routed(TensorView expert_outputs, const float* cpu_parts,
                         ConstTensorView ids, ConstTensorView routes,
                         ConstTensorView expert_weights, TensorView output,
@@ -270,17 +280,9 @@ void moe_combine_routed(TensorView expert_outputs, const float* cpu_parts,
                         const volatile std::uint32_t* ready = nullptr,
                         volatile std::uint32_t* error = nullptr);
 void moe_publish_decode(ConstTensorView input, ConstTensorView ids,
-                        float* mapped_input, std::int32_t* mapped_ids,
+                        std::uint16_t* mapped_input, std::int32_t* mapped_ids,
                         volatile std::uint32_t* ready, cudaStream_t stream,
                         bool publish_only = false);
-
-// shared_output: [tokens, hidden_size]
-// gate_logits:   [tokens, 1]
-// output:        [tokens, hidden_size]
-//
-// output[tok][i] += Sigmoid(gate_logits[tok]) * shared_output[tok][i]
-void moe_add_shared(ConstTensorView shared_output, ConstTensorView gate_logits,
-                    TensorView output, cudaStream_t stream = nullptr);
 
 // query/output:              [q_tokens, query_heads, head_dim]
 // key_cache/value_cache:     [blocks, block_tokens, key_heads, head_dim]
@@ -294,8 +296,6 @@ void flash_attn_with_kvcache(
     std::size_t max_seqlen_k, ConstTensorView block_table, TensorView output,
     bool causal, cudaStream_t stream = nullptr, TensorView workspace = {});
 
-// FP32 elements, sufficient for decode and tensor-core prefill at any query
-// length and any batch up to max_batch. Allocate outside CUDA Graph capture.
 [[nodiscard]] std::size_t flash_attn_workspace_elements(
     std::size_t max_batch, std::size_t query_heads, std::size_t head_dim,
     std::size_t max_seqlen_k);

@@ -28,6 +28,7 @@ bool has_avx512() {
 struct Backend {
   detail::Matvec matvec;
   detail::GateUp gate_up;
+  decltype(&detail::gate_up_bf16_avx512) gate_up_bf16;
   const char* name;
 };
 const Backend& backend() {
@@ -43,9 +44,10 @@ const Backend& backend() {
       throw std::runtime_error("AVX-512 is unavailable on this CPU/OS");
     }
     if (requested != "avx2" && available) {
-      return Backend{detail::matvec_avx512, detail::gate_up_avx512, "avx512"};
+      return Backend{detail::matvec_avx512, detail::gate_up_avx512,
+                     detail::gate_up_bf16_avx512, "avx512"};
     }
-    return Backend{detail::matvec_avx2, detail::gate_up_avx2, "avx2"};
+    return Backend{detail::matvec_avx2, detail::gate_up_avx2, nullptr, "avx2"};
   }();
   return selected;
 }
@@ -61,5 +63,15 @@ void fp8_gate_up(const std::uint8_t* g, const std::uint8_t* u, const float* gs,
                  const float* us, const float* x, std::size_t n, std::size_t k,
                  std::size_t b, float* y) {
   backend().gate_up(g, u, gs, us, x, n, k, b, y);
+}
+bool try_fp8_gate_up_bf16(const std::uint8_t* g, const std::uint8_t* u,
+                          const float* gs, const float* us,
+                          const std::uint16_t* x, std::size_t n, std::size_t k,
+                          float* y) {
+  if (const auto gate_up = backend().gate_up_bf16) {
+    gate_up(g, u, gs, us, x, n, k, y);
+    return true;
+  }
+  return false;
 }
 } // namespace nanovllm::kernels::cpu

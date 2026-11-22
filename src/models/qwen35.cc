@@ -16,7 +16,6 @@
 #include "common/cuda_utils.hh"
 #include "core/checkpoint.hh"
 #include "core/device.hh"
-#include "functions/cast.hh"
 #include "kernels/cpu/fp8_dequant.hh"
 #include "kernels/cuda/kernels.hh"
 
@@ -179,7 +178,6 @@ MoEConfig qwen35_moe_config(const ModelConfig& config) {
       config.num_experts,
       config.num_experts_per_tok,
       config.shared_expert_intermediate_size,
-      DataType::BFloat16,
   };
 }
 
@@ -386,16 +384,18 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
   const auto prefix = [&]() -> std::vector<Tensor> {
     RMSNormOutput before;
     auto residual_view = hidden_states;
+    auto residual_dtype = DataType::Float32;
     if (residual) {
       before =
           input_layernorm_.forward(hidden_states, *residual, context.stream);
       residual_view = before.residual.view().as_const();
+      residual_dtype = residual->dtype();
     } else {
+      // The FP32 residual stream starts at the post-attention fused add:
+      // the BF16 embedding output is added there directly, so no separate
+      // FP32 copy is materialized before attention.
       before.hidden_states =
           input_layernorm_.forward(hidden_states, context.stream);
-      before.residual =
-          cast_tensor(hidden_states, DataType::Float32, context.stream);
-      residual_view = before.residual.view().as_const();
     }
 
     auto attention =
@@ -407,7 +407,8 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
                   context.is_prefill ? context.cu_seqlens_q : ConstTensorView{},
                   context.state_indices, context.stream);
     auto after = post_attention_layernorm_.forward(
-        attention.view().as_const(), residual_view, context.stream);
+        attention.view().as_const(), residual_view, residual_dtype,
+        context.stream);
     return {std::move(after.hidden_states), std::move(after.residual)};
   };
   auto after =

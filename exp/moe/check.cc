@@ -6,16 +6,19 @@
 #include <iostream>
 #include <map>
 #include <numeric>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
 #include "common/cuda_utils.hh"
+#include "common/thread_pool.hh"
 #include "core/expert_policy.hh"
 #include "core/tensor_pool.hh"
 #include "functions/cast.hh"
 #include "kernels/cpu/fp8_dequant.hh"
-#include "layers/moe.hh"
+#include "kernels/cuda/kernels.hh"
+#include "layers/moe/moe.hh"
 #include "models/qwen35.hh"
 
 using namespace nanovllm;
@@ -230,25 +233,72 @@ std::vector<float> download(ConstTensorView view, cudaStream_t stream) {
   return values;
 }
 
+void check_combine_rounding(cudaStream_t stream) {
+  const auto device = Device::cuda(0);
+  auto parts = Tensor::empty({2, 1}, DataType::Float32, device);
+  auto weights = Tensor::empty({1, 2}, DataType::Float32, device);
+  auto shared = Tensor::empty({1, 1}, DataType::BFloat16, device);
+  auto gate = Tensor::empty({1, 1}, DataType::Float32, device);
+  auto output = Tensor::empty({1, 1}, DataType::BFloat16, device);
+  const float routed_parts[] = {1.0f, 1.0078125f};
+  const float routed_weights[] = {0.5f, 0.5f};
+  const float shared_part = 0.00390625f;
+  const float gate_logit = 0.0f;
+  store(parts.view(), routed_parts);
+  store(weights.view(), routed_weights);
+  store(shared.view(), &shared_part);
+  store(gate.view(), &gate_logit);
+
+  const auto expert_outputs = parts.view().as_const();
+  const auto expert_weights = weights.view().as_const();
+  kernels::cuda::moe_combine(expert_outputs, expert_weights, output.view(), {},
+                            {}, stream);
+  require(download(output.view().as_const(), stream).front() == 1.0f,
+          "routed sum rounds to even");
+
+  // The shared contribution moves the FP32 sum above the BF16 midpoint.
+  kernels::cuda::moe_combine(expert_outputs, expert_weights, output.view(),
+                            shared.view().as_const(), gate.view().as_const(),
+                            stream);
+  require(download(output.view().as_const(), stream).front() == 1.0078125f,
+          "round after adding the shared expert");
+}
+
 void check_moe(const std::vector<std::int32_t>& resident, bool shared,
-               cudaStream_t first, cudaStream_t second,
-               DataType dtype = DataType::Float32) {
+               cudaStream_t stream) {
+  constexpr auto dtype = DataType::BFloat16;
   ThreadPool workers(4);
-  MoEExecutionWorkspace workspace;
-  const MoEConfig config{
-      kHidden, kHidden, kExperts, kTopK, shared ? kHidden : 0, dtype};
-  MoE a(config, workers, Device::cuda(0), resident, &workspace);
-  MoE b(config, workers, Device::cuda(0), resident, &workspace);
+  std::optional<MoEExecutionWorkspace> workspace(std::in_place);
+  const MoEConfig config{kHidden, kHidden, kExperts, kTopK,
+                         shared ? kHidden : 0};
+  MoE a(config, workers, Device::cuda(0), resident, &*workspace);
+  MoE b(config, workers, Device::cuda(0), resident, &*workspace);
   const auto dense = initialize(a);
   initialize(b);
-  a.populate_expert_cache(first);
-  b.populate_expert_cache(second);
-  TensorPool first_pool(Device::cuda(0), first);
-  TensorPool second_pool(Device::cuda(0), second);
+  a.populate_expert_cache(stream);
+  b.populate_expert_cache(stream);
+
+  const auto profile_values = input_values(1, 2, dtype);
+  auto profile_input = Tensor::empty({1, kHidden}, dtype, Device::cuda(0));
+  store(profile_input.view(), profile_values.data());
+  MoEPhaseProfile profile;
+  ExpertUsage usage;
+  usage.counts.resize(kExperts);
+  const auto profiled =
+      a.forward(profile_input.view().as_const(), stream, &profile, &usage);
+  require(profile.calls == 1 && profile.input_tokens == 1
+              && profile.gpu_assignments + profile.cpu_assignments == kTopK
+              && profile.seconds > 0,
+          "profile accounting");
+  require(usage.gpu_assignments + usage.cpu_assignments == kTopK,
+          "adaptation accounting");
+  compare(download(profiled.hidden_states.view(), stream),
+          reference(a, dense, profile_values, 1, shared), 3e-4f, 2e-2f);
+
+  TensorPool pool(Device::cuda(0), stream);
   struct Result {
     Tensor output;
     std::vector<float> expected;
-    cudaStream_t stream;
   };
   std::vector<Result> results;
   const std::vector<std::size_t> lengths{1, 1, 3, 1, 7, 1, 2, 1};
@@ -262,100 +312,59 @@ void check_moe(const std::vector<std::int32_t>& resident, bool shared,
     expected.push_back(reference(a, dense, values, lengths[i], shared));
   }
   for (std::size_t i = 0; i < lengths.size(); ++i) {
-    // Consecutive layers first share one stream, then migrate the same scratch
-    // to another stream. Batch growth also exercises pinned-buffer resizing.
-    const bool other = i >= 4;
-    const auto stream = other ? second : first;
-    auto& pool = other ? second_pool : first_pool;
     auto& moe = i % 2 ? b : a;
     const auto rows = lengths[i];
     TensorPool::Scope scope(pool, stream);
     auto output = moe.forward(inputs[i].view().as_const(), stream);
+    require(output.hidden_states.dtype() == dtype, "MoE output dtype");
     require(output.gpu_experts + output.cpu_experts == rows * kTopK,
             "assignment count");
     results.push_back(
-        {std::move(output.hidden_states), std::move(expected[i]), stream});
+        {std::move(output.hidden_states), std::move(expected[i])});
     // Other returned owners and internal temporaries can now be recycled on
     // this stream, while the final GPU work is still queued.
   }
+  // The final forward may still be using pinned staging and GPU scratch.
+  workspace.reset();
   for (const auto& result : results) {
-    compare(download(result.output.view(), result.stream), result.expected,
-            dtype == DataType::BFloat16 ? 3e-4f : 2e-5f,
-            dtype == DataType::BFloat16 ? 2e-2f : 2e-4f);
+    compare(download(result.output.view(), stream), result.expected,
+            3e-4f, 2e-2f);
   }
-
-  auto values = input_values(1, 2, dtype);
-  auto input = Tensor::empty({1, kHidden}, dtype, Device::cuda(0));
-  store(input.view(), values.data());
-  MoEPhaseProfile profile;
-  ExpertUsage usage;
-  usage.counts.resize(kExperts);
-  auto output = a.forward(input.view().as_const(), first, &profile, &usage);
-  require(profile.calls == 1 && profile.input_tokens == 1
-              && profile.gpu_assignments + profile.cpu_assignments == kTopK
-              && profile.seconds > 0,
-          "profile accounting");
-  require(usage.gpu_assignments + usage.cpu_assignments == kTopK,
-          "adaptation accounting");
-  compare(download(output.hidden_states.view().as_const(), first),
-          reference(a, dense, values, 1, shared),
-          dtype == DataType::BFloat16 ? 3e-4f : 2e-5f,
-          dtype == DataType::BFloat16 ? 2e-2f : 2e-4f);
 }
 
-void check_executor(cudaStream_t first, cudaStream_t second) {
+void check_decode_prefetch(cudaStream_t stream) {
+  std::vector<std::int32_t> resident(kExperts);
+  std::iota(resident.begin(), resident.end(), 0);
+  resident.back() = resident.front();
+
   ThreadPool workers(4);
-  ExpertStore store_weights(kHidden, kHidden, kExperts);
-  initialize(store_weights);
-  ExpertCache cache(store_weights, {0, 2, 4, 6, 8, 10, 12, 14});
-  cache.populate(first);
-  ExpertExecutor executor(store_weights, cache, workers);
-  auto part = Tensor::empty({1, kHidden}, DataType::Float32);
-  // Destroy scratch before reading the final output: pending H2D sources and
-  // device scratch must remain alive until the recorded completion event.
-  Tensor output;
-  std::vector<float> expected;
-  {
-    MoEExecutionWorkspace workspace;
-    for (std::size_t rows : {1, 3, 1}) {
-      const auto stream = rows == 3 ? second : first;
-      auto values = input_values(rows, rows);
-      auto input =
-          Tensor::empty({rows, kHidden}, DataType::Float32, Device::cuda(0));
-      store(input.view(), values.data());
-      std::vector<std::int32_t> ids(rows * kTopK);
-      for (std::size_t r = 0; r < ids.size(); ++r) {
-        ids[r] = r % kExperts;
-      }
-      output = Tensor::empty({rows * kTopK, kHidden}, DataType::Float32,
-                             Device::cuda(0));
-      const auto stats =
-          executor.forward_into(input.view().as_const(), ids, kTopK,
-                                output.view(), workspace, stream);
-      require(stats.gpu_experts + stats.cpu_experts == ids.size(),
-              "executor assignments");
-      expected.resize(ids.size() * kHidden);
-      for (std::size_t r = 0; r < ids.size(); ++r) {
-        const auto x = ConstTensorView(
-            values.data() + r / kTopK * kHidden, DataType::Float32,
-            TensorLayout({1, kHidden}), Device::cpu());
-        store_weights.expert_at(ids[r]).forward_into(x, part.view());
-        std::memcpy(expected.data() + r * kHidden, part.data(),
-                    kHidden * sizeof(float));
-      }
-      if (rows != 1) {
-        compare(download(output.view().as_const(), stream), expected);
-      }
-    }
-  }
-  compare(download(output.view().as_const(), first), expected);
+  MoE moe({kHidden, kHidden, kExperts, kTopK}, workers, Device::cuda(0),
+          resident);
+  initialize(moe);
+  moe.populate_expert_cache(stream);
+
+  constexpr auto dtype = DataType::BFloat16;
+  const auto values = input_values(1, 0, dtype);
+  auto input = Tensor::empty({1, kHidden}, dtype, Device::cuda(0));
+  store(input.view(), values.data());
+  const auto output = moe.forward(input.view().as_const(), stream);
+  require(output.cpu_experts == 1, "full slot count still has a CPU miss");
+
+  // The positive first feature routes to the missing expert first.
+  const ConstTensorView cpu_input(values.data(), DataType::Float32,
+                                  TensorLayout({1, kHidden}), Device::cpu());
+  auto expected = Tensor::empty({1, kHidden}, DataType::Float32);
+  moe.expert_store().expert_at(kExperts - 1).forward_into(cpu_input,
+                                                        expected.view());
+  compare(download(output.expert_outputs.view().slice(0, 0, 1), stream),
+          {expected.view().data<float>(), kHidden}, 0.0f, 0.0f);
 }
 
 void check_graphs(const std::vector<std::int32_t>& resident, bool shared,
-                  cudaStream_t first, cudaStream_t second,
-                  DataType dtype = DataType::Float32) {
+                  cudaStream_t first, cudaStream_t second) {
+  constexpr auto dtype = DataType::BFloat16;
   ThreadPool workers(4);
-  MoE moe({kHidden, kHidden, kExperts, kTopK, shared ? kHidden : 0, dtype},
+  MoE moe({kHidden, kHidden, kExperts, kTopK, shared ? kHidden : 0},
           workers, Device::cuda(0), resident);
   const auto dense = initialize(moe);
   moe.populate_expert_cache(first);
@@ -372,10 +381,9 @@ void check_graphs(const std::vector<std::int32_t>& resident, bool shared,
     store(input.view(), values.data());
     auto output =
         moe.forward(input.view().as_const(), stream, nullptr, &usage, true);
+    require(output.hidden_states.dtype() == dtype, "hybrid MoE output dtype");
     compare(download(output.hidden_states.view().as_const(), stream),
-            reference(moe, dense, values, 1, shared),
-            dtype == DataType::BFloat16 ? 3e-4f : 2e-5f,
-            dtype == DataType::BFloat16 ? 2e-2f : 2e-4f);
+            reference(moe, dense, values, 1, shared), 3e-4f, 2e-2f);
     moe.check_async_error();
     require(output.gpu_experts + output.cpu_experts == kTopK,
             "hybrid assignment counters");
@@ -489,6 +497,7 @@ int main() {
                "create first test stream");
     check_cuda(cudaStreamCreateWithFlags(&second, cudaStreamNonBlocking),
                "create second test stream");
+    check_combine_rounding(first);
     std::vector<std::int32_t> all(kExperts);
     std::iota(all.begin(), all.end(), 0);
     for (bool shared : {false, true}) {
@@ -497,20 +506,18 @@ int main() {
                {0, 2, 4, 6, 8, 10, 12, 14},
                {8, 9, 10, 11, 12, 13, 14, 15},
                all}) {
-        check_moe(ids, shared, first, second);
+        check_moe(ids, shared, first);
         check_graphs(ids, shared, first, second);
-        check_moe(ids, shared, first, second, DataType::BFloat16);
-        check_graphs(ids, shared, first, second, DataType::BFloat16);
       }
     }
-    check_executor(first, second);
+    check_decode_prefetch(first);
     check_state_graph(first, false);
     check_state_graph(first, true);
     check_cuda(cudaStreamDestroy(second), "destroy second test stream");
     check_cuda(cudaStreamDestroy(first), "destroy first test stream");
     std::cout
-        << "MoE async checks passed: FP32/BF16, CPU/mixed/GPU, shared experts, "
-           "batch growth, stream changes, profiling and scratch lifetime\n";
+        << "MoE async checks passed: BF16, CPU/mixed/GPU, shared experts, "
+           "batch growth, shared workspace, profiling and scratch lifetime\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

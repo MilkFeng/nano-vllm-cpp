@@ -12,13 +12,13 @@ namespace {
 constexpr std::size_t kWarps = 8;
 constexpr std::size_t kThreads = kWarps << 5;
 
-template <typename T, typename R, typename W, bool Fused, bool Gated,
-          bool ZeroCentered>
+template <typename T, typename R, typename RO, typename W, bool Fused,
+          bool Gated, bool ZeroCentered>
 __global__ void rms_norm_kernel(const T* __restrict__ input,
                                 const R* __restrict__ residual_or_gate,
                                 const W* __restrict__ weight,
                                 T* __restrict__ output,
-                                R* __restrict__ residual_output,
+                                RO* __restrict__ residual_output,
                                 std::size_t rows, std::size_t width,
                                 float epsilon) {
   for (std::size_t row = blockIdx.x; row < rows; row += gridDim.x) {
@@ -45,7 +45,7 @@ __global__ void rms_norm_kernel(const T* __restrict__ input,
       float value = detail::to_float(input[index]);
       if constexpr (Fused) {
         value += detail::to_float(residual_or_gate[index]);
-        residual_output[offset + col] = detail::from_float<R>(value);
+        residual_output[offset + col] = detail::from_float<RO>(value);
       }
 
       float w = detail::to_float(weight[col]);
@@ -65,7 +65,8 @@ __global__ void rms_norm_kernel(const T* __restrict__ input,
   }
 }
 
-template <typename T, typename R, typename W, bool Fused, bool Gated>
+template <typename T, typename R, typename RO, typename W, bool Fused,
+          bool Gated>
 void launch_norm(ConstTensorView input,
                  std::optional<ConstTensorView> residual_or_gate,
                  ConstTensorView weight, TensorView output,
@@ -92,7 +93,12 @@ void launch_norm(ConstTensorView input,
 
     assert(same_shape(input, *residual_or_gate, *residual_output));
     assert(same_device(input, *residual_or_gate, *residual_output));
-    assert(same_dtype(*residual_or_gate, *residual_output));
+    // The residual may be read in a lower precision than it is written, e.g.
+    // a BF16 residual input producing an FP32 residual stream.
+    assert(residual_or_gate->dtype() == input.dtype()
+           || residual_or_gate->dtype() == DataType::Float32);
+    assert(residual_output->dtype() == input.dtype()
+           || residual_output->dtype() == DataType::Float32);
   } else if constexpr (Gated) {
     detail::assert_tensor(*residual_or_gate);
 
@@ -106,22 +112,22 @@ void launch_norm(ConstTensorView input,
   const auto blocks = static_cast<unsigned>(std::min<std::size_t>(rows, 65535));
 
   const R* residual_or_gate_data = nullptr;
-  R* residual_output_data = nullptr;
+  RO* residual_output_data = nullptr;
 
   if constexpr (Fused) {
     residual_or_gate_data = (*residual_or_gate).data<R>();
-    residual_output_data = (*residual_output).data<R>();
+    residual_output_data = (*residual_output).data<RO>();
   } else if constexpr (Gated) {
     residual_or_gate_data = (*residual_or_gate).data<R>();
   }
 
   if (zero_centered) {
-    rms_norm_kernel<T, R, W, Fused, Gated, true>
+    rms_norm_kernel<T, R, RO, W, Fused, Gated, true>
         <<<blocks, kThreads, 0, stream>>>(
             input.data<T>(), residual_or_gate_data, weight.data<W>(),
             output.data<T>(), residual_output_data, rows, width, epsilon);
   } else {
-    rms_norm_kernel<T, R, W, Fused, Gated, false>
+    rms_norm_kernel<T, R, RO, W, Fused, Gated, false>
         <<<blocks, kThreads, 0, stream>>>(
             input.data<T>(), residual_or_gate_data, weight.data<W>(),
             output.data<T>(), residual_output_data, rows, width, epsilon);
@@ -137,27 +143,29 @@ void dispatch_norm(ConstTensorView input,
   assert(weight.dtype() == input.dtype()
          || weight.dtype() == DataType::Float32);
   detail::dispatch_float(input.dtype(), [&]<typename T>() {
-    const auto with_residual = [&]<typename R>() {
+    const auto with_residual = [&]<typename R, typename RO>() {
       if (weight.dtype() == DataType::Float32) {
-        launch_norm<T, R, float, Fused, Gated>(input, residual_or_gate, weight,
+        launch_norm<T, R, RO, float, Fused, Gated>(
+            input, residual_or_gate, weight, output, residual_output, epsilon,
+            stream, zero_centered);
+      } else {
+        launch_norm<T, R, RO, T, Fused, Gated>(input, residual_or_gate, weight,
                                                output, residual_output, epsilon,
                                                stream, zero_centered);
-      } else {
-        launch_norm<T, R, T, Fused, Gated>(input, residual_or_gate, weight,
-                                           output, residual_output, epsilon,
-                                           stream, zero_centered);
       }
     };
     if constexpr (Fused) {
       assert(residual_or_gate->dtype() == input.dtype()
              || residual_or_gate->dtype() == DataType::Float32);
-      if (residual_or_gate->dtype() == DataType::Float32) {
-        with_residual.template operator()<float>();
-      } else {
-        with_residual.template operator()<T>();
-      }
+      assert(residual_output->dtype() == input.dtype()
+             || residual_output->dtype() == DataType::Float32);
+      detail::dispatch_float(residual_or_gate->dtype(), [&]<typename R>() {
+        detail::dispatch_float(residual_output->dtype(), [&]<typename RO>() {
+          with_residual.template operator()<R, RO>();
+        });
+      });
     } else {
-      with_residual.template operator()<T>();
+      with_residual.template operator()<T, T>();
     }
   });
 }

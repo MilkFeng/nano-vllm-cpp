@@ -20,8 +20,14 @@ class RMSNorm final : public Module {
 
   [[nodiscard]] Tensor forward(ConstTensorView input,
                                cudaStream_t stream = nullptr) const;
+
   [[nodiscard]] RMSNormOutput forward(ConstTensorView input,
                                       ConstTensorView residual,
+                                      cudaStream_t stream = nullptr) const;
+
+  [[nodiscard]] RMSNormOutput forward(ConstTensorView input,
+                                      ConstTensorView residual,
+                                      DataType residual_dtype,
                                       cudaStream_t stream = nullptr) const;
 
   [[nodiscard]] std::size_t normalized_size() const noexcept;

@@ -6,6 +6,7 @@
 #include <optional>
 #include <vector>
 
+#include "common/thread_pool.hh"
 #include "core/decode_graph.hh"
 #include "core/expert_policy.hh"
 #include "core/model.hh"
@@ -13,7 +14,7 @@
 #include "layers/embedding.hh"
 #include "layers/gated_delta_net.hh"
 #include "layers/lm_head.hh"
-#include "layers/moe.hh"
+#include "layers/moe/moe.hh"
 #include "layers/rms_norm.hh"
 #include "layers/rotary_embedding.hh"
 #include "nanovllm/nanovllm.hh"
