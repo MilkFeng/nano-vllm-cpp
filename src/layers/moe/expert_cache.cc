@@ -138,10 +138,18 @@ std::size_t ExpertCache::replace(
   cudaMemcpyAttributes attributes{};
   attributes.srcAccessOrder = cudaMemcpySrcAccessOrderAny;
   std::size_t first = 0;
-  check_cuda(
+
+#if CUDART_VERSION >= 13000
+  const cudaError_t status =
       cudaMemcpyBatchAsync(destinations.data(), sources.data(), sizes.data(),
-                           sizes.size(), &attributes, &first, 1, stream),
-      "batch replace GPU expert weights");
+                           sizes.size(), &attributes, &first, 1, stream);
+#else
+  std::size_t fail_index = 0;
+  const cudaError_t status = cudaMemcpyBatchAsync(
+      destinations.data(), const_cast<void**>(sources.data()), sizes.data(),
+      sizes.size(), &attributes, &first, 1, &fail_index, stream);
+#endif
+  check_cuda(status, "batch replace GPU expert weights");
 
   for (const auto& [slot, id] : replacements) {
     expert_to_slot_[resident_ids_[slot]] = -1;
