@@ -2,13 +2,13 @@
 
 #include <immintrin.h>
 
-#include <algorithm>
 #include <chrono>
 #include <latch>
 #include <stdexcept>
 #include <utility>
 
 namespace nanovllm {
+
 struct ThreadPool::BatchState {
   explicit BatchState(std::span<const Task> jobs)
       : tasks(jobs.begin(), jobs.end()),
@@ -19,12 +19,14 @@ struct ThreadPool::BatchState {
   std::mutex error_mutex;
   std::exception_ptr error;
 };
+
 ThreadPool::TaskGroup::TaskGroup(std::shared_ptr<BatchState> state)
     : state_(std::move(state)) {}
+
 ThreadPool::TaskGroup::~TaskGroup() {
   wait_noexcept();
 }
-ThreadPool::TaskGroup::TaskGroup(TaskGroup&&) noexcept = default;
+
 ThreadPool::TaskGroup& ThreadPool::TaskGroup::operator=(
     TaskGroup&& other) noexcept {
   if (this != &other) {
@@ -33,6 +35,7 @@ ThreadPool::TaskGroup& ThreadPool::TaskGroup::operator=(
   }
   return *this;
 }
+
 void ThreadPool::TaskGroup::wait_noexcept() const noexcept {
   if (!state_ || state_->remaining.try_wait()) {
     return;
@@ -49,6 +52,7 @@ void ThreadPool::TaskGroup::wait_noexcept() const noexcept {
     }
   }
 }
+
 void ThreadPool::TaskGroup::wait() const {
   wait_noexcept();
   if (state_ && state_->error) {
@@ -60,6 +64,7 @@ ThreadPool::ThreadPool(std::size_t num_threads, bool physical_affinity) {
   if (num_threads == 0) {
     throw std::invalid_argument("CPU thread count must be positive");
   }
+
   std::vector<unsigned> cpus;
   if (physical_affinity) {
     cpus = physical_cpu_ids();
@@ -68,7 +73,9 @@ ThreadPool::ThreadPool(std::size_t num_threads, bool physical_affinity) {
     }
     caller_cpu_ = cpus.front();
   }
+
   workers_.reserve(num_threads);
+
   try {
     for (std::size_t i = 0; i < num_threads; ++i) {
       workers_.emplace_back([this] { run(); });
@@ -84,12 +91,15 @@ ThreadPool::ThreadPool(std::size_t num_threads, bool physical_affinity) {
     throw;
   }
 }
+
 ThreadPool::~ThreadPool() {
   stop();
 }
+
 ScopedCpuAffinity ThreadPool::bind_caller() const {
   return ScopedCpuAffinity(caller_cpu_);
 }
+
 ThreadPool::BusyScope::BusyScope(ThreadPool& pool, bool enabled)
     : pool_(enabled ? &pool : nullptr) {
   if (pool_) {
@@ -100,11 +110,13 @@ ThreadPool::BusyScope::BusyScope(ThreadPool& pool, bool enabled)
     pool_->ready_.notify_all();
   }
 }
+
 ThreadPool::BusyScope::~BusyScope() {
   if (pool_) {
     pool_->active_scopes_.fetch_sub(1, std::memory_order_release);
   }
 }
+
 std::future<void> ThreadPool::submit(std::function<void()> task) {
   std::packaged_task<void()> packaged(std::move(task));
   auto result = packaged.get_future();
@@ -119,16 +131,20 @@ std::future<void> ThreadPool::submit(std::function<void()> task) {
   ready_.notify_one();
   return result;
 }
+
 ThreadPool::TaskGroup ThreadPool::submit_batch(std::span<const Task> tasks) {
   if (tasks.empty()) {
     return {};
   }
+
   for (const auto& task : tasks) {
     if (!task.function) {
       throw std::invalid_argument("null CPU task function");
     }
   }
+
   auto state = std::make_shared<BatchState>(tasks);
+
   {
     std::lock_guard lock(mutex_);
     if (stopping_) {
@@ -137,6 +153,7 @@ ThreadPool::TaskGroup ThreadPool::submit_batch(std::span<const Task> tasks) {
     tasks_.push({{}, state});
     work_available_.store(true, std::memory_order_release);
   }
+
   if (tasks.size() >= (workers_.size() + 1) / 2) {
     // One OS wake operation for the common top-8 batch. Repeated notify_one
     // calls can cost more than the queue operations, especially under WSL.
@@ -146,8 +163,10 @@ ThreadPool::TaskGroup ThreadPool::submit_batch(std::span<const Task> tasks) {
       ready_.notify_one();
     }
   }
+
   return TaskGroup(std::move(state));
 }
+
 void ThreadPool::run() {
   while (true) {
     std::packaged_task<void()> single;
@@ -197,10 +216,12 @@ void ThreadPool::run() {
       work_available_.store(!tasks_.empty() || stopping_,
                             std::memory_order_release);
     }
+
     if (!batch) {
       single();
       continue;
     }
+
     try {
       task.function(task.argument);
     } catch (...) {
@@ -209,9 +230,11 @@ void ThreadPool::run() {
         batch->error = std::current_exception();
       }
     }
+
     batch->remaining.count_down();
   }
 }
+
 void ThreadPool::stop() noexcept {
   {
     std::lock_guard lock(mutex_);

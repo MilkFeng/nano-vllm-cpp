@@ -548,13 +548,15 @@ void Qwen35Model::reset_hybrid_step() const {
     layer(i).mlp().reset_hybrid();
   }
 }
-void Qwen35Model::run_hybrid_cpu(cudaStream_t stream) const {
+
+void Qwen35Model::run_hybrid_cpu() const {
   const auto affinity = cpu_pool_.bind_caller();
   ThreadPool::BusyScope keep_workers(cpu_pool_);
   for (std::size_t i = 0; i < layers_.size(); ++i) {
-    layer(i).mlp().complete_hybrid_cpu(stream);
+    layer(i).mlp().complete_hybrid_cpu();
   }
 }
+
 void Qwen35Model::abort_hybrid_step() const noexcept {
   for (std::size_t i = 0; i < layers_.size(); ++i) {
     layer(i).mlp().abort_hybrid();

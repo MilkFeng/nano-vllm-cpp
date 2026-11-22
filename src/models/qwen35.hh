@@ -125,7 +125,7 @@ class Qwen35Model final : public Module {
   [[nodiscard]] ExpertAdaptationStats expert_adaptation_stats() const;
   void finish_decode_step(cudaStream_t stream) const;
   void reset_hybrid_step() const;
-  void run_hybrid_cpu(cudaStream_t stream) const;
+  void run_hybrid_cpu() const;
   void abort_hybrid_step() const noexcept;
 
  private:

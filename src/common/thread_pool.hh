@@ -23,6 +23,7 @@ class ThreadPool final {
  public:
   explicit ThreadPool(std::size_t num_threads, bool physical_affinity = false);
   ~ThreadPool();
+
   ThreadPool(const ThreadPool&) = delete;
   ThreadPool& operator=(const ThreadPool&) = delete;
 
@@ -30,14 +31,17 @@ class ThreadPool final {
     void (*function)(void*);
     void* argument;
   };
+
   class TaskGroup final {
    public:
     TaskGroup() = default;
     ~TaskGroup();
-    TaskGroup(TaskGroup&&) noexcept;
+
+    TaskGroup(TaskGroup&&) noexcept = default;
     TaskGroup& operator=(TaskGroup&&) noexcept;
     TaskGroup(const TaskGroup&) = delete;
     TaskGroup& operator=(const TaskGroup&) = delete;
+
     void wait() const;
     void wait_noexcept() const noexcept;
 
@@ -69,8 +73,10 @@ class ThreadPool final {
     std::packaged_task<void()> single;
     std::shared_ptr<BatchState> batch;
   };
+
   void run();
   void stop() noexcept;
+
   std::mutex mutex_;
   std::condition_variable ready_;
   std::queue<QueueItem> tasks_;

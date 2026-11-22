@@ -56,8 +56,6 @@ class MoE final : public Module {
   void populate_expert_cache(cudaStream_t stream = nullptr);
   void invalidate_expert_cache() noexcept;
 
-  // GPU work is asynchronous on stream; profiling waits for accurate wall time.
-  // Keep the module and returned tensors alive until queued uses complete.
   [[nodiscard]] MoEOutput forward(ConstTensorView hidden_states,
                                   cudaStream_t stream = nullptr,
                                   MoEPhaseProfile* profile = nullptr,
@@ -74,9 +72,10 @@ class MoE final : public Module {
 
   [[nodiscard]] const ExpertStore& expert_store() const noexcept;
   [[nodiscard]] const ExpertCache& expert_cache() const;
+
   void check_async_error() const;
   void reset_hybrid() const;
-  void complete_hybrid_cpu(cudaStream_t stream) const;
+  void complete_hybrid_cpu() const;
   void abort_hybrid() const noexcept;
 
  private:
@@ -85,18 +84,33 @@ class MoE final : public Module {
                     std::size_t k, DataType dtype);
     ~HybridWorkspace();
 
-    static void compute(void* argument) noexcept;
+    void reset();
+    void abort() noexcept;
+    void complete_cpu();
+    void check_async_error() const;
 
     const ExpertStore& store;
     const ExpertCache& cache;
+
     ThreadPool& pool;
+
     std::size_t top_k;
-    PinnedHostBuffer ids{true}, input{true}, parts{true}, flags{true};
+
+    PinnedHostBuffer ids{true};
+    PinnedHostBuffer input{true};
+    PinnedHostBuffer parts{true};
+    PinnedHostBuffer flags{true};
+
     Tensor activated;
+
     cudaEvent_t ready = nullptr;
     ExpertUsage* usage = nullptr;
     std::exception_ptr error;
+
     std::size_t gpu_count = 0, cpu_count = 0;
+
+   private:
+    void compute() noexcept;
   };
 
   [[nodiscard]] MoEOutput forward_hybrid(ConstTensorView input,
@@ -105,14 +119,18 @@ class MoE final : public Module {
                                          bool graph_warmup) const;
   MoEConfig config_;
   ThreadPool& cpu_pool_;
+
   Linear gate_;
   ExpertStore experts_;
   std::unique_ptr<FP8SwiGLUMLP> shared_expert_;
   std::unique_ptr<Linear> shared_expert_gate_;
   std::unique_ptr<MoEExecutionWorkspace> owned_workspace_;
+
   MoEExecutionWorkspace* workspace_ = nullptr;
+
   std::unique_ptr<ExpertCache> cache_;
   std::unique_ptr<ExpertExecutor> executor_;
+
   mutable std::unique_ptr<HybridWorkspace> hybrid_;
   mutable DecodeGraph decode_prefix_;
 };

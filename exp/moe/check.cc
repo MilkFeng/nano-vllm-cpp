@@ -463,7 +463,7 @@ void check_state_graph(cudaStream_t stream, bool whole) {
             return {std::move(out.hidden_states), std::move(out.residual)};
           },
           [&] { graphed.mlp().reset_hybrid(); },
-          [&] { graphed.mlp().complete_hybrid_cpu(stream); },
+          [&] { graphed.mlp().complete_hybrid_cpu(); },
           [&] { graphed.mlp().abort_hybrid(); });
       b = {std::move(result[0]), std::move(result[1])};
     } else {

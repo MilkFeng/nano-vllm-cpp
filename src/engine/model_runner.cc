@@ -325,7 +325,7 @@ std::vector<std::int32_t> ModelRunner::run(
     auto tensors = whole_decode_.run(
         stream_, {input_ids.data(), block_tables.data(), state_indices.data()},
         whole_states_, function, [&] { transformer.reset_hybrid_step(); },
-        [&] { transformer.run_hybrid_cpu(stream_); },
+        [&] { transformer.run_hybrid_cpu(); },
         [&] { transformer.abort_hybrid_step(); });
     output = std::move(tensors[0]);
     ++sample_step_;
