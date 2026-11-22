@@ -145,12 +145,16 @@ FP8Expert::FP8Expert(std::size_t hidden_size, std::size_t intermediate_size,
 }
 
 void FP8Expert::forward_into(ConstTensorView input, TensorView output) const {
-  kernels::cpu::expert_forward(
-      input,
-      {gate_.weight().view(), up_.weight().view(), down_.weight().view(),
-       gate_.weight_scale_inv().view(), up_.weight_scale_inv().view(),
-       down_.weight_scale_inv().view()},
-      output, kExpertFP8BlockSize);
+  kernels::cpu::expert_forward(input,
+                               {
+                                   gate_.weight().view(),
+                                   up_.weight().view(),
+                                   down_.weight().view(),
+                                   gate_.weight_scale_inv().view(),
+                                   up_.weight_scale_inv().view(),
+                                   down_.weight_scale_inv().view(),
+                               },
+                               output, kExpertFP8BlockSize);
 }
 
 void FP8Expert::forward_into(ConstTensorView input, TensorView output,
@@ -170,12 +174,14 @@ void FP8Expert::forward_into(ConstTensorView input, TensorView output,
 }
 
 kernels::cuda::FP8ExpertWeights FP8Expert::device_weights() const {
-  return {gate_.weight().view().data<std::uint8_t>(),
-          up_.weight().view().data<std::uint8_t>(),
-          down_.weight().view().data<std::uint8_t>(),
-          gate_.weight_scale_inv().view().data<float>(),
-          up_.weight_scale_inv().view().data<float>(),
-          down_.weight_scale_inv().view().data<float>()};
+  return {
+      gate_.weight().view().data<std::uint8_t>(),
+      up_.weight().view().data<std::uint8_t>(),
+      down_.weight().view().data<std::uint8_t>(),
+      gate_.weight_scale_inv().view().data<float>(),
+      up_.weight_scale_inv().view().data<float>(),
+      down_.weight_scale_inv().view().data<float>(),
+  };
 }
 
 ExpertStore::ExpertStore(std::size_t hidden_size, std::size_t intermediate_size,
@@ -198,9 +204,11 @@ const FP8Expert& ExpertStore::expert_at(std::size_t expert_id) const {
 std::size_t ExpertStore::hidden_size() const noexcept {
   return hidden_size_;
 }
+
 std::size_t ExpertStore::intermediate_size() const noexcept {
   return intermediate_size_;
 }
+
 std::size_t ExpertStore::num_experts() const noexcept {
   return experts_.size();
 }
@@ -224,7 +232,6 @@ ExpertCache::ExpertCache(const ExpertStore& source,
         source.hidden_size(), source.intermediate_size(), Device::cuda(0)));
   }
 
-  // zero slots means all selected experts run on CPU
   ready_ = slots_.empty();
 }
 
@@ -235,32 +242,33 @@ void ExpertCache::invalidate() noexcept {
 
 void ExpertCache::populate(cudaStream_t stream) {
   invalidate();
-  try {
-    for (std::size_t slot = 0; slot < slots_.size(); ++slot) {
-      const auto& expert = source_.expert_at(resident_ids_[slot]);
-      for (const auto& [name, parameter] : expert.named_parameters()) {
-        const auto source = parameter->view();
-        const auto destination = slots_[slot]->parameter(name).view();
-        assert(same_dtype(source, destination));
-        assert(same_shape(source, destination));
-        check_cuda(cudaMemcpyAsync(destination.data(), source.data(),
-                                   source.size_bytes(), cudaMemcpyHostToDevice,
-                                   stream),
-                   "upload fixed expert cache");
-      }
+
+  for (std::size_t slot = 0; slot < slots_.size(); ++slot) {
+    const auto& expert = source_.expert_at(resident_ids_[slot]);
+    for (const auto& [name, parameter] : expert.named_parameters()) {
+      const auto source = parameter->view();
+      const auto destination = slots_[slot]->parameter(name).view();
+
+      assert(same_dtype(source, destination));
+      assert(same_shape(source, destination));
+
+      check_cuda(
+          cudaMemcpyAsync(destination.data(), source.data(),
+                          source.size_bytes(), cudaMemcpyHostToDevice, stream),
+          "upload fixed expert cache");
     }
-    check_cuda(cudaStreamSynchronize(stream), "complete expert cache uploads");
-  } catch (...) {
-    cudaStreamSynchronize(stream);
-    throw;
   }
+
+  publish_routes(stream);
+
+  check_cuda(cudaStreamSynchronize(stream),
+             "complete expert weight and routing table uploads");
 
   for (std::size_t slot = 0; slot < resident_ids_.size(); ++slot) {
     expert_to_slot_[resident_ids_[slot]] = slot;
   }
+
   ready_ = true;
-  publish_routes(stream);
-  check_cuda(cudaStreamSynchronize(stream), "complete expert routing table");
 }
 
 ExpertCache::~ExpertCache() {
@@ -278,18 +286,22 @@ void ExpertCache::publish_routes(cudaStream_t stream) {
     check_cuda(cudaEventCreateWithFlags(&routes_ready_, cudaEventDisableTiming),
                "create routing table DMA event");
   }
+
   const auto bytes =
       source_.num_experts() * sizeof(kernels::cuda::FP8ExpertWeights);
   if (routes_.numel() < bytes) {
     routes_ = Tensor::empty({bytes}, DataType::Float8E4M3FN, Device::cuda(0));
   }
+
   host_routes_.reserve(bytes);
   auto* routes =
       static_cast<kernels::cuda::FP8ExpertWeights*>(host_routes_.data());
   std::fill_n(routes, source_.num_experts(), kernels::cuda::FP8ExpertWeights{});
+
   for (std::size_t slot = 0; slot < slots_.size(); ++slot) {
     routes[resident_ids_[slot]] = slots_[slot]->device_weights();
   }
+
   check_cuda(cudaMemcpyAsync(routes_.data(), routes, bytes,
                              cudaMemcpyHostToDevice, stream),
              "publish resident expert routing table");
@@ -302,90 +314,55 @@ ConstTensorView ExpertCache::device_routes() const {
 }
 
 std::size_t ExpertCache::replace(
-    std::span<const ExpertCacheReplacement> replacements, cudaStream_t stream,
-    bool synchronize) {
+    std::span<const ExpertCacheReplacement> replacements, cudaStream_t stream) {
   if (!ready_) {
     throw std::logic_error("populate expert cache before replacement");
   }
+
   if (replacements.empty()) {
     return 0;
-  }
-
-  std::vector<bool> used_slots(slots_.size(), false);
-  std::vector<bool> used_ids(source_.num_experts(), false);
-  for (const auto& [slot, id] : replacements) {
-    if (slot >= slots_.size() || id < 0
-        || std::size_t(id) >= source_.num_experts() || used_slots[slot]
-        || used_ids[id] || expert_to_slot_[id] >= 0) {
-      throw std::invalid_argument(
-          "invalid or duplicate expert cache replacement");
-    }
-    used_slots[slot] = true;
-    used_ids[id] = true;
   }
 
   // A partially overwritten slot must never be consumed after a failed copy.
   ready_ = false;
   std::size_t bytes = 0;
-  try {
-    std::vector<void*> destinations;
-    std::vector<const void*> sources;
-    std::vector<std::size_t> sizes;
-    for (const auto& [slot, id] : replacements) {
-      for (const auto& [name, parameter] :
-           source_.expert_at(id).named_parameters()) {
-        const auto source = parameter->view();
-        const auto destination = slots_[slot]->parameter(name).view();
-        destinations.push_back(destination.data());
-        sources.push_back(source.data());
-        sizes.push_back(source.size_bytes());
-        bytes += source.size_bytes();
-      }
+
+  std::vector<void*> destinations;
+  std::vector<const void*> sources;
+  std::vector<std::size_t> sizes;
+
+  for (const auto& [slot, id] : replacements) {
+    for (const auto& [name, parameter] :
+         source_.expert_at(id).named_parameters()) {
+      const auto source = parameter->view();
+      const auto destination = slots_[slot]->parameter(name).view();
+
+      destinations.push_back(destination.data());
+      sources.push_back(source.data());
+
+      sizes.push_back(source.size_bytes());
+      bytes += source.size_bytes();
     }
-#if CUDART_VERSION >= 13030
-    if (stream != nullptr) {
-      // RAM expert parameters are immutable and outlive all inference work.
-      cudaMemcpyAttributes attributes{};
-      attributes.srcAccessOrder = cudaMemcpySrcAccessOrderAny;
-      std::size_t first = 0;
-      check_cuda(cudaMemcpyBatchAsync(destinations.data(), sources.data(),
-                                      sizes.data(), sizes.size(), &attributes,
-                                      &first, 1, stream),
-                 "batch replace GPU expert weights");
-    } else
-#endif
-    {
-      for (std::size_t i = 0; i < sources.size(); ++i) {
-        check_cuda(cudaMemcpyAsync(destinations[i], sources[i], sizes[i],
-                                   cudaMemcpyHostToDevice, stream),
-                   "replace GPU expert weights");
-      }
-    }
-    if (synchronize) {
-      check_cuda(cudaStreamSynchronize(stream), "complete expert replacements");
-    }
-  } catch (...) {
-    cudaStreamSynchronize(stream);
-    invalidate();
-    throw;
   }
+
+  // RAM expert parameters are immutable and outlive all inference work.
+  cudaMemcpyAttributes attributes{};
+  attributes.srcAccessOrder = cudaMemcpySrcAccessOrderAny;
+  std::size_t first = 0;
+  check_cuda(
+      cudaMemcpyBatchAsync(destinations.data(), sources.data(), sizes.data(),
+                           sizes.size(), &attributes, &first, 1, stream),
+      "batch replace GPU expert weights");
+
   for (const auto& [slot, id] : replacements) {
     expert_to_slot_[resident_ids_[slot]] = -1;
     resident_ids_[slot] = id;
     expert_to_slot_[id] = static_cast<int>(slot);
   }
+
   ready_ = true;
-  try {
-    publish_routes(stream);
-    if (synchronize) {
-      check_cuda(cudaStreamSynchronize(stream),
-                 "complete expert routing replacement");
-    }
-  } catch (...) {
-    cudaStreamSynchronize(stream);
-    invalidate();
-    throw;
-  }
+
+  publish_routes(stream);
   return bytes;
 }
 
@@ -394,9 +371,7 @@ int ExpertCache::slot_of(std::size_t expert_id) const {
 }
 
 const FP8Expert& ExpertCache::expert_at_slot(std::size_t slot) const {
-  if (!ready_) {
-    throw std::logic_error("populate expert cache before execution");
-  }
+  assert(ready());
   return *slots_.at(slot);
 }
 
@@ -432,10 +407,7 @@ ExpertExecutor::ExpertExecutor(const ExpertStore& store,
     : store_(store),
       cache_(cache),
       cpu_pool_(cpu_pool) {
-  if (&cache.source() != &store) {
-    throw std::invalid_argument(
-        "executor and cache must use the same RAM store");
-  }
+  assert(&cache.source() == &store);
 }
 
 ExpertExecutionStats ExpertExecutor::forward_into(
@@ -444,15 +416,10 @@ ExpertExecutionStats ExpertExecutor::forward_into(
     MoEExecutionWorkspace& workspace, cudaStream_t stream) const {
   workspace.prepare(stream);
   workspace.synchronize();
-  try {
-    const auto stats = forward_prepared(input, expert_ids, top_k,
-                                        expert_outputs, workspace, stream, {});
-    workspace.record_completion(stream);
-    return stats;
-  } catch (...) {
-    cudaStreamSynchronize(stream);
-    throw;
-  }
+  const auto stats = forward_prepared(input, expert_ids, top_k, expert_outputs,
+                                      workspace, stream, {});
+  workspace.record_completion(stream);
+  return stats;
 }
 
 ExpertExecutionStats ExpertExecutor::forward_prepared(
@@ -1291,12 +1258,12 @@ MoEOutput MoE::forward(ConstTensorView gpu_hidden, cudaStream_t stream,
 }
 
 std::size_t MoE::replace_experts(
-    std::span<const ExpertCacheReplacement> replacements, cudaStream_t stream,
-    bool synchronize) const {
+    std::span<const ExpertCacheReplacement> replacements,
+    cudaStream_t stream) const {
   if (!cache_) {
     throw std::logic_error("CPU MoE has no CUDA expert cache");
   }
-  return cache_->replace(replacements, stream, synchronize);
+  return cache_->replace(replacements, stream);
 }
 
 const MoEConfig& MoE::config() const noexcept {

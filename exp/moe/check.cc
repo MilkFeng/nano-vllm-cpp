@@ -365,7 +365,7 @@ void check_graphs(const std::vector<std::int32_t>& resident, bool shared,
     const auto stream = step < 16 ? first : second;
     if (step == 8 && !resident.empty() && moe.expert_cache().slot_of(1) < 0) {
       const ExpertCacheReplacement swap{0, 1};
-      require(moe.replace_experts({&swap, 1}, stream, false) > 0,
+      require(moe.replace_experts({&swap, 1}, stream) > 0,
               "asynchronous expert replacement");
     }
     const auto values = input_values(1, step, dtype);

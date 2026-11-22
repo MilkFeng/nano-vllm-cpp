@@ -578,7 +578,7 @@ void Qwen35Model::adapt_experts(cudaStream_t stream) const {
       }
       if (!replacements.empty()) {
         adaptation_stats_.bytes_uploaded +=
-            layer(i).mlp().replace_experts(replacements, stream, false);
+            layer(i).mlp().replace_experts(replacements, stream);
         adaptation_stats_.swaps += replacements.size();
       }
     }

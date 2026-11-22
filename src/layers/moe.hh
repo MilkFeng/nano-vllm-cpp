@@ -12,18 +12,14 @@
 #include "common/pinned_buffer.hh"
 #include "common/thread_pool.hh"
 #include "core/decode_graph.hh"
+#include "core/expert_policy.hh"
 #include "core/module.hh"
+#include "kernels/cuda/kernels.hh"
 #include "layers/linear.hh"
 #include "layers/swiglu_mlp.hh"
 #include "nanovllm/nanovllm.hh"
 
 namespace nanovllm {
-
-namespace kernels::cuda {
-struct FP8ExpertWeights;
-}
-
-struct ExpertUsage;
 
 struct ExpertCacheReplacement {
   std::size_t slot;
@@ -38,6 +34,7 @@ struct FP8ExpertWorkspace {
   FP8ExpertWorkspace() = default;
   explicit FP8ExpertWorkspace(std::size_t intermediate_size,
                               std::size_t rows = 1);
+
   void reserve(std::size_t rows, std::size_t intermediate_size,
                DataType dtype = DataType::Float32);
 };
@@ -45,25 +42,28 @@ struct FP8ExpertWorkspace {
 struct MoEExecutionWorkspace {
   MoEExecutionWorkspace() = default;
   ~MoEExecutionWorkspace() noexcept;
+
   MoEExecutionWorkspace(const MoEExecutionWorkspace&) = delete;
   MoEExecutionWorkspace& operator=(const MoEExecutionWorkspace&) = delete;
 
-  // Complete queued uses before host staging is overwritten or destroyed.
   void synchronize();
 
-  PinnedHostBuffer host_ids;
-  PinnedHostBuffer host_order;
-  PinnedHostBuffer host_input;
-  PinnedHostBuffer host_parts;
-  Tensor host_grouped_input;
-  Tensor order;
-  Tensor grouped_input;
-  Tensor grouped_parts;
+  PinnedHostBuffer host_ids;   // GPU 路由选出的 tokens*K 个 expert ID
+  PinnedHostBuffer host_order; // 按照 GPU/CPU 专家排序，然后这里记录原始下标
+  PinnedHostBuffer host_input; // 从 GPU 下载的原始 token 输入
+  PinnedHostBuffer host_parts; // CPU 专家算出的输出
+
+  Tensor host_grouped_input; // 多 token 路径中的 CPU 张量
+  Tensor order;              // host_order 上传到 GPU 后的副本
+  Tensor grouped_input;      // GPU 上按专家打包的输入
+  Tensor grouped_parts;      // GPU 上按分组顺序存放的专家输出
+
   FP8ExpertWorkspace expert;
 
  private:
   friend class MoE;
   friend class ExpertExecutor;
+
   void prepare(cudaStream_t stream);
   void record_host_ready(cudaStream_t stream);
   void wait_host_ready();
@@ -81,10 +81,10 @@ class FP8Expert final : public Module {
             Device device = Device::cpu());
 
   void forward_into(ConstTensorView input, TensorView output) const;
-
   void forward_into(ConstTensorView input, TensorView output,
                     FP8ExpertWorkspace& workspace,
                     cudaStream_t stream = nullptr) const;
+
   [[nodiscard]] kernels::cuda::FP8ExpertWeights device_weights() const;
 
  private:
@@ -120,32 +120,40 @@ class ExpertCache final {
   ExpertCache& operator=(ExpertCache&&) = delete;
 
   void populate(cudaStream_t stream = nullptr);
-  // Call only between forwards. Default behavior completes uploads before
-  // returning. With synchronize=false, subsequent GPU uses must follow on the
-  // same stream; immutable RAM weights and routing staging stay alive.
+
   [[nodiscard]] std::size_t replace(
       std::span<const ExpertCacheReplacement> replacements,
-      cudaStream_t stream = nullptr, bool synchronize = true);
+      cudaStream_t stream);
+
   void invalidate() noexcept;
 
   [[nodiscard]] int slot_of(std::size_t expert_id) const;
   [[nodiscard]] const FP8Expert& expert_at_slot(std::size_t slot) const;
+
   [[nodiscard]] bool ready() const noexcept;
+
   [[nodiscard]] std::size_t num_slots() const noexcept;
   [[nodiscard]] std::size_t size_bytes() const;
   [[nodiscard]] std::span<const std::int32_t> resident_ids() const noexcept;
   [[nodiscard]] const ExpertStore& source() const noexcept;
+
   [[nodiscard]] ConstTensorView device_routes() const;
 
  private:
+  void publish_routes(cudaStream_t stream);
+
+ private:
   const ExpertStore& source_;
+
   std::vector<std::int32_t> resident_ids_;
   std::vector<int> expert_to_slot_;
+
   std::vector<std::unique_ptr<FP8Expert>> slots_;
+
   Tensor routes_;
   PinnedHostBuffer host_routes_;
+
   cudaEvent_t routes_ready_ = nullptr;
-  void publish_routes(cudaStream_t stream);
   bool ready_ = false;
 };
 
@@ -234,7 +242,7 @@ class MoE final : public Module {
 
   [[nodiscard]] std::size_t replace_experts(
       std::span<const ExpertCacheReplacement> replacements,
-      cudaStream_t stream = nullptr, bool synchronize = true) const;
+      cudaStream_t stream) const;
 
   [[nodiscard]] const MoEConfig& config() const noexcept;
 
