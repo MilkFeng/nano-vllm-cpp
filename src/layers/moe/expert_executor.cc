@@ -129,8 +129,7 @@ ExpertExecutionStats ExpertExecutor::forward_into(
     for (const auto& group : misses) {
       const auto begin = group.begin - gpu_rows;
 
-      const auto x =
-          views.host_grouped_input.as_const().slice(0, begin, group.rows);
+      const auto x = views.host_grouped_input.slice(0, begin, group.rows);
       const auto y = views.host_parts.slice(0, begin, group.rows);
 
       const auto* expert = &store_.expert_at(group.id);
@@ -143,16 +142,14 @@ ExpertExecutionStats ExpertExecutor::forward_into(
   }
 
   if (gpu_rows != 0) {
-    kernels::cuda::moe_gather(gpu_input,
-                              views.indices.as_const().slice(0, 0, gpu_rows),
+    kernels::cuda::moe_gather(gpu_input, views.indices.slice(0, 0, gpu_rows),
                               top_k, views.grouped_input, stream);
 
     for (const auto& group : hits) {
       cache_.expert_at_slot(group.slot)
-          .forward_into(
-              views.grouped_input.as_const().slice(0, group.begin, group.rows),
-              views.parts.slice(0, group.begin, group.rows), views.expert,
-              stream);
+          .forward_into(views.grouped_input.slice(0, group.begin, group.rows),
+                        views.parts.slice(0, group.begin, group.rows),
+                        views.expert, stream);
     }
   }
 
@@ -166,8 +163,8 @@ ExpertExecutionStats ExpertExecutor::forward_into(
                "upload CPU expert groups");
   }
 
-  kernels::cuda::moe_scatter(views.parts.as_const(), views.indices.as_const(),
-                             expert_outputs, stream);
+  kernels::cuda::moe_scatter(views.parts, views.indices, expert_outputs,
+                             stream);
 
   return {gpu_rows, cpu_rows};
 }
@@ -236,12 +233,11 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
                "upload single-token expert permutation");
   }
 
-  const auto host_input = views.host_input.as_const();
   for (std::size_t i = 0; i < misses.size(); ++i) {
     const auto& task = misses[i];
     const auto* expert = &store_.expert_at(task.expert_id);
     const auto row = views.host_parts.slice(0, i, 1);
-    jobs[i] = {expert, host_input, row};
+    jobs[i] = {expert, views.host_input, row};
     descriptors[i] = {CpuExpertJob::run, &jobs[i]};
   }
 
@@ -278,8 +274,8 @@ ExpertExecutionStats ExpertExecutor::forward_single_into(
   }
 
   if (mixed) {
-    kernels::cuda::moe_scatter(views.parts.as_const(), views.indices.as_const(),
-                               expert_outputs, stream);
+    kernels::cuda::moe_scatter(views.parts, views.indices, expert_outputs,
+                               stream);
   }
 
   return {hits.size(), misses.size()};

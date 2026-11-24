@@ -33,6 +33,8 @@ class Tensor {
 
   [[nodiscard]] TensorView view();
   [[nodiscard]] ConstTensorView view() const;
+  [[nodiscard]] ConstTensorView const_view() const;
+
   [[nodiscard]] Tensor reshape(std::span<const std::size_t> shape) const;
   [[nodiscard]] Tensor slice(std::size_t dimension, std::size_t begin,
                              std::size_t length) const;

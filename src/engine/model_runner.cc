@@ -9,6 +9,7 @@
 #include "core/device.hh"
 #include "core/expert_policy.hh"
 #include "core/forward_context.hh"
+#include "functions/sample.hh"
 #include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
@@ -58,8 +59,7 @@ ModelRunner::ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
       model->transformer().build_rope_cache(stream_);
       model_ = std::move(model);
     } else {
-      auto model =
-          std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda(0));
+      auto model = std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda(0));
       model->transformer().build_rope_cache(stream_);
       model_ = std::move(model);
     }
@@ -273,12 +273,12 @@ std::vector<std::int32_t> ModelRunner::run(
   context.decode_graphs =
       decode_graphs && !prefill && ids.size() == 1 && !use_whole;
   context.whole_graph = use_whole;
-  context.cu_seqlens_q = boundaries_q.view().as_const();
-  context.cu_seqlens_k = boundaries_k.view().as_const();
+  context.cu_seqlens_q = boundaries_q.view();
+  context.cu_seqlens_k = boundaries_k.view();
   context.max_seqlen_q = max_q;
   context.max_seqlen_k = use_whole ? params_.max_model_len : max_k;
-  context.block_tables = block_tables.view().as_const();
-  context.state_indices = state_indices.view().as_const();
+  context.block_tables = block_tables.view();
+  context.state_indices = state_indices.view();
   context.stream = stream_;
   context.attention_workspace = attention_workspace_.view();
 
@@ -293,6 +293,7 @@ std::vector<std::int32_t> ModelRunner::run(
   Tensor output;
   if (use_whole) {
     auto& transformer = static_cast<Qwen35ForCausalLM&>(*model_).transformer();
+
     if (!whole_decode_.ready()) {
       whole_states_.clear();
       std::size_t linear = 0;
@@ -305,39 +306,35 @@ std::vector<std::int32_t> ModelRunner::run(
                                                              1));
         }
       }
-      // Decode writes only the current, fresh KV slot. The actual replay
-      // overwrites it; no cached prefix KV is changed by graph warmup.
     }
-    const auto function = [&](bool capturing) -> std::vector<Tensor> {
-      auto captured_context = context;
-      captured_context.graph_warmup = !capturing;
-      auto hidden =
-          model_->forward(input_ids.view().as_const(),
-                          input_positions.view().as_const(), captured_context);
-      auto logits =
-          model_->compute_logits(hidden.view().as_const(), captured_context);
-      auto token = Tensor::empty({1}, DataType::Int32, model_->device());
-      kernels::cuda::sample(logits.view().as_const(),
-                            temperature.view().as_const(), token.view(),
-                            params_.seed, 0, stream_);
-      return {std::move(token)};
-    };
+
     auto tensors = whole_decode_.run(
         stream_, {input_ids.data(), block_tables.data(), state_indices.data()},
-        whole_states_, function, [&] { transformer.reset_hybrid_step(); },
-        [&] { transformer.run_hybrid_cpu(); },
-        [&] { transformer.abort_hybrid_step(); });
+        whole_states_,
+        [&](bool capturing) -> std::vector<Tensor> {
+          auto captured_context = context;
+          captured_context.graph_warmup = !capturing;
+
+          auto hidden = model_->forward(
+              input_ids.view(), input_positions.view(), captured_context);
+          auto logits = model_->compute_logits(hidden.view(), captured_context);
+
+          auto token = sample(logits.view(), temperature.view(), params_.seed,
+                              0, stream_);
+          return {std::move(token)};
+        },
+        [&] { transformer.reset_hybrid_step(); },
+        [&] { transformer.run_hybrid_cpu(); });
+
     output = std::move(tensors[0]);
     ++sample_step_;
   } else {
-    auto hidden = model_->forward(input_ids.view().as_const(),
-                                  input_positions.view().as_const(), context);
-    auto logits = model_->compute_logits(hidden.view().as_const(), context);
+    auto hidden =
+        model_->forward(input_ids.view(), input_positions.view(), context);
+    auto logits = model_->compute_logits(hidden.view(), context);
 
-    output = Tensor::empty({seqs.size()}, DataType::Int32, model_->device());
-    kernels::cuda::sample(logits.view().as_const(),
-                          temperature.view().as_const(), output.view(),
-                          params_.seed, sample_step_++, stream_);
+    output = sample(logits.view(), temperature.view(), params_.seed,
+                    sample_step_++, stream_);
   }
 
   check_cuda(cudaMemcpyAsync(result.data(), output.data(), output.size_bytes(),

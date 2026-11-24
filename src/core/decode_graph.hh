@@ -1,6 +1,8 @@
 #pragma once
 
 #include <memory>
+#include <span>
+#include <string_view>
 #include <vector>
 
 #include "common/cuda_utils.hh"
@@ -9,22 +11,47 @@
 
 namespace nanovllm {
 
-// Engine-only GPU segments. Returned storage is reused on the next replay;
-// the engine consumes it on the same stream and synchronizes between steps.
-// Dynamic CPU expert work stays outside these graphs.
+namespace {
+void copy_states(std::span<void*> destinations, std::span<void*> sources,
+                 std::span<std::size_t> sizes, cudaStream_t stream,
+                 std::string_view operation) {
+  if (sizes.empty()) {
+    return;
+  }
+
+  cudaMemcpyAttributes attributes{};
+  attributes.srcAccessOrder = cudaMemcpySrcAccessOrderStream;
+  std::size_t first = 0;
+#if CUDART_VERSION >= 13000
+  const auto status =
+      cudaMemcpyBatchAsync(destinations.data(), sources.data(), sizes.data(),
+                           sizes.size(), &attributes, &first, 1, stream);
+#else
+  std::size_t fail_index = 0;
+  const auto status = cudaMemcpyBatchAsync(
+      destinations.data(), sources.data(), sizes.data(), sizes.size(),
+      &attributes, &first, 1, &fail_index, stream);
+#endif
+  check_cuda(status, operation);
+}
+} // namespace
+
 class DecodeGraph final {
  public:
   [[nodiscard]] bool matches(cudaStream_t stream,
                              const std::vector<const void*>& key) const {
     return exec_ && stream_ == stream && key_ == key;
   }
+
   [[nodiscard]] bool ready() const noexcept { return exec_ != nullptr; }
+
   ~DecodeGraph() {
     clear();
     if (completed_) {
       cudaEventDestroy(completed_);
     }
   }
+
   void clear() noexcept {
     if (completed_) {
       cudaEventSynchronize(completed_);
@@ -49,20 +76,26 @@ class DecodeGraph final {
       stream_ = stream;
       key_ = std::move(key);
     }
+
     if (!pool_) {
       pool_ = std::make_unique<TensorPool>(Device::cuda(0), stream);
     }
+
     if (!completed_) {
       check_cuda(cudaEventCreateWithFlags(&completed_, cudaEventDisableTiming),
                  "create decode graph completion event");
     }
+
     if (exec_) {
+      // 如果之前实例化了 CUDA Graph Exec，直接执行即可
       check_cuda(cudaGraphLaunch(exec_, stream), "replay decode GPU segment");
       check_cuda(cudaEventRecord(completed_, stream),
                  "record decode graph use");
       return outputs_;
     }
+
     TensorPool::Scope scope(*pool_, stream);
+
     if (!warmed_) {
       const auto count = pool_->allocation_count();
       auto result = function();
@@ -71,27 +104,26 @@ class DecodeGraph final {
                  "record decode graph warmup");
       return result;
     }
+
+    // 捕获 CUDA Graph，此时只捕获，并不会产生输出，只会准备输出张量
     cudaGraph_t graph = nullptr;
     check_cuda(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal),
                "capture decode GPU segment");
-    try {
-      outputs_ = function();
-    } catch (...) {
-      cudaStreamEndCapture(stream, &graph);
-      if (graph) {
-        cudaGraphDestroy(graph);
-      }
-      throw;
-    }
+    outputs_ = function();
     check_cuda(cudaStreamEndCapture(stream, &graph),
                "finish decode GPU capture");
+
+    // 实例化生成可反复提交的 CUDA Graph Exec，然后销毁刚才的 CUDA Graph
     const auto status = cudaGraphInstantiate(&exec_, graph, 0);
-    cudaGraphDestroy(graph);
+    check_cuda(cudaGraphDestroy(graph), "destroy decode GPU graph");
     check_cuda(status, "instantiate decode GPU segment");
+
+    // 运行一下 CUDA Graph Exec
     check_cuda(cudaGraphLaunch(exec_, stream),
                "run captured decode GPU segment");
     check_cuda(cudaEventRecord(completed_, stream),
                "record captured decode use");
+
     return outputs_;
   }
 
@@ -99,64 +131,70 @@ class DecodeGraph final {
   cudaStream_t stream_ = nullptr;
   cudaEvent_t completed_ = nullptr;
   cudaGraphExec_t exec_ = nullptr;
+
   std::unique_ptr<TensorPool> pool_;
   std::vector<const void*> key_;
+
   std::vector<Tensor> outputs_;
+
   bool warmed_ = false;
 };
 
-// Build an entire heterogeneous step without executing extra recurrent/KV
-// updates. Eager GPU-only warmups use zero CPU rows, then restore all caches.
 class WholeDecodeGraph final {
  public:
   [[nodiscard]] bool ready() const noexcept { return graph_.ready(); }
 
-  template <typename Function, typename Reset, typename Pump, typename Abort>
+  template <typename Function, typename Reset, typename Pump>
   std::vector<Tensor> run(cudaStream_t stream, std::vector<const void*> key,
                           std::span<const TensorView> states,
-                          Function&& function, Reset&& reset, Pump&& pump,
-                          Abort&& abort) {
+                          Function&& function, Reset&& reset, Pump&& pump) {
     std::vector<Tensor> saved;
+    std::vector<void*> state_buffers;
+    std::vector<void*> saved_buffers;
+    std::vector<std::size_t> sizes;
+
     if (!graph_.matches(stream, key)) {
+      // CUDA Graph 无法复用，由于 function 会直接修改
+      // states，所以这里直接先备份一份
       for (const auto& state : states) {
-        auto copy = Tensor::empty({state.shape().begin(), state.shape().end()},
-                                  state.dtype(), state.device());
-        check_cuda(
-            cudaMemcpyAsync(copy.data(), state.data(), state.size_bytes(),
-                            cudaMemcpyDeviceToDevice, stream),
-            "snapshot decode cache for graph warmup");
-        saved.push_back(std::move(copy));
+        const auto bytes = state.size_bytes();
+        if (bytes == 0) {
+          continue;
+        }
+
+        saved.push_back(
+            Tensor::empty({state.shape().begin(), state.shape().end()},
+                          state.dtype(), state.device()));
+        state_buffers.push_back(state.data());
+        saved_buffers.push_back(saved.back().data());
+        sizes.push_back(bytes);
       }
+      copy_states(saved_buffers, state_buffers, sizes, stream,
+                  "snapshot decode cache for graph warmup");
     }
-    try {
-      for (;;) {
-        reset();
-        auto result = graph_.run(stream, key, [&] {
-          cudaStreamCaptureStatus status;
-          check_cuda(cudaStreamIsCapturing(stream, &status),
-                     "query whole decode capture");
-          return function(status == cudaStreamCaptureStatusActive);
-        });
-        if (graph_.ready()) {
-          pump();
-          return result;
-        }
-        check_cuda(cudaStreamSynchronize(stream),
-                   "complete whole decode warmup");
-        result.clear();
-        for (std::size_t i = 0; i < states.size(); ++i) {
-          check_cuda(cudaMemcpyAsync(states[i].data(), saved[i].data(),
-                                     states[i].size_bytes(),
-                                     cudaMemcpyDeviceToDevice, stream),
-                     "restore decode cache after graph warmup");
-        }
-        check_cuda(cudaStreamSynchronize(stream),
-                   "complete decode cache restore");
+
+    while (true) {
+      reset();
+
+      auto result = graph_.run(stream, key, [&] {
+        cudaStreamCaptureStatus status;
+        check_cuda(cudaStreamIsCapturing(stream, &status),
+                   "query whole decode capture");
+        return function(status == cudaStreamCaptureStatusActive);
+      });
+
+      if (graph_.ready()) {
+        pump();
+        return result;
       }
-    } catch (...) {
-      abort();
-      cudaStreamSynchronize(stream);
-      throw;
+
+      // 恢复备份
+      result.clear();
+      copy_states(state_buffers, saved_buffers, sizes, stream,
+                  "restore decode cache after graph warmup");
+
+      check_cuda(cudaStreamSynchronize(stream),
+                 "complete decode cache restore");
     }
   }
 

@@ -125,6 +125,10 @@ ConstTensorView Tensor::view() const {
   return ConstTensorView(data(), dtype_, layout_, device_);
 }
 
+ConstTensorView Tensor::const_view() const {
+  return ConstTensorView(data(), dtype_, layout_, device_);
+}
+
 Tensor Tensor::reshape(std::span<const std::size_t> shape) const {
   return Tensor(storage_, byte_offset_, dtype_, layout_.reshape(shape),
                 device_);

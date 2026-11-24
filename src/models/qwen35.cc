@@ -131,12 +131,12 @@ void fill_cpu(const Checkpoint& checkpoint, const LoadEntry& entry,
     ConstTensorView weight(checkpoint.raw_data(entry.name).data(), info.dtype,
                            TensorLayout(info.shape), Device::cpu());
     if (output.dtype() == DataType::Float32) {
-      kernels::cpu::dequantize_fp8(weight, scale.view().as_const(), output,
-                                   blocks[0], blocks[1]);
+      kernels::cpu::dequantize_fp8(weight, scale.view(), output, blocks[0],
+                                   blocks[1]);
     } else {
       auto expanded = Tensor::empty(info.shape, DataType::Float32);
-      kernels::cpu::dequantize_fp8(weight, scale.view().as_const(),
-                                   expanded.view(), blocks[0], blocks[1]);
+      kernels::cpu::dequantize_fp8(weight, scale.view(), expanded.view(),
+                                   blocks[0], blocks[1]);
       assert(output.dtype() == DataType::BFloat16);
       for (std::size_t i = 0; i < output.numel(); ++i) {
         output.data<std::uint16_t>()[i] =
@@ -242,8 +242,8 @@ Tensor Qwen35Attention::forward(ConstTensorView positions,
   auto gate = Tensor::empty({tokens, num_heads_, head_dim_}, DataType::BFloat16,
                             device);
 
-  kernels::cuda::split_attention_gate(packed.view().as_const(),
-                                      query_heads.view(), gate.view(), stream);
+  kernels::cuda::split_attention_gate(packed.view(), query_heads.view(),
+                                      gate.view(), stream);
 
   auto k = k_proj_.forward(hidden_states, stream);
   auto v = v_proj_.forward(hidden_states, stream);
@@ -252,7 +252,7 @@ Tensor Qwen35Attention::forward(ConstTensorView positions,
       k.reshape(std::array{tokens, num_kv_heads_, head_dim_});
   const auto value = v.reshape(std::array{tokens, num_kv_heads_, head_dim_});
 
-  auto query = q_norm_.forward(query_heads.view().as_const(), stream);
+  auto query = q_norm_.forward(query_heads.view(), stream);
   auto key = k_norm_.forward(key_heads.view(), stream);
 
   rotary_emb_.forward(positions, query.view(), key.view(), stream);
@@ -260,13 +260,12 @@ Tensor Qwen35Attention::forward(ConstTensorView positions,
                               DataType::BFloat16, device);
 
   kernels::cuda::flash_attn_with_kvcache(
-      query.view().as_const(), key_cache_, value_cache_, key.view().as_const(),
-      value.view(), context.cu_seqlens_q, context.cu_seqlens_k,
-      context.max_seqlen_q, context.max_seqlen_k, context.block_tables,
-      output.view(), true, stream, context.attention_workspace);
+      query.view(), key_cache_, value_cache_, key.view(), value.view(),
+      context.cu_seqlens_q, context.cu_seqlens_k, context.max_seqlen_q,
+      context.max_seqlen_k, context.block_tables, output.view(), true, stream,
+      context.attention_workspace);
 
-  kernels::cuda::apply_sigmoid_gate(output.view(), gate.view().as_const(),
-                                    stream);
+  kernels::cuda::apply_sigmoid_gate(output.view(), gate.view(), stream);
 
   const auto flattened = output.reshape(std::array{tokens, q_size_});
   return o_proj_.forward(flattened.view(), stream);
@@ -388,7 +387,7 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
     if (residual) {
       before =
           input_layernorm_.forward(hidden_states, *residual, context.stream);
-      residual_view = before.residual.view().as_const();
+      residual_view = before.residual.view();
       residual_dtype = residual->dtype();
     } else {
       // The FP32 residual stream starts at the post-attention fused add:
@@ -400,15 +399,14 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
 
     auto attention =
         self_attn_
-            ? self_attn_->forward(
-                  positions, before.hidden_states.view().as_const(), context)
+            ? self_attn_->forward(positions, before.hidden_states.view(),
+                                  context)
             : linear_attn_->forward(
-                  before.hidden_states.view().as_const(),
+                  before.hidden_states.view(),
                   context.is_prefill ? context.cu_seqlens_q : ConstTensorView{},
                   context.state_indices, context.stream);
     auto after = post_attention_layernorm_.forward(
-        attention.view().as_const(), residual_view, residual_dtype,
-        context.stream);
+        attention.view(), residual_view, residual_dtype, context.stream);
     return {std::move(after.hidden_states), std::move(after.residual)};
   };
   auto after =
@@ -421,9 +419,9 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
                  linear_attn_->recurrent_state().data()},
                 prefix)
           : prefix();
-  auto output = mlp_.forward(after[0].view().as_const(), context.stream,
-                             profile, usage, context.decode_graphs,
-                             context.whole_graph, context.graph_warmup);
+  auto output = mlp_.forward(after[0].view(), context.stream, profile, usage,
+                             context.decode_graphs, context.whole_graph,
+                             context.graph_warmup);
 
   return {std::move(output.hidden_states), std::move(after[1])};
 }
@@ -513,15 +511,15 @@ Tensor Qwen35Model::forward(ConstTensorView input_ids,
   for (std::size_t i = 0; i < layers_.size(); ++i) {
     std::optional<ConstTensorView> residual_view = std::nullopt;
     if (i > 0) {
-      residual_view = residual.view().as_const();
+      residual_view = residual.view();
     }
 
     auto* profile = expert_profile_.empty() ? nullptr
                     : context.is_prefill    ? &expert_profile_[i].prefill
                                             : &expert_profile_[i].decode;
     auto* usage = context.is_prefill ? nullptr : expert_adaptation_.usage(i);
-    auto output = layer(i).forward(positions, hidden.view().as_const(),
-                                   residual_view, context, profile, usage);
+    auto output = layer(i).forward(positions, hidden.view(), residual_view,
+                                   context, profile, usage);
 
     hidden = std::move(output.hidden_states);
     residual = std::move(output.residual);
@@ -531,8 +529,8 @@ Tensor Qwen35Model::forward(ConstTensorView input_ids,
     adapt_experts(context.stream);
   }
 
-  auto normalized = norm_.forward(hidden.view().as_const(),
-                                  residual.view().as_const(), context.stream);
+  auto normalized =
+      norm_.forward(hidden.view(), residual.view(), context.stream);
   return std::move(normalized.hidden_states);
 }
 
@@ -700,8 +698,7 @@ Tensor Qwen35ForCausalLM::compute_logits(ConstTensorView hidden_states,
                               hidden_states.dtype(), device_);
     kernels::cuda::gather_last_hidden(hidden_states, context.cu_seqlens_q,
                                       last.view(), context.stream);
-    return lm_head_.forward(last.view().as_const(), context.stream,
-                            DataType::Float32);
+    return lm_head_.forward(last.view(), context.stream, DataType::Float32);
   }
   return lm_head_.forward(hidden_states, context.stream, DataType::Float32);
 }

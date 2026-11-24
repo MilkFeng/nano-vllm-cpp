@@ -85,20 +85,19 @@ Tensor Qwen3Attention::forward(ConstTensorView positions,
   auto value =
       value_projection.reshape(std::array{tokens, num_kv_heads_, head_dim_});
 
-  auto query = q_norm_ ? q_norm_->forward(query_heads.view().as_const(), stream)
-                       : query_heads;
-  auto key = k_norm_ ? k_norm_->forward(key_heads.view().as_const(), stream)
-                     : key_heads;
+  auto query =
+      q_norm_ ? q_norm_->forward(query_heads.view(), stream) : query_heads;
+  auto key = k_norm_ ? k_norm_->forward(key_heads.view(), stream) : key_heads;
 
   rotary_emb_.forward(positions, query.view(), key.view(), stream);
 
   auto attention_output = Tensor::empty({tokens, num_heads_, head_dim_},
                                         hidden_states.dtype(), device);
   kernels::cuda::flash_attn_with_kvcache(
-      query.view().as_const(), key_cache_, value_cache_, key.view().as_const(),
-      value.view().as_const(), context.cu_seqlens_q, context.cu_seqlens_k,
-      context.max_seqlen_q, context.max_seqlen_k, context.block_tables,
-      attention_output.view(), true, stream, context.attention_workspace);
+      query.view(), key_cache_, value_cache_, key.view(), value.view(),
+      context.cu_seqlens_q, context.cu_seqlens_k, context.max_seqlen_q,
+      context.max_seqlen_k, context.block_tables, attention_output.view(), true,
+      stream, context.attention_workspace);
 
   const auto flattened = attention_output.reshape(std::array{tokens, q_size_});
   return o_proj_.forward(flattened.view(), stream);
@@ -189,20 +188,20 @@ Qwen3DecoderLayerOutput Qwen3DecoderLayer::forward(
   if (residual) {
     before_attention =
         input_layernorm_.forward(hidden_states, *residual, context.stream);
-    residual_view = before_attention.residual.view().as_const();
+    residual_view = before_attention.residual.view();
   } else {
     before_attention.hidden_states =
         input_layernorm_.forward(hidden_states, context.stream);
   }
 
   auto attention = self_attn_.forward(
-      positions, before_attention.hidden_states.view().as_const(), context);
+      positions, before_attention.hidden_states.view(), context);
 
   auto after_attention = post_attention_layernorm_.forward(
-      attention.view().as_const(), residual_view, context.stream);
+      attention.view(), residual_view, context.stream);
 
-  auto output = mlp_.forward(after_attention.hidden_states.view().as_const(),
-                             context.stream);
+  auto output =
+      mlp_.forward(after_attention.hidden_states.view(), context.stream);
 
   return {std::move(output), std::move(after_attention.residual)};
 }
@@ -242,18 +241,18 @@ Tensor Qwen3Model::forward(ConstTensorView input_ids, ConstTensorView positions,
   for (std::size_t index = 0; index < layers_.size(); ++index) {
     std::optional<ConstTensorView> residual_view = std::nullopt;
     if (index > 0) {
-      residual_view = residual.view().as_const();
+      residual_view = residual.view();
     }
 
-    auto output = layer(index).forward(
-        positions, hidden_states.view().as_const(), residual_view, context);
+    auto output = layer(index).forward(positions, hidden_states.view(),
+                                       residual_view, context);
 
     hidden_states = std::move(output.hidden_states);
     residual = std::move(output.residual);
   }
 
-  auto normalized = norm_.forward(hidden_states.view().as_const(),
-                                  residual.view().as_const(), context.stream);
+  auto normalized =
+      norm_.forward(hidden_states.view(), residual.view(), context.stream);
   return std::move(normalized.hidden_states);
 }
 
@@ -318,7 +317,7 @@ Tensor Qwen3ForCausalLM::compute_logits(ConstTensorView hidden_states,
                       hidden_states.device());
     kernels::cuda::gather_last_hidden(hidden_states, context.cu_seqlens_q,
                                       last_hidden.view(), context.stream);
-    return lm_head_.forward(last_hidden.view().as_const(), context.stream);
+    return lm_head_.forward(last_hidden.view(), context.stream);
   }
   return lm_head_.forward(hidden_states, context.stream);
 }

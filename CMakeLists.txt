@@ -173,7 +173,6 @@ add_library(nano-vllm-cpp-attn-exp SHARED EXCLUDE_FROM_ALL
   src/kernels/cuda/attn/attn.cu
   src/core/device.cc
   src/core/tensor_layout.cc
-  src/core/tensor_view.cc
 )
 
 target_include_directories(nano-vllm-cpp-attn-exp PRIVATE

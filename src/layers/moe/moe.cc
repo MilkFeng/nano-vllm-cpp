@@ -231,8 +231,7 @@ MoEOutput MoE::forward_hybrid(ConstTensorView gpu_hidden, cudaStream_t stream,
     Tensor output =
         Tensor::empty({1, config_.hidden_size}, DataType::BFloat16, device);
 
-    kernels::cuda::moe_route(logits.view().as_const(), ids.view(),
-                             weights.view(), stream);
+    kernels::cuda::moe_route(logits.view(), ids.view(), weights.view(), stream);
 
     check_cuda(cudaMemcpyAsync(work.ids.data(), ids.data(), ids.size_bytes(),
                                cudaMemcpyDeviceToHost, stream),
@@ -243,7 +242,7 @@ MoEOutput MoE::forward_hybrid(ConstTensorView gpu_hidden, cudaStream_t stream,
                "download graph expert input");
 
     kernels::cuda::moe_publish_decode(
-        gpu_hidden, ids.view().as_const(),
+        gpu_hidden, ids.view(),
         static_cast<std::uint16_t*>(work.input.device_data()),
         static_cast<std::int32_t*>(work.ids.device_data()),
         static_cast<volatile std::uint32_t*>(work.flags.device_data()), stream,
@@ -263,14 +262,13 @@ MoEOutput MoE::forward_hybrid(ConstTensorView gpu_hidden, cudaStream_t stream,
     }
 
     kernels::cuda::fp8_experts_decode_routed(
-        gpu_hidden, ids.view().as_const(), cache_->device_routes(),
-        work.activated.view(), parts.view(), stream);
+        gpu_hidden, ids.view(), cache_->device_routes(), work.activated.view(),
+        parts.view(), stream);
 
     kernels::cuda::moe_combine_routed(
         parts.view(), static_cast<const float*>(work.parts.device_data()),
-        ids.view().as_const(), cache_->device_routes(),
-        weights.view().as_const(), output.view(), shared.view().as_const(),
-        gate.view().as_const(), stream,
+        ids.view(), cache_->device_routes(), weights.view(), output.view(),
+        shared.view(), gate.view(), stream,
         reinterpret_cast<const volatile std::uint32_t*>(
             static_cast<char*>(work.flags.device_data()) + 64),
         reinterpret_cast<volatile std::uint32_t*>(
@@ -405,8 +403,7 @@ MoEOutput MoE::forward(ConstTensorView gpu_hidden, cudaStream_t stream,
   ExpertExecutionStats stats;
 
   logits = gate_.forward(gpu_hidden, stream);
-  kernels::cuda::moe_route(logits.view().as_const(), ids.view(), weights.view(),
-                           stream);
+  kernels::cuda::moe_route(logits.view(), ids.view(), weights.view(), stream);
   check_cuda(cudaMemcpyAsync(host_ids.data(), ids.data(), ids.size_bytes(),
                              cudaMemcpyDeviceToHost, stream),
              "copy MoE expert IDs to CPU");
@@ -441,10 +438,9 @@ MoEOutput MoE::forward(ConstTensorView gpu_hidden, cudaStream_t stream,
     launch_shared();
   }
 
-  kernels::cuda::moe_combine(expert_outputs.view().as_const(),
-                             weights.view().as_const(), output.view(),
-                             shared_output.view().as_const(),
-                             shared_gate_logits.view().as_const(), stream);
+  kernels::cuda::moe_combine(expert_outputs.view(), weights.view(),
+                             output.view(), shared_output.view(),
+                             shared_gate_logits.view(), stream);
   workspace_->record_completion(stream);
 
   if (profile) {

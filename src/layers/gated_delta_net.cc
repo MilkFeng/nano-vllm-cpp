@@ -60,17 +60,17 @@ Tensor GatedDeltaNet::forward(ConstTensorView hidden_states,
   //
   // convolved: [tokens, 2*qk_heads*qk_head_dim+v_heads*v_head_dim]
   //            最后一维按照顺序存放 Q、K、V
-  auto convolved = conv1d_.forward(qkv.view().as_const(), conv_state_,
-                                   cu_seqlens, state_indices, stream);
+  auto convolved = conv1d_.forward(qkv.view(), conv_state_, cu_seqlens,
+                                   state_indices, stream);
 
   auto output = Tensor::empty({tokens, value_heads_, value_dim_},
                               hidden_states.dtype(), hidden_states.device());
 
   // 更新递归记忆，并生成每个 token 的输出
-  kernels::cuda::gated_delta_rule(
-      convolved.view().as_const(), a.view().as_const(), b.view().as_const(),
-      A_log_.view(), dt_bias_.view(), recurrent_state_, cu_seqlens,
-      state_indices, key_heads_, output.view(), stream);
+  kernels::cuda::gated_delta_rule(convolved.view(), a.view(), b.view(),
+                                  A_log_.view(), dt_bias_.view(),
+                                  recurrent_state_, cu_seqlens, state_indices,
+                                  key_heads_, output.view(), stream);
 
   // z:       [tokens, v_heads*v_head_dim]
   // z_heads: [tokens, v_heads, v_head_dim]
@@ -79,8 +79,7 @@ Tensor GatedDeltaNet::forward(ConstTensorView hidden_states,
   // 每个 head 内做 RMSNorm，再应用 z 门控
   //
   // normalized: [tokens, v_heads, v_head_dim]
-  auto normalized =
-      norm_.forward(output.view().as_const(), z_heads.view(), stream);
+  auto normalized = norm_.forward(output.view(), z_heads.view(), stream);
 
   // 最后两维合并一下
   const auto flattened =

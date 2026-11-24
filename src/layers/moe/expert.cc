@@ -50,9 +50,8 @@ void FP8Expert::forward_into(ConstTensorView input, TensorView output,
 
   gate_.forward_into(input, gate, stream);
   up_.forward_into(input, up, stream);
-  kernels::cuda::silu_and_mul(gate.as_const(), up.as_const(), activated,
-                              stream);
-  down_.forward_into(activated.as_const(), output, stream);
+  kernels::cuda::silu_and_mul(gate, up, activated, stream);
+  down_.forward_into(activated, output, stream);
 }
 
 kernels::cuda::FP8ExpertWeights FP8Expert::device_weights() const {
