@@ -81,23 +81,6 @@ ThreadPool::~ThreadPool() {
   stop();
 }
 
-ThreadPool::BusyScope::BusyScope(ThreadPool& pool, bool enabled)
-    : pool_(enabled ? &pool : nullptr) {
-  if (pool_) {
-    {
-      std::lock_guard lock(pool_->mutex_);
-      pool_->active_scopes_.fetch_add(1, std::memory_order_release);
-    }
-    pool_->ready_.notify_all();
-  }
-}
-
-ThreadPool::BusyScope::~BusyScope() {
-  if (pool_) {
-    pool_->active_scopes_.fetch_sub(1, std::memory_order_release);
-  }
-}
-
 std::future<void> ThreadPool::submit(std::function<void()> task) {
   std::packaged_task<void()> packaged(std::move(task));
   auto result = packaged.get_future();
@@ -153,12 +136,10 @@ void ThreadPool::run() {
     std::packaged_task<void()> single;
     std::shared_ptr<BatchState> batch;
     Task task{};
+
     {
       std::unique_lock lock(mutex_);
       if (tasks_.empty() && !stopping_) {
-        // Consecutive MoE layers arrive within a millisecond. Brief polling
-        // avoids an OS sleep/wake on each layer, then yields to the usual CV
-        // when the engine is idle. Queue ownership still uses the mutex.
         lock.unlock();
         const auto until =
             std::chrono::steady_clock::now() + std::chrono::milliseconds(1);
@@ -166,23 +147,19 @@ void ThreadPool::run() {
           for (int i = 0; i < 32; ++i) {
             _mm_pause();
           }
-          if (active_scopes_.load(std::memory_order_acquire) == 0
-              && std::chrono::steady_clock::now() >= until) {
+          if (std::chrono::steady_clock::now() >= until) {
             break;
           }
         }
         lock.lock();
       }
-      ready_.wait(lock, [this] {
-        return stopping_ || !tasks_.empty()
-               || active_scopes_.load(std::memory_order_acquire) != 0;
-      });
+
+      ready_.wait(lock, [this] { return stopping_ || !tasks_.empty(); });
+
       if (tasks_.empty()) {
-        if (stopping_) {
-          return;
-        }
-        continue;
+        return;
       }
+
       auto& item = tasks_.front();
       if (item.batch) {
         batch = item.batch;
@@ -194,6 +171,7 @@ void ThreadPool::run() {
         single = std::move(item.single);
         tasks_.pop();
       }
+
       work_available_.store(!tasks_.empty() || stopping_,
                             std::memory_order_release);
     }

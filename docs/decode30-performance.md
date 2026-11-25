@@ -63,8 +63,8 @@ cmake --build build --target nano-vllm-cpp-bench -j4
 - 单序列 greedy decode 捕获整步 GPU 计算。输入 ID、位置、长度、页表和状态槽位
   使用固定地址，每步更新内容。主线程从 mapped pinned 缓冲区读取路由和输入，
   批量运行 CPU 专家，再发布完成标志；GPU 按原 top-k 次序合并，并最后加入共享分支。
-- 当前实验使用图内 DMA 下载路由和输入，再发布完成标志。CPU worker 在一整步
-  decode 内保持就绪，步结束后仍可休眠。两项改动尚未得到稳定超过 30 tok/s 的结果。
+- 图内 DMA 下载路由和输入，再发布完成标志。空闲的 CPU worker 短时轮询后通过
+  条件变量等待任务。
 - GPU 写回使用 system fence，CPU 读写完成标志使用 acquire/release。
   缓冲区在步末 stream 同步之后才复用。GPU 等待 CPU 的窗口为 200 ms；超时逐块
   记录错误，步末检查并抛出异常。CPU 异常会释放其余 GPU 等待节点后收拢执行。
