@@ -54,7 +54,8 @@ ModelRunner::ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
     if (config_.architecture == ModelArchitecture::Qwen35Moe) {
       auto model = std::make_unique<Qwen35ForCausalLM>(
           config_, Device::cuda(0), params_.cpu_threads, placement,
-          params_.profile_experts, params_.expert_adaptation);
+          params_.profile_experts, params_.expert_adaptation,
+          params_.cpu_affinity);
       model->transformer().build_rope_cache(stream_);
       model_ = std::move(model);
     } else {

@@ -112,7 +112,7 @@ Windows 下对应的可执行文件为
 
 日常完整测试可使用 `scripts/start_bench.sh` 或 `scripts/start_bench.ps1`。
 默认每条请求输入/输出各 512 token、batch=1，预热 2 轮、正式运行 5 轮，
-KV 池为 128 块 × 16 token，每步 token 预算为 128；使用 7 个 CPU worker，
+KV 池为 128 块 × 16 token，每步 token 预算为 128；使用 7 个绑核 CPU worker，
 每层初始驻留 50 个 GPU 专家，每 4 个 decode 步检查在线替换，seed=42。
 脚本读取 `examples/benchmark-prompts.json` 中的 5 条种子文本，覆盖中英文系统说明、
 C++ 并发编程、数学建模和长文分析。默认 5 个正式轮次依次使用这 5 条文本；
@@ -137,6 +137,7 @@ PowerShell 保留默认的 Desktop 模型路径，通过脚本参数覆盖：
 ```
 
 `MODEL` / `-Model`、`PROMPTS_FILE` / `-PromptsFile` 可替换模型或种子文本；
+`CPU_AFFINITY=0` / `-NoCpuAffinity` 可关闭绑核。
 扩展输入、输出或 batch 后，应相应调整 KV 块数；为避免容量不足导致抢占，
 按 `batch × ceil((input + output) / block_size)` 估算所需块数。
 每次启动脚本创建一个新引擎；同一次启动中的预热及正式轮次会保留专家学习状态。

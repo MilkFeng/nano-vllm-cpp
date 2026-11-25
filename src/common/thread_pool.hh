@@ -7,10 +7,13 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <span>
 #include <thread>
 #include <vector>
+
+#include "common/cpu_affinity.hh"
 
 namespace nanovllm {
 
@@ -18,7 +21,7 @@ class ThreadPool final {
   struct BatchState;
 
  public:
-  explicit ThreadPool(std::size_t num_threads);
+  explicit ThreadPool(std::size_t num_threads, bool physical_affinity = false);
   ~ThreadPool();
 
   ThreadPool(const ThreadPool&) = delete;
@@ -49,7 +52,10 @@ class ThreadPool final {
   };
 
   [[nodiscard]] std::future<void> submit(std::function<void()> task);
+  // Copies descriptors, not their arguments. Keep arguments alive until wait.
+  // Destruction also waits, including during exception unwinding.
   [[nodiscard]] TaskGroup submit_batch(std::span<const Task> tasks);
+  [[nodiscard]] ScopedCpuAffinity bind_caller() const;
 
   class BusyScope final {
    public:
@@ -75,6 +81,7 @@ class ThreadPool final {
   std::condition_variable ready_;
   std::queue<QueueItem> tasks_;
   std::vector<std::thread> workers_;
+  std::optional<unsigned> caller_cpu_;
   std::atomic<bool> work_available_{false};
   std::atomic<unsigned> active_scopes_{0};
   bool stopping_ = false;
