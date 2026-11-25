@@ -18,11 +18,6 @@ class LMHead final : public Module {
       ConstTensorView hidden_states, cudaStream_t stream = nullptr,
       std::optional<DataType> output_dtype = std::nullopt) const;
 
-  [[nodiscard]] Tensor forward(
-      ConstTensorView hidden_states, ConstTensorView cu_seqlens_q,
-      cudaStream_t stream = nullptr,
-      std::optional<DataType> output_dtype = std::nullopt) const;
-
   [[nodiscard]] Parameter& weight() noexcept;
   [[nodiscard]] const Parameter& weight() const noexcept;
 

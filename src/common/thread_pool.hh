@@ -51,6 +51,17 @@ class ThreadPool final {
   [[nodiscard]] std::future<void> submit(std::function<void()> task);
   [[nodiscard]] TaskGroup submit_batch(std::span<const Task> tasks);
 
+  class BusyScope final {
+   public:
+    explicit BusyScope(ThreadPool& pool, bool enabled = true);
+    ~BusyScope();
+    BusyScope(const BusyScope&) = delete;
+    BusyScope& operator=(const BusyScope&) = delete;
+
+   private:
+    ThreadPool* pool_;
+  };
+
  private:
   struct QueueItem {
     std::packaged_task<void()> single;
@@ -65,6 +76,7 @@ class ThreadPool final {
   std::queue<QueueItem> tasks_;
   std::vector<std::thread> workers_;
   std::atomic<bool> work_available_{false};
+  std::atomic<unsigned> active_scopes_{0};
   bool stopping_ = false;
 };
 } // namespace nanovllm

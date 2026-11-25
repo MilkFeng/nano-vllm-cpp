@@ -60,7 +60,6 @@ class Qwen35Cache final {
   [[nodiscard]] TensorView value_cache(std::size_t full_layer);
   [[nodiscard]] TensorView conv_state(std::size_t linear_layer);
   [[nodiscard]] TensorView recurrent_state(std::size_t linear_layer);
-
   [[nodiscard]] std::size_t kv_bytes() const;
   [[nodiscard]] std::size_t state_bytes() const;
 
@@ -102,7 +101,7 @@ class Qwen35Model final : public Module {
  public:
   Qwen35Model(const ModelConfig& config, Device device,
               std::size_t cpu_threads = 8,
-              const ExpertPlacement& expert_placement = {},
+              const ExpertPlacement& gpu_expert_ids_by_layer = {},
               bool profile_experts = false,
               ExpertAdaptationParams expert_adaptation = {});
 
@@ -119,13 +118,10 @@ class Qwen35Model final : public Module {
   [[nodiscard]] std::size_t num_layers() const noexcept;
   [[nodiscard]] Qwen35DecoderLayer& layer(std::size_t index);
   [[nodiscard]] const Qwen35DecoderLayer& layer(std::size_t index) const;
-
   void reset_expert_profile();
   [[nodiscard]] const std::vector<MoELayerProfile>& expert_profile()
       const noexcept;
-
   [[nodiscard]] ExpertAdaptationStats expert_adaptation_stats() const;
-
   void finish_decode_step(cudaStream_t stream) const;
   void reset_hybrid_step() const;
   void run_hybrid_cpu() const;
@@ -133,17 +129,13 @@ class Qwen35Model final : public Module {
 
  private:
   void adapt_experts(cudaStream_t stream) const;
-
   // Workers and scratch storage outlive every executor.
   mutable ThreadPool cpu_pool_;
   mutable MoEExecutionWorkspace moe_workspace_;
-
   Embedding embed_tokens_;
   ModuleList layers_;
   RMSNorm norm_;
-
   mutable std::vector<MoELayerProfile> expert_profile_;
-
   mutable ExpertAdaptationPolicy expert_adaptation_;
   mutable ExpertAdaptationStats adaptation_stats_;
 };
@@ -170,14 +162,12 @@ class Qwen35ForCausalLM final : public Model {
   [[nodiscard]] const ModelConfig& config() const noexcept;
   [[nodiscard]] DataType dtype() const noexcept override;
   [[nodiscard]] Device device() const noexcept override;
-
   [[nodiscard]] Qwen35Model& transformer() noexcept;
   [[nodiscard]] LMHead& lm_head() noexcept;
 
  private:
   ModelConfig config_;
   Device device_;
-
   Qwen35Model model_;
   LMHead lm_head_;
 };

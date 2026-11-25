@@ -29,17 +29,6 @@ Tensor LMHead::forward(ConstTensorView hidden_states, cudaStream_t stream,
   return logits;
 }
 
-Tensor LMHead::forward(ConstTensorView hidden_states,
-                       ConstTensorView cu_seqlens_q, cudaStream_t stream,
-                       std::optional<DataType> output_dtype) const {
-  const auto batch = cu_seqlens_q.shape()[0] - 1;
-  auto last = Tensor::empty({batch, hidden_size_}, hidden_states.dtype(),
-                            hidden_states.device());
-  kernels::cuda::gather_last_hidden(hidden_states, cu_seqlens_q, last.view(),
-                                    stream);
-  return forward(last.view(), stream, output_dtype);
-}
-
 Parameter& LMHead::weight() noexcept {
   return weight_;
 }

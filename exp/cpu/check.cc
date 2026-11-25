@@ -205,6 +205,8 @@ void pool() {
     ThreadPool pool(4);
     auto empty=pool.submit_batch({});empty.wait();
     for(int i=0;i<100;++i) {
+      ThreadPool::BusyScope active(pool, i % 2 == 0);
+      ThreadPool::BusyScope nested(pool, i % 3 == 0);
       auto group=pool.submit_batch(jobs);
       auto single=pool.submit([&]{++count;});
       group.wait();single.get();group.wait();
@@ -222,12 +224,12 @@ void pool() {
     // Submit concurrently from multiple producers while sharing the pool.
     std::vector<std::thread> producers;
     for(int i=0;i<4;++i) producers.emplace_back([&]{
+      ThreadPool::BusyScope active(pool);
       for(int n=0;n<50;++n) {auto batch=pool.submit_batch(jobs);batch.wait();}
     });
     for(auto& thread:producers) thread.join();
     require(count==9493,"concurrent bulk producers");
-    auto pending = pool.submit_batch(jobs);
-    throw 1;
+    {ThreadPool::BusyScope active(pool);auto group=pool.submit_batch(jobs);throw 1;}
   }
 }
 }
