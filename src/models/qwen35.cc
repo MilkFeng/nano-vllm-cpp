@@ -2,173 +2,20 @@
 
 #include <algorithm>
 #include <array>
-#include <bit>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
-#include <format>
-#include <set>
-#include <stdexcept>
-#include <string>
 #include <vector>
 
 #include "common/cuda_utils.hh"
 #include "core/checkpoint.hh"
 #include "core/device.hh"
-#include "kernels/cpu/fp8_dequant.hh"
+#include "core/load_plan.hh"
 #include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 namespace {
-
-std::uint16_t bfloat16_bits(float value) {
-  const auto bits = std::bit_cast<std::uint32_t>(value);
-  // Round to nearest, ties to even, preserving NaNs.
-  if ((bits & 0x7fffffffU) > 0x7f800000U) {
-    return (bits >> 16) | 0x40U;
-  }
-  return (bits + 0x7fffU + ((bits >> 16) & 1U)) >> 16;
-}
-
-void copy_float(const Checkpoint& checkpoint, std::string_view name,
-                TensorView output) {
-  const auto& source = checkpoint.tensor(name);
-  const auto bytes = checkpoint.raw_data(name);
-  if (source.dtype == output.dtype()) {
-    std::memcpy(output.data(), bytes.data(), bytes.size());
-    return;
-  }
-  for (std::size_t i = 0; i < output.numel(); ++i) {
-    if (output.dtype() == DataType::Float32) {
-      std::uint16_t bits;
-      std::memcpy(&bits, bytes.data() + i * sizeof(bits), sizeof(bits));
-      output.data<float>()[i] =
-          std::bit_cast<float>(static_cast<std::uint32_t>(bits) << 16);
-    } else {
-      assert(output.dtype() == DataType::BFloat16
-             && source.dtype == DataType::Float32);
-      std::uint32_t bits;
-      std::memcpy(&bits, bytes.data() + i * sizeof(bits), sizeof(bits));
-      output.data<std::uint16_t>()[i] =
-          bfloat16_bits(std::bit_cast<float>(bits));
-    }
-  }
-}
-
-struct LoadEntry {
-  std::string name;
-  TensorView destination;
-  std::string scale_name;
-};
-
-struct LoadPlan {
-  std::vector<LoadEntry> entries;
-  std::set<std::string, std::less<>> sources;
-  ModelLoadResult result;
-
-  void count(const Checkpoint& checkpoint, const std::string& name) {
-    if (!sources.insert(name).second) {
-      return;
-    }
-    const auto bytes = checkpoint.tensor(name).byte_size();
-    ++result.num_tensors;
-    result.num_bytes += bytes;
-  }
-};
-
-LoadPlan plan_load(Module& module, const Checkpoint& checkpoint,
-                   std::string_view prefix) {
-  std::string stem(prefix);
-  if (!stem.empty() && !stem.ends_with('.')) {
-    stem += '.';
-  }
-
-  LoadPlan plan;
-  for (const auto& [name, parameter] : module.named_parameters()) {
-    LoadEntry entry{stem + name, parameter->view(), {}};
-
-    const auto destination = entry.destination;
-    const auto& source = checkpoint.tensor(entry.name);
-
-    if (!std::ranges::equal(source.shape, destination.shape())) {
-      throw std::runtime_error(
-          std::format("tensor '{}' has an unexpected shape", entry.name));
-    }
-
-    if (destination.dtype() == DataType::Float8E4M3FN) {
-      if (source.dtype != DataType::Float8E4M3FN) {
-        throw std::runtime_error(
-            "compact FP8 weight requires an FP8 checkpoint");
-      }
-    } else if (source.dtype == DataType::Float8E4M3FN) {
-      if (source.shape.size() != 2 || !entry.name.ends_with(".weight")) {
-        throw std::runtime_error("FP8 expansion needs a 2D .weight tensor");
-      }
-      entry.scale_name = entry.name + "_scale_inv";
-      plan.count(checkpoint, entry.scale_name);
-    } else if (source.dtype != DataType::BFloat16
-               && source.dtype != DataType::Float32) {
-      throw std::runtime_error(std::format(
-          "tensor '{}' must be BF16, F32 or block F8_E4M3", entry.name));
-    }
-
-    plan.count(checkpoint, entry.name);
-    plan.entries.push_back(std::move(entry));
-  }
-  return plan;
-}
-
-void fill_cpu(const Checkpoint& checkpoint, const LoadEntry& entry,
-              TensorView output, const ModelConfig& config) {
-  if (!entry.scale_name.empty()) {
-    auto scale = Tensor::empty(checkpoint.tensor(entry.scale_name).shape,
-                               DataType::Float32);
-    copy_float(checkpoint, entry.scale_name, scale.view());
-
-    const auto blocks = config.quantization_config->weight_block_size;
-    const auto& info = checkpoint.tensor(entry.name);
-    ConstTensorView weight(checkpoint.raw_data(entry.name).data(), info.dtype,
-                           TensorLayout(info.shape), Device::cpu());
-    if (output.dtype() == DataType::Float32) {
-      kernels::cpu::dequantize_fp8(weight, scale.view(), output, blocks[0],
-                                   blocks[1]);
-    } else {
-      auto expanded = Tensor::empty(info.shape, DataType::Float32);
-      kernels::cpu::dequantize_fp8(weight, scale.view(), expanded.view(),
-                                   blocks[0], blocks[1]);
-      assert(output.dtype() == DataType::BFloat16);
-      for (std::size_t i = 0; i < output.numel(); ++i) {
-        output.data<std::uint16_t>()[i] =
-            bfloat16_bits(expanded.view().data<float>()[i]);
-      }
-    }
-  } else if (output.dtype() == checkpoint.tensor(entry.name).dtype) {
-    const auto bytes = checkpoint.raw_data(entry.name);
-    std::memcpy(output.data(), bytes.data(), bytes.size());
-  } else {
-    copy_float(checkpoint, entry.name, output);
-  }
-}
-
-void apply_load(const LoadPlan& plan, const ModelConfig& config,
-                const Checkpoint& checkpoint) {
-  for (const auto& entry : plan.entries) {
-    if (entry.destination.device().type == DeviceType::Cpu) {
-      fill_cpu(checkpoint, entry, entry.destination, config);
-    } else {
-      auto staging = Tensor::empty(
-          {entry.destination.shape().begin(), entry.destination.shape().end()},
-          entry.destination.dtype());
-      fill_cpu(checkpoint, entry, staging.view(), config);
-
-      const CudaDeviceGuard guard(entry.destination.device().index);
-      check_cuda(cudaMemcpy(entry.destination.data(), staging.data(),
-                            staging.size_bytes(), cudaMemcpyHostToDevice),
-                 std::format("load Qwen3.5 tensor '{}'", entry.name));
-    }
-  }
-}
 
 MoEConfig qwen35_moe_config(const ModelConfig& config) {
   assert(config.quantization_config);
@@ -444,7 +291,7 @@ const MoE& Qwen35DecoderLayer::mlp() const noexcept {
 
 Qwen35Model::Qwen35Model(const ModelConfig& config, Device device,
                          std::size_t cpu_threads,
-                         const ExpertPlacement& gpu_expert_ids_by_layer,
+                         const ExpertPlacement& expert_placement,
                          bool profile_experts,
                          ExpertAdaptationParams expert_adaptation,
                          bool cpu_affinity)
@@ -458,11 +305,12 @@ Qwen35Model::Qwen35Model(const ModelConfig& config, Device device,
   register_module("embed_tokens", embed_tokens_);
   register_module("layers", layers_);
   register_module("norm", norm_);
+
   for (std::size_t i = 0; i < config.num_hidden_layers; ++i) {
-    layers_.emplace_back<Qwen35DecoderLayer>(config, i, device,
-                                             gpu_expert_ids_by_layer[i],
-                                             cpu_pool_, moe_workspace_);
+    layers_.emplace_back<Qwen35DecoderLayer>(
+        config, i, device, expert_placement[i], cpu_pool_, moe_workspace_);
   }
+
   if (profile_experts) {
     expert_profile_.resize(config.num_hidden_layers);
   }
@@ -504,8 +352,6 @@ ExpertAdaptationStats Qwen35Model::expert_adaptation_stats() const {
 Tensor Qwen35Model::forward(ConstTensorView input_ids,
                             ConstTensorView positions,
                             const ForwardContext& context) const {
-  const auto affinity = cpu_pool_.bind_caller();
-  ThreadPool::BusyScope keep_workers(cpu_pool_, context.decode_graphs);
   auto hidden = embed_tokens_.forward(input_ids, context.stream);
   Tensor residual;
   for (std::size_t i = 0; i < layers_.size(); ++i) {
@@ -548,8 +394,6 @@ void Qwen35Model::reset_hybrid_step() const {
 }
 
 void Qwen35Model::run_hybrid_cpu() const {
-  const auto affinity = cpu_pool_.bind_caller();
-  ThreadPool::BusyScope keep_workers(cpu_pool_);
   for (std::size_t i = 0; i < layers_.size(); ++i) {
     layer(i).mlp().complete_hybrid_cpu();
   }
@@ -650,38 +494,36 @@ Qwen35ForCausalLM::Qwen35ForCausalLM(
 ModelLoadResult Qwen35ForCausalLM::load_ckpt(
     const std::filesystem::path& path) {
   Checkpoint checkpoint(path);
-  const auto prefix =
-      config_.architectures[0] == "Qwen3_5MoeForConditionalGeneration"
-          ? "model.language_model"
-          : "model";
-  auto plan = plan_load(model_, checkpoint, prefix);
+  LoadPlan plan(checkpoint, config_);
+
+  plan.add_module(
+      model_, config_.architectures[0] == "Qwen3_5MoeForConditionalGeneration"
+                  ? "model.language_model"
+                  : "model");
   if (!config_.tie_word_embeddings
       || checkpoint.weight_map().contains("lm_head.weight")) {
-    auto head = plan_load(lm_head_, checkpoint, "lm_head");
-
-    for (const auto& name : head.sources) {
-      plan.count(checkpoint, name);
-    }
-
-    for (auto& entry : head.entries) {
-      plan.entries.push_back(std::move(entry));
-    }
+    plan.add_module(lm_head_, "lm_head");
   }
 
+  // 清除两种 attention cache
   model_.clear_cache();
+
+  // 清除每层 MoE 的 CUDA Graph，并且清除 Expert 状态
   for (std::size_t i = 0; i < model_.num_layers(); ++i) {
     model_.layer(i).mlp().invalidate_expert_cache();
   }
 
-  apply_load(plan, config_, checkpoint);
+  // 加载权重到 CPU
+  const auto result = plan.apply();
 
+  // 把需要传递到 GPU 上的专家全部上传到 GPU 上
   if (device_.type == DeviceType::Cuda) {
     for (std::size_t i = 0; i < model_.num_layers(); ++i) {
       model_.layer(i).mlp().populate_expert_cache();
     }
   }
 
-  return plan.result;
+  return result;
 }
 
 Tensor Qwen35ForCausalLM::forward(ConstTensorView input_ids,
@@ -693,14 +535,11 @@ Tensor Qwen35ForCausalLM::forward(ConstTensorView input_ids,
 Tensor Qwen35ForCausalLM::compute_logits(ConstTensorView hidden_states,
                                          const ForwardContext& context) const {
   if (context.is_prefill) {
-    const auto batch = context.cu_seqlens_q.shape()[0] - 1;
-    auto last = Tensor::empty({batch, config_.hidden_size},
-                              hidden_states.dtype(), device_);
-    kernels::cuda::gather_last_hidden(hidden_states, context.cu_seqlens_q,
-                                      last.view(), context.stream);
-    return lm_head_.forward(last.view(), context.stream, DataType::Float32);
+    return lm_head_.forward(hidden_states, context.cu_seqlens_q, context.stream,
+                            DataType::Float32);
+  } else {
+    return lm_head_.forward(hidden_states, context.stream, DataType::Float32);
   }
-  return lm_head_.forward(hidden_states, context.stream, DataType::Float32);
 }
 
 const ModelConfig& Qwen35ForCausalLM::config() const noexcept {
