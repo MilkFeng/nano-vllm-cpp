@@ -19,7 +19,6 @@ NUM_BLOCKS="${NUM_BLOCKS:-128}"
 BLOCK_SIZE="${BLOCK_SIZE:-16}"
 MAX_BATCHED_TOKENS="${MAX_BATCHED_TOKENS:-128}"
 CPU_THREADS="${CPU_THREADS:-7}"
-CPU_AFFINITY="${CPU_AFFINITY:-1}"
 GPU_EXPERT_IDS="${GPU_EXPERT_IDS-0,2,4,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58,60,62,64,66,68,70,72,74,76,78,80,82,84,86,88,90,92,94,96,98,100}"
 EXPERT_ADAPT_EVERY="${EXPERT_ADAPT_EVERY:-4}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)-$$"
@@ -42,9 +41,6 @@ bench_args=(
     --prompts-file "$PROMPTS_FILE"
     --output "$OUTPUT_FILE"
 )
-if [[ "$CPU_AFFINITY" == 1 ]]; then
-    bench_args+=(--cpu-affinity)
-fi
 if [[ -n "$GPU_EXPERT_IDS" ]]; then
     bench_args+=(--gpu-expert-ids "$GPU_EXPERT_IDS")
 fi

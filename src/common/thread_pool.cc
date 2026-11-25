@@ -60,18 +60,9 @@ void ThreadPool::TaskGroup::wait() const {
   }
 }
 
-ThreadPool::ThreadPool(std::size_t num_threads, bool physical_affinity) {
+ThreadPool::ThreadPool(std::size_t num_threads) {
   if (num_threads == 0) {
     throw std::invalid_argument("CPU thread count must be positive");
-  }
-
-  std::vector<unsigned> cpus;
-  if (physical_affinity) {
-    cpus = physical_cpu_ids();
-    if (num_threads > cpus.size()) {
-      throw std::invalid_argument("CPU workers exceed allowed physical cores");
-    }
-    caller_cpu_ = cpus.front();
   }
 
   workers_.reserve(num_threads);
@@ -79,12 +70,6 @@ ThreadPool::ThreadPool(std::size_t num_threads, bool physical_affinity) {
   try {
     for (std::size_t i = 0; i < num_threads; ++i) {
       workers_.emplace_back([this] { run(); });
-      if (physical_affinity) {
-        // Reserve the first physical core for the GPU submission thread when
-        // possible. With all cores occupied, the caller shares the first core.
-        const auto offset = num_threads < cpus.size() ? 1 : 0;
-        pin_cpu_thread(workers_.back().native_handle(), cpus[i + offset]);
-      }
     }
   } catch (...) {
     stop();
@@ -94,10 +79,6 @@ ThreadPool::ThreadPool(std::size_t num_threads, bool physical_affinity) {
 
 ThreadPool::~ThreadPool() {
   stop();
-}
-
-ScopedCpuAffinity ThreadPool::bind_caller() const {
-  return ScopedCpuAffinity(caller_cpu_);
 }
 
 ThreadPool::BusyScope::BusyScope(ThreadPool& pool, bool enabled)

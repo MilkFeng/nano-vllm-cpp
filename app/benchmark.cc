@@ -267,7 +267,6 @@ int main(int argc, char** argv) {
           {"num_blocks", params.num_kvcache_blocks},
           {"block_size", params.kvcache_block_size},
           {"cpu_threads", params.cpu_threads},
-          {"cpu_affinity", params.cpu_affinity},
           {"gpu_expert_ids", params.gpu_expert_ids}}},
         {"cases", Json::array()},
     };

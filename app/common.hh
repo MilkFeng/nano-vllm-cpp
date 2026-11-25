@@ -74,8 +74,6 @@ inline std::optional<Options> parse_args(int argc, char** argv, Mode mode,
   app.add_option("--cpu-threads", params.cpu_threads,
                  "Qwen3.5 CPU expert workers shared by all layers (default: 8)")
       ->check(CLI::PositiveNumber);
-  app.add_flag("--cpu-affinity", params.cpu_affinity,
-               "Bind workers to physical cores; reserve caller core when possible");
   app.add_option("--gpu-expert-ids", params.gpu_expert_ids,
                  "Initial GPU expert IDs for every Qwen3.5 layer; the list "
                  "length sets each layer's cache capacity (default: empty)")

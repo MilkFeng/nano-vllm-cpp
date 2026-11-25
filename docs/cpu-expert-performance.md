@@ -18,10 +18,6 @@ Qwen3.5-35B-A3B-FP8，专家 H=2048、I=512、FP8 E4M3FN、128×128 分块缩放
   `std::function` / `packaged_task` / future。较大批次用一次 `notify_all` 唤醒。
   top-8 的任务上下文使用栈数组；批次状态和描述符仍有分配，尚未声称完全零分配。
   prefill 同样采用批量提交。异常路径等待所有 CPU 任务完成后再释放缓冲区。
-- 新增 `--cpu-affinity`（默认关闭）。读取当前允许的 CPU 拓扑，每物理核选一个
-  逻辑 CPU，worker 不使用同核的 SMT 兄弟。有空余核时，把模型 forward 的调用线程
-  留在第一个物理核，worker 从第二个核开始；占满物理核时调用线程与首个 worker
-  共用第一个逻辑 CPU。退出 forward 后恢复原调用线程亲和性。
 
 ## 整模型结果
 
@@ -48,7 +44,7 @@ MoE 在提交 GPU 工作后等待 CPU 批次完成的时间，不包含 CPU 提�
 本次实现仍有 GPU kernel、提交、同步与其他层计算成本，因此专家微基准加速比
 不能直接当作整模型加速比。
 
-## CPU 微基准与线程分配
+## 历史 CPU 微基准与线程分配
 
 使用模型第 0 层的 64 个真实专家，合计约 192 MiB 权重。轮换步长为当批任务数，
 因此 1/2/4/8 个并行任务都会遍历全部 64 个专家，工作集超过 L3；另测固定同一专家
@@ -79,22 +75,11 @@ CPU 0,2,…,14，调用线程与首个 worker 共用 CPU 0。
 整模型另外测了缓存 16、7 worker、绑物理核并预留提交核的组合，条件与上表相同。
 三轮为 14.41 / 14.38 / 14.68 tok/s，均值 **14.49 tok/s**，相对默认 8 worker、
 不绑核的 13.95 提升约 **3.9%**，CPU 等待约 11.89 ms/token。三轮输出 token、
-专家分配与替换统计均与对应基线一致。该组合在本机略有收益，可以使用：
-
-```bash
-./build/nano-vllm-cpp-bench --model /path/to/Qwen3.5-35B-A3B-FP8 \
-  --input-tokens 128 --output-tokens 128 --batch-sizes 1 \
-  --num-blocks 32 --block-size 16 --max-batched-tokens 128 \
-  --seed 42 \
-  --cpu-threads 7 --cpu-affinity \
-  --gpu-expert-ids 0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30 \
-  --expert-adapt-every 4 --warmup 1 --repeat 3 --output cpu-expert.json
-```
+专家分配与替换统计均与对应基线一致。
 
 这一组测试同时改变了 worker 数与绑定策略，不能单独归因于绑核。
 微基准覆盖全部 6/7/8 × 绑定/不绑定组合，整模型只比较默认 8、不绑定与 7、绑定；
 其他 CPU、NUMA、SMT、推理并发度和 prompt 的最优分配仍可能不同。
-收益较小且只有单机单 prompt，因此保留默认 8 worker、不绑核，亲和性由参数开启。
 
 ## 验证与复现
 
@@ -108,14 +93,13 @@ NANOVLLM_CPU_ISA=avx512 ./build/nano-vllm-cpp-cpu-bench \
 ```
 
 CPU 检查覆盖所有 256 种 FP8 编码、不同规模和缩放块的尾部、多输出通道跨缩放行、
-完整单/多 token 专家、混合单任务与批次、并发提交、异常、移动与析构等待、亲和性恢复。
+完整单/多 token 专家、混合单任务与批次、并发提交、异常、移动与析构等待。
 完整分块的单 token 主路径要求逐位一致；任意尾部对独立标量参考使用误差界，
 因为编译选项及多 token 循环的标量浮点收缩可能不同。
 额外使用冻结旧实现做 Release 差分检查，覆盖尾部尺寸及 1/2/3/4/7 token，
 以及 64 个真实专家的单 token 输出，均逐位一致。
 AVX2 / AVX-512 的 AddressSanitizer、UndefinedBehaviorSanitizer 和 LeakSanitizer
-均通过；没有依靠降低模型精度获得加速。Windows 亲和性与 ISA 检测已实现，
-本环境未做 Windows 编译或性能测试。
+均通过；没有依靠降低模型精度获得加速。本环境未做 Windows 编译或性能测试。
 
 原始 JSON、各轮日志、冻结参考实现、测量程序、源码与可执行文件哈希位于
 `profile/cpu-experts-20261104/`。该目录不提交二进制和模型权重。

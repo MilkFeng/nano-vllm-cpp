@@ -239,15 +239,7 @@ int main() {
     check_experts();
     // The deliberate unwind also checks TaskGroup argument lifetime.
     try {pool();} catch(int) {}
-    const auto ids=physical_cpu_ids();
-    {
-      ThreadPool pool(std::min<std::size_t>(2,ids.size()),true);
-      {auto binding=pool.bind_caller();
-        require(physical_cpu_ids().size()==1,"caller core affinity");}
-      require(physical_cpu_ids()==ids,"caller affinity restored");
-      auto task=pool.submit([]{});task.get();
-    }
     std::cout<<"PASS: "<<fp8_cpu_isa()<<" FP8 encodings, reductions, tiles, tails, "
-               "bulk tasks, exceptions and physical affinity\n";
+               "bulk tasks and exceptions\n";
   }catch(const std::exception& e) {std::cerr<<e.what()<<'\n';return 1;}
 }

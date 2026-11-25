@@ -103,8 +103,8 @@ int main(int argc,char** argv) {
   }
   report["bitwise_experts_checked"]=64;
 #endif
-  for(const bool pinned:{false,true}) for(const unsigned workers:{6,7,8}) {
-    ThreadPool pool(workers,pinned);auto affinity=pool.bind_caller();
+  for(const unsigned workers:{6,7,8}) {
+    ThreadPool pool(workers);
     for(const unsigned jobs:{1,2,4,8}) for(const bool rotating:{false,true}) {
       std::array<Job,8> context;
       std::array<ThreadPool::Task,8> descriptors;
@@ -131,10 +131,10 @@ int main(int argc,char** argv) {
       }
       for(std::size_t b=0;b<backends.size();++b) {
         Json result={{"backend",backends[b].first},{"workers",workers},
-                     {"pinned",pinned},{"jobs",jobs},{"rotating",rotating},
+                     {"jobs",jobs},{"rotating",rotating},
                      {"median_us",median(times[b])},{"samples_us",times[b]}};
         report["cases"].push_back(result);
-        std::cout<<backends[b].first<<" workers="<<workers<<" pinned="<<pinned
+        std::cout<<backends[b].first<<" workers="<<workers
                  <<" jobs="<<jobs<<" rotating="<<rotating<<" us="<<median(times[b])<<std::endl;
       }
     }
@@ -152,7 +152,7 @@ int main(int argc,char** argv) {
         }
         times.push_back(std::chrono::duration<double,std::micro>(Clock::now()-begin).count());
       }
-      report["dispatch"].push_back({{"workers",workers},{"pinned",pinned},
+      report["dispatch"].push_back({{"workers",workers},
                                      {"bulk",bulk},{"median_us",median(times)}});
     }
   }

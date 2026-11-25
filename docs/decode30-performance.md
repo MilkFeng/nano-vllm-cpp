@@ -36,7 +36,7 @@ token ID 完全一致。前三轮 assignment ratio 也一致，约为 40.52% / 4
 每轮有 127 个 decode token；prefill 产生的首 token 不计入 decode 分子。
 模型加载约两分钟，单独记录，不计入吞吐。
 
-## 复现
+## 当前版本运行命令
 
 ```bash
 cmake --build build --target nano-vllm-cpp-bench -j4
@@ -44,14 +44,13 @@ cmake --build build --target nano-vllm-cpp-bench -j4
   --model build/perf-model-cache/Qwen3.5-35B-A3B-FP8 \
   --input-tokens 128 --output-tokens 128 --batch-sizes 1 \
   --warmup 1 --repeat 3 --num-blocks 32 --block-size 16 \
-  --max-batched-tokens 128 --cpu-threads 7 --cpu-affinity \
+  --max-batched-tokens 128 --cpu-threads 7 \
   --gpu-expert-ids 0,2,4,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58,60,62,64,66 \
   --expert-adapt-every 4 --output decode30.json
 ```
 
 该名单实际有 **33 个 ID**。全模型各层合计的专家权重与 scale 缓存约 3.87 GiB，
-路由表、激活和递推状态另计。`scripts/start_bench.sh` 和 PowerShell 版本已使用这份
-名单及 7 worker / affinity 配置；模型路径保持各脚本原有设置。
+路由表、激活和递推状态另计。历史运行配置见 [原始记录](decode30-results.json)。
 
 ## 实现
 
@@ -83,7 +82,7 @@ cmake --build build --target nano-vllm-cpp-bench -j4
 
 - 紧凑 FP8/BF16 权重：120 组逐位对照，覆盖 decode、prefill、非对齐尺寸。
 - 批量 GPU 专家：9 组与原逐专家执行逐位一致，包含真实 H=2048 / I=512 和尾部尺寸。
-- CPU：覆盖全部 256 种 FP8 编码、归约、尾部、线程池批次、异常及亲和性。
+- CPU：覆盖全部 256 种 FP8 编码、归约、尾部、线程池批次和异常。
 - MoE：零、部分、全部 GPU 专家，带/不带共享分支，stream 切换、在线换入和 usage 计数。
 - 分段图和整步图各连续 32 步，对照输出、residual、卷积历史和递推状态，要求逐位一致。
 - 阶段性的 CUDA memcheck、initcheck 均为 **0 errors**。这两次记录早于最后的
