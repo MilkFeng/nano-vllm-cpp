@@ -1,18 +1,17 @@
 #include "models/qwen35.hh"
 
 #include <algorithm>
-#include <array>
 #include <cassert>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include "common/cuda_utils.hh"
 #include "core/checkpoint.hh"
 #include "core/device.hh"
 #include "core/load_plan.hh"
-#include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 namespace {
@@ -48,93 +47,6 @@ void zero_tensor(TensorView tensor, cudaStream_t stream) {
 }
 
 } // namespace
-
-Qwen35Attention::Qwen35Attention(const ModelConfig& config, Device device)
-    : hidden_size_(config.hidden_size),
-      num_heads_(config.num_attention_heads),
-      num_kv_heads_(config.num_key_value_heads),
-      head_dim_(config.head_dim),
-      q_size_(config.q_size()),
-      q_proj_(hidden_size_, 2 * q_size_, device),
-      k_proj_(hidden_size_, config.kv_size(), device),
-      v_proj_(hidden_size_, config.kv_size(), device),
-      o_proj_(q_size_, hidden_size_, device),
-      q_norm_(head_dim_, config.rms_norm_eps, DataType::BFloat16, device, true),
-      k_norm_(head_dim_, config.rms_norm_eps, DataType::BFloat16, device, true),
-      rotary_emb_(config.max_position_embeddings, head_dim_, config.rope_theta,
-                  device, config.rotary_dim()) {
-  assert(!config.attention_bias);
-  register_module("q_proj", q_proj_);
-  register_module("k_proj", k_proj_);
-  register_module("v_proj", v_proj_);
-  register_module("o_proj", o_proj_);
-  register_module("q_norm", q_norm_);
-  register_module("k_norm", k_norm_);
-}
-
-void Qwen35Attention::build_rope_cache(cudaStream_t stream) {
-  rotary_emb_.build_cache(stream);
-}
-
-Tensor Qwen35Attention::forward(ConstTensorView positions,
-                                ConstTensorView hidden_states,
-                                const ForwardContext& context) const {
-  const auto tokens = hidden_states.shape()[0];
-  const auto stream = context.stream;
-  const auto device = hidden_states.device();
-
-  auto packed = q_proj_.forward(hidden_states, stream);
-  auto query_heads = Tensor::empty({tokens, num_heads_, head_dim_},
-                                   DataType::BFloat16, device);
-  auto gate = Tensor::empty({tokens, num_heads_, head_dim_}, DataType::BFloat16,
-                            device);
-
-  kernels::cuda::split_attention_gate(packed.view(), query_heads.view(),
-                                      gate.view(), stream);
-
-  auto k = k_proj_.forward(hidden_states, stream);
-  auto v = v_proj_.forward(hidden_states, stream);
-
-  const auto key_heads =
-      k.reshape(std::array{tokens, num_kv_heads_, head_dim_});
-  const auto value = v.reshape(std::array{tokens, num_kv_heads_, head_dim_});
-
-  auto query = q_norm_.forward(query_heads.view(), stream);
-  auto key = k_norm_.forward(key_heads.view(), stream);
-
-  rotary_emb_.forward(positions, query.view(), key.view(), stream);
-  auto output = Tensor::empty({tokens, num_heads_, head_dim_},
-                              DataType::BFloat16, device);
-
-  kernels::cuda::flash_attn_with_kvcache(
-      query.view(), key_cache_, value_cache_, key.view(), value.view(),
-      context.cu_seqlens_q, context.cu_seqlens_k, context.max_seqlen_q,
-      context.max_seqlen_k, context.block_tables, output.view(), true, stream,
-      context.attention_workspace);
-
-  kernels::cuda::apply_sigmoid_gate(output.view(), gate.view(), stream);
-
-  const auto flattened = output.reshape(std::array{tokens, q_size_});
-  return o_proj_.forward(flattened.view(), stream);
-}
-
-void Qwen35Attention::set_kv_cache(TensorView key, TensorView value) {
-  key_cache_ = key;
-  value_cache_ = value;
-}
-
-void Qwen35Attention::clear_kv_cache() noexcept {
-  key_cache_ = {};
-  value_cache_ = {};
-}
-
-ConstTensorView Qwen35Attention::key_cache() const {
-  return ConstTensorView(key_cache_);
-}
-
-ConstTensorView Qwen35Attention::value_cache() const {
-  return ConstTensorView(value_cache_);
-}
 
 Qwen35Cache::Qwen35Cache(const ModelConfig& config, std::size_t num_blocks,
                          std::size_t block_size, std::size_t state_slots,
@@ -212,7 +124,11 @@ Qwen35DecoderLayer::Qwen35DecoderLayer(
       post_attention_layernorm_(config.hidden_size, config.rms_norm_eps,
                                 DataType::BFloat16, device, true) {
   if (config.layer_types.at(index) == AttentionType::Full) {
-    self_attn_ = std::make_unique<Qwen35Attention>(config, device);
+    self_attn_ = std::make_unique<Qwen35SelfAttention>(
+        config.hidden_size, config.num_attention_heads,
+        config.num_key_value_heads, config.head_dim, config.rms_norm_eps,
+        config.max_position_embeddings, config.rope_theta, DataType::BFloat16,
+        device, config.rotary_dim(), true);
     register_module("self_attn", *self_attn_);
   } else {
     linear_attn_ = std::make_unique<GatedDeltaNet>(config, device);
@@ -273,7 +189,7 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
   return {std::move(output.hidden_states), std::move(after[1])};
 }
 
-Qwen35Attention* Qwen35DecoderLayer::self_attention() noexcept {
+Qwen35SelfAttention* Qwen35DecoderLayer::self_attention() noexcept {
   return self_attn_.get();
 }
 

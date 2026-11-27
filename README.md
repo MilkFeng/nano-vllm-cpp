@@ -273,7 +273,7 @@ auto outputs = engine.generate(prompts, {.temperature = 0.0f});
 
 `src/layers/` 放通用的 `Linear`、`Embedding`、`RMSNorm`、`SwiGLUMLP`、`LMHead` 和 `RotaryEmbedding`。这些层接收具体维度，不依赖 `ModelConfig`；CUDA 算子和头文件放在 `src/kernels/cuda/`；CPU 算子放在 `src/kernels/cpu/`。
 
-`src/models/qwen3.hh/.cc` 负责 Qwen3 Attention、DecoderLayer 和模型组装。`compute_logits()` 在 prefill 时选出每条序列最后一个 token 的 hidden state，再交给只做词表投影的 `LMHead`。`src/core/forward_context.hh` 保存由 ModelRunner 准备的执行元数据，包括 KV block table 和 CUDA stream。
+`src/models/qwen3.hh/.cc` 负责 Qwen3 DecoderLayer 和模型组装。`Qwen3SelfAttention` 使用 `src/layers/self_attention.hh` 中的 `SelfAttention` 模板，采用无 bias 的 QKV 投影和 Q/K RMSNorm。`compute_logits()` 在 prefill 时调用 `LMHead` 的 `cu_seqlens_q` 重载，取每条序列最后一个 token 的 hidden state 做词表投影。`src/core/forward_context.hh` 保存由 ModelRunner 准备的执行元数据，包括 KV block table 和 CUDA stream。
 
 `Qwen3Cache` 统一持有全部层的 K/V，两个 Tensor 的 shape 均为
 `[num_hidden_layers, num_blocks, block_size, num_key_value_heads, head_dim]`，
@@ -540,9 +540,9 @@ CPU 与 GPU 都接收原始 BF16 激活，结果可能因累加顺序和中间�
 
 ### Qwen3.5 文本模型与加载
 
-`src/models/qwen35.hh/.cc` 按 Qwen3 的结构提供 `Qwen35Attention`、
-`Qwen35DecoderLayer`、`Qwen35Model` 和继承 `Model` 的 `Qwen35ForCausalLM`。
-每层根据 `ModelConfig::layer_types` 构造 full attention 或 GatedDeltaNet，
+`src/models/qwen35.hh/.cc` 提供 `Qwen35DecoderLayer`、`Qwen35Model`
+和继承 `Model` 的 `Qwen35ForCausalLM`。每层根据 `ModelConfig::layer_types`
+选择 `Qwen35SelfAttention` 或 `GatedDeltaNet`，
 FFN 使用带共享专家的 MoE。`forward()` 返回最终归一化的 hidden states，
 `compute_logits()` 单独调用 LM head；prefill 只取每条序列的最后一行。
 

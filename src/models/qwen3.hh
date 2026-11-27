@@ -1,63 +1,20 @@
 #pragma once
 
 #include <cstddef>
-#include <memory>
 #include <optional>
 
 #include "core/forward_context.hh"
 #include "core/model.hh"
 #include "core/model_config.hh"
 #include "layers/embedding.hh"
-#include "layers/linear.hh"
 #include "layers/lm_head.hh"
 #include "layers/rms_norm.hh"
-#include "layers/rotary_embedding.hh"
+#include "layers/self_attention.hh"
 #include "layers/swiglu_mlp.hh"
 
 namespace nanovllm {
 
-class Qwen3Attention final : public Module {
- public:
-  Qwen3Attention(const ModelConfig& config, DataType dtype, Device device);
-
-  void build_rope_cache(cudaStream_t stream);
-
-  [[nodiscard]] Tensor forward(ConstTensorView positions,
-                               ConstTensorView hidden_states,
-                               const ForwardContext& context = {}) const;
-
-  void set_kv_cache(TensorView key_cache, TensorView value_cache);
-  void clear_kv_cache() noexcept;
-
-  [[nodiscard]] ConstTensorView key_cache() const;
-  [[nodiscard]] ConstTensorView value_cache() const;
-
-  [[nodiscard]] std::size_t num_heads() const noexcept;
-  [[nodiscard]] std::size_t num_kv_heads() const noexcept;
-  [[nodiscard]] std::size_t head_dim() const noexcept;
-  [[nodiscard]] std::size_t q_size() const noexcept;
-  [[nodiscard]] std::size_t kv_size() const noexcept;
-
- private:
-  std::size_t hidden_size_;
-  std::size_t num_heads_;
-  std::size_t num_kv_heads_;
-  std::size_t head_dim_;
-  std::size_t q_size_;
-  std::size_t kv_size_;
-  bool qkv_bias_;
-
-  Linear q_proj_;
-  Linear k_proj_;
-  Linear v_proj_;
-  Linear o_proj_;
-  std::unique_ptr<RMSNorm> q_norm_;
-  std::unique_ptr<RMSNorm> k_norm_;
-  RotaryEmbedding rotary_emb_;
-
-  TensorView key_cache_;
-  TensorView value_cache_;
-};
+using Qwen3SelfAttention = SelfAttention<false, false>;
 
 class Qwen3Cache final {
  public:
@@ -90,11 +47,11 @@ class Qwen3DecoderLayer final : public Module {
       std::optional<ConstTensorView> residual = std::nullopt,
       const ForwardContext& context = {}) const;
 
-  [[nodiscard]] Qwen3Attention& self_attention() noexcept;
-  [[nodiscard]] const Qwen3Attention& self_attention() const noexcept;
+  [[nodiscard]] Qwen3SelfAttention& self_attention() noexcept;
+  [[nodiscard]] const Qwen3SelfAttention& self_attention() const noexcept;
 
  private:
-  Qwen3Attention self_attn_;
+  Qwen3SelfAttention self_attn_;
   SwiGLUMLP mlp_;
   RMSNorm input_layernorm_;
   RMSNorm post_attention_layernorm_;

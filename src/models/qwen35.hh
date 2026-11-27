@@ -16,34 +16,12 @@
 #include "layers/lm_head.hh"
 #include "layers/moe/moe.hh"
 #include "layers/rms_norm.hh"
-#include "layers/rotary_embedding.hh"
+#include "layers/self_attention.hh"
 #include "nanovllm/nanovllm.hh"
 
 namespace nanovllm {
 
-class Qwen35Attention final : public Module {
- public:
-  Qwen35Attention(const ModelConfig& config, Device device);
-
-  void build_rope_cache(cudaStream_t stream);
-
-  [[nodiscard]] Tensor forward(ConstTensorView positions,
-                               ConstTensorView hidden_states,
-                               const ForwardContext& context) const;
-
-  void set_kv_cache(TensorView key, TensorView value);
-  void clear_kv_cache() noexcept;
-
-  [[nodiscard]] ConstTensorView key_cache() const;
-  [[nodiscard]] ConstTensorView value_cache() const;
-
- private:
-  std::size_t hidden_size_, num_heads_, num_kv_heads_, head_dim_, q_size_;
-  FP8Linear q_proj_, k_proj_, v_proj_, o_proj_;
-  RMSNorm q_norm_, k_norm_;
-  RotaryEmbedding rotary_emb_;
-  TensorView key_cache_, value_cache_;
-};
+using Qwen35SelfAttention = SelfAttention<true, true>;
 
 class Qwen35Cache final {
  public:
@@ -85,13 +63,13 @@ class Qwen35DecoderLayer final : public Module {
       std::optional<ConstTensorView> residual, const ForwardContext& context,
       MoEPhaseProfile* profile = nullptr, ExpertUsage* usage = nullptr) const;
 
-  [[nodiscard]] Qwen35Attention* self_attention() noexcept;
+  [[nodiscard]] Qwen35SelfAttention* self_attention() noexcept;
   [[nodiscard]] GatedDeltaNet* linear_attention() noexcept;
   [[nodiscard]] MoE& mlp() noexcept;
   [[nodiscard]] const MoE& mlp() const noexcept;
 
  private:
-  std::unique_ptr<Qwen35Attention> self_attn_;
+  std::unique_ptr<Qwen35SelfAttention> self_attn_;
   std::unique_ptr<GatedDeltaNet> linear_attn_;
   MoE mlp_;
   RMSNorm input_layernorm_, post_attention_layernorm_;

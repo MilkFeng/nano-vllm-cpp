@@ -342,6 +342,7 @@ void ModelConfig::assert_valid() const {
   }
 
   if (architecture == ModelArchitecture::Qwen3) {
+    assert(!attention_bias);
     assert(model_type == "qwen3");
     assert(intermediate_size > 0);
     assert(!quantization_config);

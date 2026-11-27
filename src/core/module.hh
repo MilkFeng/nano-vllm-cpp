@@ -18,6 +18,7 @@ class Parameter {
 
   [[nodiscard]] Tensor& tensor() noexcept;
   [[nodiscard]] const Tensor& tensor() const noexcept;
+
   [[nodiscard]] TensorView view();
   [[nodiscard]] ConstTensorView view() const;
 
@@ -37,6 +38,7 @@ class Module {
 
   Module(const Module&) = delete;
   Module& operator=(const Module&) = delete;
+
   Module(Module&&) = delete;
   Module& operator=(Module&&) = delete;
 

@@ -3,11 +3,8 @@
 #include <array>
 #include <cassert>
 #include <optional>
-#include <stdexcept>
 #include <utility>
 #include <vector>
-
-#include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
 namespace {
@@ -26,121 +23,6 @@ TensorView cache_layer(Tensor& pool, std::size_t index) {
 }
 
 } // namespace
-
-Qwen3Attention::Qwen3Attention(const ModelConfig& config, DataType dtype,
-                               Device device)
-    : hidden_size_(config.hidden_size),
-      num_heads_(config.num_attention_heads),
-      num_kv_heads_(config.num_key_value_heads),
-      head_dim_(config.head_dim),
-      q_size_(num_heads_ * head_dim_),
-      kv_size_(num_kv_heads_ * head_dim_),
-      qkv_bias_(config.attention_bias),
-      q_proj_(hidden_size_, q_size_, qkv_bias_, dtype, device),
-      k_proj_(hidden_size_, kv_size_, qkv_bias_, dtype, device),
-      v_proj_(hidden_size_, kv_size_, qkv_bias_, dtype, device),
-      o_proj_(q_size_, hidden_size_, false, dtype, device),
-      rotary_emb_(config.max_position_embeddings, head_dim_, config.rope_theta,
-                  device) {
-  if (config.rope_scaling) {
-    throw std::invalid_argument("Qwen3 RoPE scaling is not implemented");
-  }
-
-  register_module("q_proj", q_proj_);
-  register_module("k_proj", k_proj_);
-  register_module("v_proj", v_proj_);
-  register_module("o_proj", o_proj_);
-
-  if (!qkv_bias_) {
-    q_norm_ = std::make_unique<RMSNorm>(head_dim_, config.rms_norm_eps, dtype,
-                                        device);
-    k_norm_ = std::make_unique<RMSNorm>(head_dim_, config.rms_norm_eps, dtype,
-                                        device);
-
-    register_module("q_norm", *q_norm_);
-    register_module("k_norm", *k_norm_);
-  }
-}
-
-void Qwen3Attention::build_rope_cache(cudaStream_t stream) {
-  rotary_emb_.build_cache(stream);
-}
-
-Tensor Qwen3Attention::forward(ConstTensorView positions,
-                               ConstTensorView hidden_states,
-                               const ForwardContext& context) const {
-  const auto stream = context.stream;
-  const auto device = q_proj_.weight().view().device();
-
-  const auto tokens = hidden_states.shape()[0];
-
-  auto query_projection = q_proj_.forward(hidden_states, stream);
-  auto key_projection = k_proj_.forward(hidden_states, stream);
-  auto value_projection = v_proj_.forward(hidden_states, stream);
-
-  auto query_heads =
-      query_projection.reshape(std::array{tokens, num_heads_, head_dim_});
-  auto key_heads =
-      key_projection.reshape(std::array{tokens, num_kv_heads_, head_dim_});
-  auto value =
-      value_projection.reshape(std::array{tokens, num_kv_heads_, head_dim_});
-
-  auto query =
-      q_norm_ ? q_norm_->forward(query_heads.view(), stream) : query_heads;
-  auto key = k_norm_ ? k_norm_->forward(key_heads.view(), stream) : key_heads;
-
-  rotary_emb_.forward(positions, query.view(), key.view(), stream);
-
-  auto attention_output = Tensor::empty({tokens, num_heads_, head_dim_},
-                                        hidden_states.dtype(), device);
-  kernels::cuda::flash_attn_with_kvcache(
-      query.view(), key_cache_, value_cache_, key.view(), value.view(),
-      context.cu_seqlens_q, context.cu_seqlens_k, context.max_seqlen_q,
-      context.max_seqlen_k, context.block_tables, attention_output.view(), true,
-      stream, context.attention_workspace);
-
-  const auto flattened = attention_output.reshape(std::array{tokens, q_size_});
-  return o_proj_.forward(flattened.view(), stream);
-}
-
-void Qwen3Attention::set_kv_cache(TensorView key_cache,
-                                  TensorView value_cache) {
-  key_cache_ = std::move(key_cache);
-  value_cache_ = std::move(value_cache);
-}
-
-void Qwen3Attention::clear_kv_cache() noexcept {
-  key_cache_ = {};
-  value_cache_ = {};
-}
-
-ConstTensorView Qwen3Attention::key_cache() const {
-  return ConstTensorView(key_cache_);
-}
-
-ConstTensorView Qwen3Attention::value_cache() const {
-  return ConstTensorView(value_cache_);
-}
-
-std::size_t Qwen3Attention::num_heads() const noexcept {
-  return num_heads_;
-}
-
-std::size_t Qwen3Attention::num_kv_heads() const noexcept {
-  return num_kv_heads_;
-}
-
-std::size_t Qwen3Attention::head_dim() const noexcept {
-  return head_dim_;
-}
-
-std::size_t Qwen3Attention::q_size() const noexcept {
-  return q_size_;
-}
-
-std::size_t Qwen3Attention::kv_size() const noexcept {
-  return kv_size_;
-}
 
 Qwen3Cache::Qwen3Cache(const ModelConfig& config, std::size_t num_blocks,
                        std::size_t block_size, Device device) {
@@ -167,7 +49,10 @@ std::size_t Qwen3Cache::kv_bytes() const {
 
 Qwen3DecoderLayer::Qwen3DecoderLayer(const ModelConfig& config, DataType dtype,
                                      Device device)
-    : self_attn_(config, dtype, device),
+    : self_attn_(config.hidden_size, config.num_attention_heads,
+                 config.num_key_value_heads, config.head_dim,
+                 config.rms_norm_eps, config.max_position_embeddings,
+                 config.rope_theta, dtype, device),
       mlp_(config.hidden_size, config.intermediate_size, dtype, device),
       input_layernorm_(config.hidden_size, config.rms_norm_eps, dtype, device),
       post_attention_layernorm_(config.hidden_size, config.rms_norm_eps, dtype,
@@ -206,11 +91,11 @@ Qwen3DecoderLayerOutput Qwen3DecoderLayer::forward(
   return {std::move(output), std::move(after_attention.residual)};
 }
 
-Qwen3Attention& Qwen3DecoderLayer::self_attention() noexcept {
+Qwen3SelfAttention& Qwen3DecoderLayer::self_attention() noexcept {
   return self_attn_;
 }
 
-const Qwen3Attention& Qwen3DecoderLayer::self_attention() const noexcept {
+const Qwen3SelfAttention& Qwen3DecoderLayer::self_attention() const noexcept {
   return self_attn_;
 }
 
@@ -311,13 +196,8 @@ Tensor Qwen3ForCausalLM::forward(ConstTensorView input_ids,
 Tensor Qwen3ForCausalLM::compute_logits(ConstTensorView hidden_states,
                                         const ForwardContext& context) const {
   if (context.is_prefill) {
-    const auto batch = context.cu_seqlens_q.shape()[0] - 1;
-    auto last_hidden =
-        Tensor::empty({batch, config_.hidden_size}, hidden_states.dtype(),
-                      hidden_states.device());
-    kernels::cuda::gather_last_hidden(hidden_states, context.cu_seqlens_q,
-                                      last_hidden.view(), context.stream);
-    return lm_head_.forward(last_hidden.view(), context.stream);
+    return lm_head_.forward(hidden_states, context.cu_seqlens_q,
+                            context.stream);
   }
   return lm_head_.forward(hidden_states, context.stream);
 }

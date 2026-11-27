@@ -13,6 +13,7 @@
 #include "kernels/cuda/kernels.hh"
 #include "layers/causal_conv1d.hh"
 #include "layers/lm_head.hh"
+#include "layers/rotary_embedding.hh"
 #include "models/qwen35.hh"
 
 using namespace nanovllm;
@@ -443,7 +444,11 @@ void check_projection_layout() {
   config.linear_conv_kernel_dim = 4;
   const auto cpu = Device::cpu();
   GatedDeltaNet delta(config, cpu);
-  Qwen35Attention attention(config, gpu);
+  Qwen35SelfAttention attention(
+      config.hidden_size, config.num_attention_heads, config.num_key_value_heads,
+      config.head_dim, config.rms_norm_eps, config.max_position_embeddings,
+      config.rope_theta, DataType::BFloat16, gpu, config.rotary_dim(),
+      /*zero_centered_norm=*/true);
   FP8SwiGLUMLP shared(16, 17, cpu);
   FP8Expert expert(16, 17, cpu);
   const auto check_fp8 = [](Module& module, const char* name) {
