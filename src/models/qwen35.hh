@@ -70,10 +70,14 @@ class Qwen35DecoderLayer final : public Module {
   [[nodiscard]] const MoE& mlp() const noexcept;
 
  private:
+  // 两个注意力二选一
   std::unique_ptr<Qwen35SelfAttention> self_attn_;
   std::unique_ptr<GatedDeltaNet> linear_attn_;
+
   MoE mlp_;
   RMSNorm input_layernorm_, post_attention_layernorm_;
+
+  // 只对 linear_attn_ 建立 CUDA Graph
   mutable DecodeGraph decode_prefix_;
 };
 

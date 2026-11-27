@@ -120,6 +120,7 @@ Qwen35DecoderLayer::Qwen35DecoderLayer(
     linear_attn_ = std::make_unique<GatedDeltaNet>(config, device);
     register_module("linear_attn", *linear_attn_);
   }
+
   register_module("mlp", mlp_);
   register_module("input_layernorm", input_layernorm_);
   register_module("post_attention_layernorm", post_attention_layernorm_);
@@ -131,6 +132,7 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
     MoEPhaseProfile* profile, ExpertUsage* usage) const {
   const auto prefix = [&]() -> std::vector<Tensor> {
     RMSNormOutput before;
+
     auto residual_view = hidden_states;
     auto residual_dtype = DataType::Float32;
     if (residual) {
@@ -139,35 +141,39 @@ Qwen35DecoderLayerOutput Qwen35DecoderLayer::forward(
       residual_view = before.residual.view();
       residual_dtype = residual->dtype();
     } else {
-      // The FP32 residual stream starts at the post-attention fused add:
-      // the BF16 embedding output is added there directly, so no separate
-      // FP32 copy is materialized before attention.
       before.hidden_states =
           input_layernorm_.forward(hidden_states, context.stream);
     }
 
-    auto attention =
-        self_attn_
-            ? self_attn_->forward(positions, before.hidden_states.view(),
-                                  context)
-            : linear_attn_->forward(
-                  before.hidden_states.view(),
-                  context.is_prefill ? context.cu_seqlens_q : ConstTensorView{},
-                  context.state_indices, context.stream);
+    Tensor attention;
+    if (self_attn_) {
+      attention =
+          self_attn_->forward(positions, before.hidden_states.view(), context);
+    } else {
+      attention = linear_attn_->forward(
+          before.hidden_states.view(),
+          context.is_prefill ? context.cu_seqlens_q : ConstTensorView{},
+          context.state_indices, context.stream);
+    }
+
     auto after = post_attention_layernorm_.forward(
         attention.view(), residual_view, residual_dtype, context.stream);
+
     return {std::move(after.hidden_states), std::move(after.residual)};
   };
-  auto after =
-      context.decode_graphs && linear_attn_
-          ? decode_prefix_.run(
-                context.stream,
-                {hidden_states.data(), residual ? residual->data() : nullptr,
-                 context.state_indices.data(),
-                 linear_attn_->conv_state().data(),
-                 linear_attn_->recurrent_state().data()},
-                prefix)
-          : prefix();
+
+  std::vector<Tensor> after;
+  if (context.decode_graphs && linear_attn_) {
+    after = decode_prefix_.run(
+        context.stream,
+        {hidden_states.data(), residual ? residual->data() : nullptr,
+         context.state_indices.data(), linear_attn_->conv_state().data(),
+         linear_attn_->recurrent_state().data()},
+        prefix);
+  } else {
+    after = prefix();
+  }
+
   auto output = mlp_.forward(after[0].view(), context.stream, profile, usage,
                              context.decode_graphs, context.whole_graph,
                              context.graph_warmup);
@@ -254,7 +260,8 @@ ExpertAdaptationStats Qwen35Model::expert_adaptation_stats() const {
 Tensor Qwen35Model::forward(ConstTensorView input_ids,
                             ConstTensorView positions,
                             const ForwardContext& context) const {
-  auto hidden = embed_tokens_.forward(input_ids, context.stream);
+  Tensor hidden = embed_tokens_.forward(input_ids, context.stream);
+
   Tensor residual;
   for (std::size_t i = 0; i < layers_.size(); ++i) {
     std::optional<ConstTensorView> residual_view = std::nullopt;
@@ -266,6 +273,7 @@ Tensor Qwen35Model::forward(ConstTensorView input_ids,
                     : context.is_prefill    ? &expert_profile_[i].prefill
                                             : &expert_profile_[i].decode;
     auto* usage = context.is_prefill ? nullptr : expert_adaptation_.usage(i);
+
     auto output = layer(i).forward(positions, hidden.view(), residual_view,
                                    context, profile, usage);
 

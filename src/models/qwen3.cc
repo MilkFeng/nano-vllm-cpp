@@ -9,12 +9,6 @@
 namespace nanovllm {
 namespace {
 
-[[maybe_unused]] bool is_index_vector(ConstTensorView tensor,
-                                      ConstTensorView reference) {
-  return tensor.rank() == 1 && tensor.dtype() == DataType::Int32
-         && same_device(tensor, reference) && tensor.is_contiguous();
-}
-
 TensorView cache_layer(Tensor& pool, std::size_t index) {
   assert(index < pool.shape()[0]);
   const std::array shape{pool.shape()[1], pool.shape()[2], pool.shape()[3],
@@ -67,28 +61,26 @@ Qwen3DecoderLayerOutput Qwen3DecoderLayer::forward(
     ConstTensorView positions, ConstTensorView hidden_states,
     std::optional<ConstTensorView> residual,
     const ForwardContext& context) const {
-  RMSNormOutput before_attention;
+  RMSNormOutput before;
 
   auto residual_view = hidden_states;
   if (residual) {
-    before_attention =
-        input_layernorm_.forward(hidden_states, *residual, context.stream);
-    residual_view = before_attention.residual.view();
+    before = input_layernorm_.forward(hidden_states, *residual, context.stream);
+    residual_view = before.residual.view();
   } else {
-    before_attention.hidden_states =
+    before.hidden_states =
         input_layernorm_.forward(hidden_states, context.stream);
   }
 
-  auto attention = self_attn_.forward(
-      positions, before_attention.hidden_states.view(), context);
+  auto attention =
+      self_attn_.forward(positions, before.hidden_states.view(), context);
 
-  auto after_attention = post_attention_layernorm_.forward(
-      attention.view(), residual_view, context.stream);
+  auto after = post_attention_layernorm_.forward(attention.view(),
+                                                 residual_view, context.stream);
 
-  auto output =
-      mlp_.forward(after_attention.hidden_states.view(), context.stream);
+  auto output = mlp_.forward(after.hidden_states.view(), context.stream);
 
-  return {std::move(output), std::move(after_attention.residual)};
+  return {std::move(output), std::move(after.residual)};
 }
 
 Qwen3SelfAttention& Qwen3DecoderLayer::self_attention() noexcept {
@@ -121,23 +113,24 @@ void Qwen3Model::build_rope_cache(cudaStream_t stream) {
 
 Tensor Qwen3Model::forward(ConstTensorView input_ids, ConstTensorView positions,
                            const ForwardContext& context) const {
-  auto hidden_states = embed_tokens_.forward(input_ids, context.stream);
+  Tensor hidden = embed_tokens_.forward(input_ids, context.stream);
+
   Tensor residual;
-  for (std::size_t index = 0; index < layers_.size(); ++index) {
+  for (std::size_t i = 0; i < layers_.size(); ++i) {
     std::optional<ConstTensorView> residual_view = std::nullopt;
-    if (index > 0) {
+    if (i > 0) {
       residual_view = residual.view();
     }
 
-    auto output = layer(index).forward(positions, hidden_states.view(),
-                                       residual_view, context);
+    auto output =
+        layer(i).forward(positions, hidden.view(), residual_view, context);
 
-    hidden_states = std::move(output.hidden_states);
+    hidden = std::move(output.hidden_states);
     residual = std::move(output.residual);
   }
 
   auto normalized =
-      norm_.forward(hidden_states.view(), residual.view(), context.stream);
+      norm_.forward(hidden.view(), residual.view(), context.stream);
   return std::move(normalized.hidden_states);
 }
 

@@ -53,8 +53,7 @@ class Qwen3DecoderLayer final : public Module {
  private:
   Qwen3SelfAttention self_attn_;
   SwiGLUMLP mlp_;
-  RMSNorm input_layernorm_;
-  RMSNorm post_attention_layernorm_;
+  RMSNorm input_layernorm_, post_attention_layernorm_;
 };
 
 class Qwen3Model final : public Module {
