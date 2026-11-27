@@ -4,7 +4,6 @@
 #include <cassert>
 #include <chrono>
 #include <cstdint>
-#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -12,6 +11,7 @@
 #include "core/checkpoint.hh"
 #include "core/device.hh"
 #include "core/load_plan.hh"
+#include "functions/functions.hh"
 
 namespace nanovllm {
 namespace {
@@ -31,19 +31,6 @@ TensorView cache_layer(Tensor& pool, std::size_t index) {
   const std::vector<std::size_t> shape(pool.shape().begin() + 1,
                                        pool.shape().end());
   return pool.view().slice(0, index, 1).reshape(shape);
-}
-
-void zero_tensor(TensorView tensor, cudaStream_t stream) {
-  if (tensor.size_bytes() == 0) {
-    return;
-  }
-  if (tensor.device().type == DeviceType::Cpu) {
-    std::memset(tensor.data(), 0, tensor.size_bytes());
-  } else {
-    const CudaDeviceGuard guard(tensor.device().index);
-    check_cuda(cudaMemsetAsync(tensor.data(), 0, tensor.size_bytes(), stream),
-               "reset Qwen3.5 state");
-  }
 }
 
 } // namespace
@@ -73,8 +60,8 @@ Qwen35Cache::Qwen35Cache(const ModelConfig& config, std::size_t num_blocks,
                      config.linear_key_head_dim, config.linear_value_head_dim},
                     DataType::Float32, device);
 
-  zero_tensor(conv_.view(), nullptr);
-  zero_tensor(recurrent_.view(), nullptr);
+  functions::zero_tensor(conv_.view(), nullptr);
+  functions::zero_tensor(recurrent_.view(), nullptr);
 
   if (device.type == DeviceType::Cuda) {
     const CudaDeviceGuard guard(device.index);
@@ -84,8 +71,8 @@ Qwen35Cache::Qwen35Cache(const ModelConfig& config, std::size_t num_blocks,
 
 void Qwen35Cache::reset_state(std::size_t slot, cudaStream_t stream) {
   for (std::size_t i = 0; i < recurrent_.shape()[0]; ++i) {
-    zero_tensor(conv_state(i).slice(0, slot, 1), stream);
-    zero_tensor(recurrent_state(i).slice(0, slot, 1), stream);
+    functions::zero_tensor(conv_state(i).slice(0, slot, 1), stream);
+    functions::zero_tensor(recurrent_state(i).slice(0, slot, 1), stream);
   }
 }
 

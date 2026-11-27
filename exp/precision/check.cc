@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "common/cuda_utils.hh"
-#include "functions/cast.hh"
+#include "functions/functions.hh"
 #include "kernels/cpu/fp8_dequant.hh"
 #include "kernels/cuda/kernels.hh"
 #include "layers/causal_conv1d.hh"

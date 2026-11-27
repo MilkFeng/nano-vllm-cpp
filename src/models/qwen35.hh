@@ -36,6 +36,7 @@ class Qwen35Cache final {
 
   [[nodiscard]] TensorView key_cache(std::size_t full_layer);
   [[nodiscard]] TensorView value_cache(std::size_t full_layer);
+
   [[nodiscard]] TensorView conv_state(std::size_t linear_layer);
   [[nodiscard]] TensorView recurrent_state(std::size_t linear_layer);
 

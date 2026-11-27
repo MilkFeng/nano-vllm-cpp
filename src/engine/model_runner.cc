@@ -9,7 +9,7 @@
 #include "core/device.hh"
 #include "core/expert_policy.hh"
 #include "core/forward_context.hh"
-#include "functions/sample.hh"
+#include "functions/functions.hh"
 #include "kernels/cuda/kernels.hh"
 
 namespace nanovllm {
@@ -319,8 +319,8 @@ std::vector<std::int32_t> ModelRunner::run(
               input_ids.view(), input_positions.view(), captured_context);
           auto logits = model_->compute_logits(hidden.view(), captured_context);
 
-          auto token = sample(logits.view(), temperature.view(), params_.seed,
-                              0, stream_);
+          auto token = functions::sample(logits.view(), temperature.view(),
+                                         params_.seed, 0, stream_);
           return {std::move(token)};
         },
         [&] { transformer.reset_hybrid_step(); },
@@ -333,8 +333,8 @@ std::vector<std::int32_t> ModelRunner::run(
         model_->forward(input_ids.view(), input_positions.view(), context);
     auto logits = model_->compute_logits(hidden.view(), context);
 
-    output = sample(logits.view(), temperature.view(), params_.seed,
-                    sample_step_++, stream_);
+    output = functions::sample(logits.view(), temperature.view(), params_.seed,
+                               sample_step_++, stream_);
   }
 
   check_cuda(cudaMemcpyAsync(result.data(), output.data(), output.size_bytes(),

@@ -15,7 +15,7 @@
 #include "common/thread_pool.hh"
 #include "core/expert_policy.hh"
 #include "core/tensor_pool.hh"
-#include "functions/cast.hh"
+#include "functions/functions.hh"
 #include "kernels/cpu/fp8_dequant.hh"
 #include "kernels/cuda/kernels.hh"
 #include "layers/moe/moe.hh"
@@ -425,8 +425,7 @@ void check_state_graph(cudaStream_t stream, bool whole) {
   auto state_b =
       Tensor::empty({1, 2, 16, 32}, DataType::Float32, Device::cuda(0));
   for (auto* tensor : {&conv_a, &conv_b, &state_a, &state_b}) {
-    check_cuda(cudaMemsetAsync(tensor->data(), 0, tensor->size_bytes(), stream),
-               "zero state graph check");
+    zero_tensor(tensor->view(), stream);
   }
   plain.linear_attention()->set_state_cache(conv_a.view(), state_a.view());
   graphed.linear_attention()->set_state_cache(conv_b.view(), state_b.view());
