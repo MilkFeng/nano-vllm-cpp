@@ -177,9 +177,9 @@ struct Bank {
     slots.reserve(count);
 
     for (std::size_t i = 0; i < count; ++i) {
-      slots.push_back({Tensor::empty({m, k}, DataType::Float32, Device::cuda(0)),
-                       Tensor::empty({n, k}, DataType::Float32, Device::cuda(0)),
-                       Tensor::empty({m, n}, DataType::Float32, Device::cuda(0))});
+      slots.push_back({Tensor::empty({m, k}, DataType::Float32, Device::cuda()),
+                       Tensor::empty({n, k}, DataType::Float32, Device::cuda()),
+                       Tensor::empty({m, n}, DataType::Float32, Device::cuda())});
       auto& slot = slots.back();
 
       if (i == 0) {
@@ -335,7 +335,7 @@ class BlasPlan {
   BlasPlan(const Case& shape, std::size_t workspace_mib, cudaStream_t stream)
       : shape_(shape), stream_(stream),
         workspace_(Tensor::empty({workspace_mib * kMiB / sizeof(float)},
-                                  DataType::Float32, Device::cuda(0))) {
+                                  DataType::Float32, Device::cuda())) {
     check_blas(cublasCreate(&blas_), "create strict SGEMM handle");
     check_blas(cublasSetStream(blas_, stream), "set SGEMM stream");
     check_blas(cublasSetWorkspace(blas_, workspace_.data(), workspace_.size_bytes()),

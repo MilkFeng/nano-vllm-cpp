@@ -425,7 +425,7 @@ GPU 输入，`moe_scatter` 将完整的分组结果还原到原始行号，无�
 
 ```cpp
 ThreadPool cpu_pool(8);
-MoE moe({128, 64, 16, 2}, cpu_pool, Device::cuda(0),
+MoE moe({128, 64, 16, 2}, cpu_pool, Device::cuda(),
         std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 
@@ -462,7 +462,7 @@ MoEConfig config{
     .shared_expert_intermediate_size = 512,
 };
 ThreadPool cpu_pool(8);
-MoE moe(config, cpu_pool, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6});
+MoE moe(config, cpu_pool, Device::cuda(), std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 
 每个专家注册六个 CPU 参数：三个 `gate_proj/up_proj/down_proj.weight` 为
@@ -551,7 +551,7 @@ FFN 使用带共享专家的 MoE。`forward()` 返回最终归一化的 hidden s
 
 const auto model_dir = std::filesystem::path("/path/to/Qwen3.5-35B-A3B-FP8");
 const auto config = ModelConfig::read_from_file(model_dir);
-Qwen35ForCausalLM model(config, Device::cuda(0),
+Qwen35ForCausalLM model(config, Device::cuda(),
                         std::vector<std::int32_t>{0, 2});
 const auto loaded = model.load_ckpt(model_dir);
 model.transformer().build_rope_cache(/*stream=*/nullptr);
@@ -718,7 +718,7 @@ MoEConfig config{
     .shared_expert_intermediate_size = 32,
 };
 ThreadPool cpu_pool(8);
-MoE moe(config, cpu_pool, Device::cuda(0), std::vector<std::int32_t>{0, 2, 4, 6});
+MoE moe(config, cpu_pool, Device::cuda(), std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 
 共享分支直接挂在 `MoE` 下，注册以下参数：
@@ -748,7 +748,7 @@ GPU 构造时这四个参数常驻 GPU，不占 routed expert cache 的槽位；
 
 ```cpp
 ThreadPool cpu_pool(8);
-MoE moe({128, 64, 16, 2}, cpu_pool, Device::cuda(0),
+MoE moe({128, 64, 16, 2}, cpu_pool, Device::cuda(),
         std::vector<std::int32_t>{0, 2, 4, 6});
 ```
 

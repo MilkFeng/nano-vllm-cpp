@@ -67,23 +67,6 @@ struct ModelInfo {
   std::vector<std::vector<std::int32_t>> gpu_expert_ids_by_layer;
 };
 
-struct GPUInfo {
-  std::string name;
-  std::size_t total_memory_bytes = 0;
-  int compute_capability_major = 0;
-  int compute_capability_minor = 0;
-  int cuda_driver_version = 0;
-  int cuda_runtime_version = 0;
-};
-
-struct GPUMemoryInfo {
-  std::size_t free_bytes = 0;
-  std::size_t total_bytes = 0;
-};
-
-[[nodiscard]] GPUInfo gpu_info();
-[[nodiscard]] GPUMemoryInfo gpu_memory_info();
-
 enum class LogLevel { Trace, Debug, Info, Warning, Error };
 
 class Logger {

@@ -78,7 +78,7 @@ class DecodeGraph final {
     }
 
     if (!pool_) {
-      pool_ = std::make_unique<TensorPool>(Device::cuda(0), stream);
+      pool_ = std::make_unique<TensorPool>(Device::cuda(), stream);
     }
 
     if (!completed_) {

@@ -143,7 +143,7 @@ target_compile_definitions(nano-vllm-cpp-bench PRIVATE
   NANOVLLM_BENCH_BUILD_TYPE="$<CONFIG>")
 
 target_link_libraries(nano-vllm-cpp-bench PRIVATE
-  nano-vllm-cpp::nano-vllm-cpp CLI11::CLI11 nlohmann_json::nlohmann_json)
+  nano-vllm-cpp::nano-vllm-cpp CUDA::cudart CLI11::CLI11 nlohmann_json::nlohmann_json)
 
 # =========== COMP KERNEL ===========
 

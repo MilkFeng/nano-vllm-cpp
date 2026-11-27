@@ -48,7 +48,7 @@ MoE::HybridWorkspace::HybridWorkspace(const ExpertStore& s,
       static_cast<std::uint32_t*>(flags.data()),
       flags.capacity_bytes() / sizeof(std::uint32_t));
 
-  activated = Tensor::empty({k, s.intermediate_size()}, dtype, Device::cuda(0));
+  activated = Tensor::empty({k, s.intermediate_size()}, dtype, Device::cuda());
 
   check_cuda(cudaEventCreateWithFlags(&ready, cudaEventDisableTiming),
              "create expert host fork");
@@ -377,7 +377,7 @@ MoEOutput MoE::forward(ConstTensorView gpu_hidden, cudaStream_t stream,
   const auto tokens = gpu_hidden.shape()[0];
   const auto device = gpu_hidden.device();
 
-  assert(device == Device::cuda(0));
+  assert(device == Device::cuda());
   assert(gpu_hidden.dtype() == DataType::BFloat16);
 
   const auto assignments = tokens * config_.top_k;

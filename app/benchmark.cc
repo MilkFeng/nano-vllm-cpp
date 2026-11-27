@@ -1,6 +1,9 @@
+#include <cuda_runtime_api.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -12,6 +15,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -22,6 +26,48 @@ namespace {
 
 using Json = nlohmann::json;
 
+struct GPUInfo {
+  std::string name;
+  std::size_t total_memory_bytes = 0;
+  int compute_capability_major = 0;
+  int compute_capability_minor = 0;
+  int cuda_driver_version = 0;
+  int cuda_runtime_version = 0;
+};
+
+struct GPUMemoryInfo {
+  std::size_t free_bytes = 0;
+  std::size_t total_bytes = 0;
+};
+
+void check_cuda(cudaError_t status, std::string_view operation) {
+  if (status != cudaSuccess) {
+    throw std::runtime_error(std::string(operation) + ": "
+                             + cudaGetErrorString(status));
+  }
+}
+
+[[nodiscard]] GPUInfo gpu_info() {
+  cudaDeviceProp properties{};
+  check_cuda(cudaGetDeviceProperties(&properties, 0), "read GPU properties");
+  GPUInfo info{.name = properties.name,
+               .total_memory_bytes = properties.totalGlobalMem,
+               .compute_capability_major = properties.major,
+               .compute_capability_minor = properties.minor};
+  check_cuda(cudaRuntimeGetVersion(&info.cuda_runtime_version),
+             "read CUDA runtime version");
+  check_cuda(cudaDriverGetVersion(&info.cuda_driver_version),
+             "read CUDA driver version");
+  return info;
+}
+
+[[nodiscard]] GPUMemoryInfo gpu_memory_info() {
+  GPUMemoryInfo info;
+  check_cuda(cudaMemGetInfo(&info.free_bytes, &info.total_bytes),
+             "read GPU memory");
+  return info;
+}
+
 Json ratio(double numerator, double denominator) {
   return denominator > 0 ? Json(numerator / denominator) : Json(nullptr);
 }
@@ -31,15 +77,18 @@ Json milliseconds(const std::optional<double>& seconds) {
 }
 
 Json describe(std::vector<double> values) {
-  if (values.empty())
+  if (values.empty()) {
     return {{"count", 0},     {"mean", nullptr}, {"stddev", nullptr},
             {"min", nullptr}, {"p50", nullptr},  {"p95", nullptr},
             {"max", nullptr}};
+  }
   std::sort(values.begin(), values.end());
   const auto mean =
       std::accumulate(values.begin(), values.end(), 0.0) / values.size();
   double variance = 0;
-  for (const auto value : values) variance += (value - mean) * (value - mean);
+  for (const auto value : values) {
+    variance += (value - mean) * (value - mean);
+  }
   const auto percentile = [&](double p) {
     const double index = p * (values.size() - 1);
     const auto lo = static_cast<std::size_t>(index);
@@ -59,10 +108,13 @@ Json serialize(const nanovllm::MoEPhaseProfile& phase) {
   Json experts = Json::array();
   for (std::size_t id = 0; id < phase.experts.size(); ++id) {
     const auto& expert = phase.experts[id];
-    if (expert.calls == 0) continue;
+    if (expert.calls == 0) {
+      continue;
+    }
     Json groups = Json::object();
-    for (const auto& [rows, calls] : expert.group_sizes)
+    for (const auto& [rows, calls] : expert.group_sizes) {
       groups[std::to_string(rows)] = calls;
+    }
     experts.push_back({{"id", id},
                        {"tokens", expert.tokens},
                        {"calls", expert.calls},
@@ -144,7 +196,9 @@ Json summarize(const Json& runs) {
   std::map<std::string, std::vector<double>> samples;
   const auto add = [&](const std::string& name, const Json& value) {
     auto& values = samples[name];
-    if (value.is_number()) values.push_back(value.get<double>());
+    if (value.is_number()) {
+      values.push_back(value.get<double>());
+    }
   };
   for (const auto& run : runs) {
     if (run.contains("expert_adaptation")) {
@@ -170,13 +224,16 @@ Json summarize(const Json& runs) {
     }
   }
   Json summary = Json::object();
-  for (auto& [name, values] : samples)
+  for (auto& [name, values] : samples) {
     summary[name] = describe(std::move(values));
+  }
   return summary;
 }
 
 std::string display(const Json& value) {
-  if (!value.is_number()) return "n/a";
+  if (!value.is_number()) {
+    return "n/a";
+  }
   std::ostringstream out;
   out << std::fixed << std::setprecision(2) << value.get<double>();
   return out.str();
@@ -184,13 +241,15 @@ std::string display(const Json& value) {
 
 void save(const std::filesystem::path& path, const Json& report) {
   std::ofstream out(path);
-  if (!out)
+  if (!out) {
     throw std::runtime_error("cannot write benchmark report: " + path.string());
+  }
   out << report.dump(2) << '\n';
   out.close();
-  if (!out)
+  if (!out) {
     throw std::runtime_error("failed to write benchmark report: "
                              + path.string());
+  }
 }
 
 } // namespace
@@ -199,7 +258,9 @@ int main(int argc, char** argv) {
   int exit_code = 0;
   auto parsed = nanovllm::app::parse_args(
       argc, argv, nanovllm::app::Mode::Benchmark, exit_code);
-  if (!parsed) return exit_code;
+  if (!parsed) {
+    return exit_code;
+  }
   auto& options = *parsed;
   auto& params = options.params;
 
@@ -216,12 +277,13 @@ int main(int argc, char** argv) {
     if (!options.prompts_path.empty()) {
       std::ifstream input(options.prompts_path);
       const auto document = Json::parse(input);
-      if (!document.is_array() || document.empty())
+      if (!document.is_array() || document.empty()) {
         throw std::invalid_argument(
             "prompts file must be a nonempty JSON string array");
+      }
       seed_texts = document.get<std::vector<std::string>>();
     }
-    const auto properties = nanovllm::gpu_info();
+    const auto properties = gpu_info();
     const auto now = std::time(nullptr);
     std::ostringstream timestamp;
     timestamp << std::put_time(std::gmtime(&now), "%Y-%m-%dT%H:%M:%SZ");
@@ -302,18 +364,20 @@ int main(int argc, char** argv) {
         std::chrono::duration<double>(std::chrono::steady_clock::now()
                                       - load_start)
             .count();
-    const auto memory = nanovllm::gpu_memory_info();
+    const auto memory = gpu_memory_info();
     report["memory_after_load"] = {{"free_bytes", memory.free_bytes},
                                    {"total_bytes", memory.total_bytes}};
     std::vector<std::vector<std::int32_t>> seed_ids;
     for (const auto& text : seed_texts) {
       seed_ids.push_back(engine.encode(text));
-      if (seed_ids.back().empty())
+      if (seed_ids.back().empty()) {
         throw std::invalid_argument("seed prompt encodes to no tokens");
+      }
     }
-    if (params.profile_experts)
+    if (params.profile_experts) {
       std::cout
           << "Expert profiling enabled: timings include profiling overhead.\n";
+    }
     std::cout << std::setw(7) << "Input" << std::setw(8) << "Output"
               << std::setw(7) << "Batch" << std::setw(13) << "Prefill ms"
               << std::setw(14) << "Prefill tok/s" << std::setw(13)
@@ -333,8 +397,9 @@ int main(int argc, char** argv) {
             for (std::size_t request = 0; request < batch_size; ++request) {
               const auto& seed =
                   seed_ids[(round * batch_size + request) % seed_ids.size()];
-              for (std::size_t token = 0; token < input_length; ++token)
+              for (std::size_t token = 0; token < input_length; ++token) {
                 prompts[request][token] = seed[(token + request) % seed.size()];
+              }
             }
             const auto outputs = engine.generate(prompts, sampling, metrics);
             for (const auto& output : outputs) {
@@ -345,7 +410,9 @@ int main(int argc, char** argv) {
             }
             return outputs;
           };
-          for (std::size_t i = 0; i < options.warmup; ++i) run(i, nullptr);
+          for (std::size_t i = 0; i < options.warmup; ++i) {
+            run(i, nullptr);
+          }
           Json runs = Json::array();
           for (std::size_t i = 0; i < options.repeat; ++i) {
             nanovllm::GenerationMetrics metrics;

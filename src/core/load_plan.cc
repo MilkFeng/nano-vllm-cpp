@@ -181,8 +181,7 @@ ModelLoadResult LoadPlan::apply() const {
 
   for (const auto& entry : entries_) {
     const auto& destination = entry.destination;
-    const auto device = destination.device();
-    if (device.type == DeviceType::Cpu) {
+    if (destination.device().type == DeviceType::Cpu) {
       fill_cpu(entry, destination);
     } else {
       auto staging = Tensor::empty(
@@ -190,7 +189,6 @@ ModelLoadResult LoadPlan::apply() const {
           destination.dtype());
       fill_cpu(entry, staging.view());
 
-      const CudaDeviceGuard guard(device.index);
       check_cuda(cudaMemcpy(destination.data(), staging.data(),
                             staging.size_bytes(), cudaMemcpyHostToDevice),
                  std::format("load checkpoint tensor '{}'", entry.name));

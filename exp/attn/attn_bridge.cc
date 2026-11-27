@@ -45,7 +45,7 @@ void forward(const NanoAttnArgs& args) {
   const auto view = [&](void* pointer, DataType type,
                         std::vector<std::size_t> shape) {
     return TensorView(pointer, type, TensorLayout(std::move(shape)),
-                      Device::cuda(0));
+                      Device::cuda());
   };
   const auto qshape =
       std::vector<std::size_t>{static_cast<std::size_t>(args.tokens),

@@ -184,9 +184,9 @@ FP8ExpertWorkspace::FP8ExpertWorkspace(std::size_t intermediate_size,
 void FP8ExpertWorkspace::reserve(std::size_t rows,
                                  std::size_t intermediate_size,
                                  DataType dtype) {
-  reserve_rows(gate, rows, intermediate_size, Device::cuda(0), dtype);
-  reserve_rows(up, rows, intermediate_size, Device::cuda(0), dtype);
-  reserve_rows(activated, rows, intermediate_size, Device::cuda(0), dtype);
+  reserve_rows(gate, rows, intermediate_size, Device::cuda(), dtype);
+  reserve_rows(up, rows, intermediate_size, Device::cuda(), dtype);
+  reserve_rows(activated, rows, intermediate_size, Device::cuda(), dtype);
 }
 
 } // namespace nanovllm

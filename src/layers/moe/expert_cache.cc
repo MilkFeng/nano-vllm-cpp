@@ -19,7 +19,7 @@ ExpertCache::ExpertCache(const ExpertStore& source,
   slots_.reserve(resident_ids_.size());
   for (std::size_t slot = 0; slot < resident_ids_.size(); ++slot) {
     slots_.push_back(std::make_unique<FP8Expert>(
-        source.hidden_size(), source.intermediate_size(), Device::cuda(0)));
+        source.hidden_size(), source.intermediate_size(), Device::cuda()));
   }
 
   ready_ = slots_.empty();
@@ -80,7 +80,7 @@ void ExpertCache::publish_routes(cudaStream_t stream) {
   const auto bytes =
       source_.num_experts() * sizeof(kernels::cuda::FP8ExpertWeights);
   if (routes_.numel() < bytes) {
-    routes_ = Tensor::empty({bytes}, DataType::Float8E4M3FN, Device::cuda(0));
+    routes_ = Tensor::empty({bytes}, DataType::Float8E4M3FN, Device::cuda());
   }
 
   host_routes_.reserve(bytes);

@@ -19,7 +19,7 @@ using Qwen3SelfAttention = SelfAttention<false, false>;
 class Qwen3Cache final {
  public:
   Qwen3Cache(const ModelConfig& config, std::size_t num_blocks,
-             std::size_t block_size, Device device = Device::cuda(0));
+             std::size_t block_size, Device device = Device::cuda());
 
   Qwen3Cache(const Qwen3Cache&) = delete;
   Qwen3Cache& operator=(const Qwen3Cache&) = delete;

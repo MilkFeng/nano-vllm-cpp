@@ -29,10 +29,6 @@ Tensor::Tensor(std::shared_ptr<Storage> storage, std::size_t byte_offset,
       dtype_(dtype),
       layout_(std::move(layout)),
       device_(device) {
-  if (!device.is_valid()) {
-    throw std::invalid_argument("tensor device is invalid");
-  }
-
   if (!storage_) {
     if (byte_offset != 0 || layout_.numel() != 0) {
       throw std::invalid_argument(

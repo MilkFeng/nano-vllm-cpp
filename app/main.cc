@@ -43,7 +43,9 @@ int main(int argc, char** argv) {
   int exit_code = 0;
   auto parsed = nanovllm::app::parse_args(
       argc, argv, nanovllm::app::Mode::Generate, exit_code);
-  if (!parsed) return exit_code;
+  if (!parsed) {
+    return exit_code;
+  }
   auto& options = *parsed;
 
   try {

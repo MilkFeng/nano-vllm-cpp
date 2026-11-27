@@ -49,7 +49,7 @@ class MoE final : public Module {
  public:
   ~MoE() override;
   explicit MoE(
-      MoEConfig config, ThreadPool& cpu_pool, Device device = Device::cuda(0),
+      MoEConfig config, ThreadPool& cpu_pool, Device device = Device::cuda(),
       std::optional<std::vector<std::int32_t>> gpu_expert_ids = std::nullopt,
       MoEExecutionWorkspace* workspace = nullptr);
 

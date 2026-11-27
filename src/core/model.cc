@@ -46,33 +46,14 @@ void copy_parameter(std::string_view name, const TensorView& destination,
     return;
   }
 
-  const auto device = destination.device();
-  if (device.type == DeviceType::Cpu) {
+  if (destination.device().type == DeviceType::Cpu) {
     std::memcpy(destination.data(), bytes.data(), bytes.size());
     return;
   }
 
-  int previous_device = 0;
-  check_cuda(cudaGetDevice(&previous_device),
-             std::format("failed to get the current CUDA device while loading "
-                         "tensor '{}'",
-                         name));
-
-  const bool restore_device = previous_device != device.index;
-  if (restore_device) {
-    const auto operation =
-        std::format("failed to select CUDA device {} while loading tensor '{}'",
-                    device.index, name);
-    check_cuda(cudaSetDevice(device.index), operation);
-  }
-
-  const auto status = cudaMemcpy(destination.data(), bytes.data(), bytes.size(),
-                                 cudaMemcpyHostToDevice);
-  if (restore_device) {
-    cudaSetDevice(previous_device);
-  }
-  check_cuda(status, std::format("failed to copy tensor '{}' to CUDA device {}",
-                                 name, device.index));
+  check_cuda(cudaMemcpy(destination.data(), bytes.data(), bytes.size(),
+                        cudaMemcpyHostToDevice),
+             std::format("failed to copy tensor '{}' to CUDA device 0", name));
 }
 
 } // namespace

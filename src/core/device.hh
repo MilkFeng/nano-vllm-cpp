@@ -20,13 +20,12 @@ enum class DeviceType : std::uint8_t { Cpu, Cuda };
 
 struct Device {
   DeviceType type = DeviceType::Cpu;
-  int index = 0;
 
   Device() noexcept = default;
-  Device(DeviceType type, int index = 0);
+  Device(DeviceType type);
 
   [[nodiscard]] static Device cpu() noexcept;
-  [[nodiscard]] static Device cuda(int index);
+  [[nodiscard]] static Device cuda();
   [[nodiscard]] bool is_valid() const;
 
   friend bool operator==(const Device&, const Device&) = default;

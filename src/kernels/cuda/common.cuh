@@ -14,8 +14,7 @@ namespace nanovllm::kernels::cuda::detail {
 
 template <bool IsConst>
 void assert_tensor(const BasicTensorView<IsConst>& tensor) {
-  assert(tensor.device().type == DeviceType::Cuda
-         && tensor.device().index == 0);
+  assert(tensor.device().type == DeviceType::Cuda);
   assert(tensor.is_contiguous());
 }
 

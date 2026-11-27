@@ -107,16 +107,16 @@ void check_case(Shape shape, DataType dtype, bool with_bias, bool unaligned,
   const std::size_t offset = unaligned ? 1 : 4;
 
   auto input_storage =
-      Tensor::empty({m * k + offset + 1}, dtype, Device::cuda(0));
+      Tensor::empty({m * k + offset + 1}, dtype, Device::cuda());
   auto weight_storage =
-      Tensor::empty({n * k + offset + 1}, dtype, Device::cuda(0));
+      Tensor::empty({n * k + offset + 1}, dtype, Device::cuda());
   auto output_storage =
-      Tensor::empty({m * n + offset + 1}, dtype, Device::cuda(0));
-  auto bias_storage = Tensor::empty({n + offset + 1}, dtype, Device::cuda(0));
+      Tensor::empty({m * n + offset + 1}, dtype, Device::cuda());
+  auto bias_storage = Tensor::empty({n + offset + 1}, dtype, Device::cuda());
 
   const auto view = [&](Tensor& storage, std::vector<std::size_t> dimensions) {
     return TensorView(static_cast<T*>(storage.data()) + offset, dtype,
-                      TensorLayout(std::move(dimensions)), Device::cuda(0));
+                      TensorLayout(std::move(dimensions)), Device::cuda());
   };
 
   auto input = view(input_storage, {m, k});
@@ -192,7 +192,7 @@ void check_case(Shape shape, DataType dtype, bool with_bias, bool unaligned,
       dtype == DataType::Float32 || (!unaligned && n % 8 == 0 && k % 8 == 0);
 
   if (compare_cublas) {
-    auto reference = Tensor::empty({m, n}, dtype, Device::cuda(0));
+    auto reference = Tensor::empty({m, n}, dtype, Device::cuda());
 
     baseline::cublas_linear(input.as_const(), weight.as_const(),
                             reference.view(), optional_bias, stream);

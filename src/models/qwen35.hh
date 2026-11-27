@@ -27,7 +27,7 @@ class Qwen35Cache final {
  public:
   Qwen35Cache(const ModelConfig& config, std::size_t num_blocks,
               std::size_t block_size, std::size_t state_slots,
-              Device device = Device::cuda(0));
+              Device device = Device::cuda());
 
   Qwen35Cache(const Qwen35Cache&) = delete;
   Qwen35Cache& operator=(const Qwen35Cache&) = delete;

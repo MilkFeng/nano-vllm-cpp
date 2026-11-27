@@ -25,10 +25,6 @@ class BasicTensorView {
         dtype_(dtype),
         layout_(std::move(layout)),
         device_(device) {
-    if (!device.is_valid()) {
-      throw std::invalid_argument("tensor device is invalid");
-    }
-
     if (data == nullptr && layout_.numel() != 0) {
       throw std::invalid_argument(
           "a non-empty tensor view requires a non-null data pointer");

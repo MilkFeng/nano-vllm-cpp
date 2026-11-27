@@ -34,7 +34,7 @@ void compare(ConstTensorView a, ConstTensorView b) {
   }
 }
 void check(std::size_t m, std::size_t n, std::size_t k) {
-  const auto device = Device::cuda(0);
+  const auto device = Device::cuda();
   auto input = Tensor::empty({m, k}, DataType::Float32, device);
   std::vector<float> x(m * k);
   for (std::size_t i = 0; i < x.size(); ++i) x[i] = std::sin(float(i) * 1.234f);
@@ -70,7 +70,7 @@ void check(std::size_t m, std::size_t n, std::size_t k) {
 }
 
 void check_experts(std::size_t hidden, std::size_t intermediate) {
-  const auto device = Device::cuda(0);
+  const auto device = Device::cuda();
   FP8Expert expert(hidden, intermediate, device);
   for (const auto& [name, parameter] : expert.named_parameters()) {
     const auto view = parameter->view();

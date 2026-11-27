@@ -64,7 +64,6 @@ Qwen35Cache::Qwen35Cache(const ModelConfig& config, std::size_t num_blocks,
   functions::zero_tensor(recurrent_.view(), nullptr);
 
   if (device.type == DeviceType::Cuda) {
-    const CudaDeviceGuard guard(device.index);
     check_cuda(cudaStreamSynchronize(nullptr), "initialize Qwen3.5 cache");
   }
 }

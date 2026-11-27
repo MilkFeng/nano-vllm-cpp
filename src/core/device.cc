@@ -1,5 +1,6 @@
 #include "core/device.hh"
 
+#include <cassert>
 #include <stdexcept>
 
 #include "common/cuda_utils.hh"
@@ -19,37 +20,30 @@ std::size_t data_type_size(DataType dtype) {
   throw std::invalid_argument("unknown tensor data type");
 }
 
-Device::Device(DeviceType type, int index)
-    : type(type),
-      index(index) {
-  if (!is_valid()) {
-    throw std::invalid_argument("invalid tensor device");
-  }
+Device::Device(DeviceType type)
+    : type(type) {
+  assert(is_valid());
 }
 
 Device Device::cpu() noexcept {
-  return {};
+  return Device(DeviceType::Cpu);
 }
 
-Device Device::cuda(int index) {
-  return Device(DeviceType::Cuda, index);
+Device Device::cuda() {
+  return Device(DeviceType::Cuda);
 }
 
 bool Device::is_valid() const {
   switch (type) {
     case DeviceType::Cpu:
-      return index == 0;
+      return true;
 
     case DeviceType::Cuda: {
-      if (index < 0) {
-        return false;
-      }
-
       int device_count = 0;
       check_cuda(cudaGetDeviceCount(&device_count),
                  "failed to query CUDA devices");
 
-      return index < device_count;
+      return device_count > 0;
     }
   }
 

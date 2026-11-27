@@ -19,7 +19,7 @@
 using namespace nanovllm;
 
 namespace {
-const auto gpu = Device::cuda(0);
+const auto gpu = Device::cuda();
 
 void require(bool value, const char* message) {
   if (!value) {
@@ -58,7 +58,7 @@ std::vector<float> read(BasicTensorView<C> source) {
   ConstTensorView view(source);
   Tensor expanded;
   if (view.dtype() == DataType::BFloat16) {
-    expanded = cast_tensor(view, DataType::Float32, nullptr);
+    expanded = functions::cast_tensor(view, DataType::Float32, nullptr);
     view = expanded.view().as_const();
   }
   require(view.dtype() == DataType::Float32, "read dtype");
@@ -94,7 +94,7 @@ void check_rotary_cache() {
   upload(ids.view(), positions.data());
   for (const auto rotary_dim : {head_dim, std::size_t{4}}) {
     RotaryEmbedding rope(16, head_dim, theta, gpu,
-                          rotary_dim == head_dim ? 0 : rotary_dim);
+                         rotary_dim == head_dim ? 0 : rotary_dim);
     cudaGraph_t graph = nullptr;
     cudaGraphExec_t executable = nullptr;
     check_cuda(cudaStreamBeginCapture(stream, cudaStreamCaptureModeThreadLocal),
@@ -112,11 +112,15 @@ void check_rotary_cache() {
       std::vector<float> q(query.numel()), k(key.numel());
       for (std::size_t i = 0; i < q.size(); ++i) {
         q[i] = 0.2f * std::sin(float(i));
-        if (dtype == DataType::BFloat16) q[i] = bf16(q[i]);
+        if (dtype == DataType::BFloat16) {
+          q[i] = bf16(q[i]);
+        }
       }
       for (std::size_t i = 0; i < k.size(); ++i) {
         k[i] = 0.3f * std::cos(float(i));
-        if (dtype == DataType::BFloat16) k[i] = bf16(k[i]);
+        if (dtype == DataType::BFloat16) {
+          k[i] = bf16(k[i]);
+        }
       }
       upload_float(query.view(), q);
       upload_float(key.view(), k);
@@ -310,8 +314,8 @@ void check_delta() {
   reset();
   for (std::size_t t = 0; t < tokens; ++t) {
     kernels::cuda::causal_conv1d(
-        qkv.view().as_const().slice(0, t, 1), weight.as_const(),
-        history.view(), {}, slot.view().as_const(), conv.view().slice(0, t, 1));
+        qkv.view().as_const().slice(0, t, 1), weight.as_const(), history.view(),
+        {}, slot.view().as_const(), conv.view().slice(0, t, 1));
     kernels::cuda::gated_delta_rule(
         conv.view().as_const().slice(0, t, 1),
         a.view().as_const().slice(0, t, 1), b.view().as_const().slice(0, t, 1),
@@ -391,8 +395,7 @@ void check_delta() {
                                 history.view(), cu.view().as_const(),
                                 slot.view().as_const());
     kernels::cuda::gated_delta_rule(
-        chunk.view().as_const(),
-        a.view().as_const().slice(0, begin, count),
+        chunk.view().as_const(), a.view().as_const().slice(0, begin, count),
         b.view().as_const().slice(0, begin, count), log_a.view().as_const(),
         bias.view().as_const(), state.view(), cu.view().as_const(),
         slot.view().as_const(), 1, output.view().slice(0, begin, count));
@@ -416,7 +419,8 @@ void check_cache() {
   config.linear_value_head_dim = 8;
   config.linear_conv_kernel_dim = 4;
   GatedDeltaNet layer(config, gpu);
-  require(layer.has_parameter("conv1d.weight"), "conv checkpoint parameter name");
+  require(layer.has_parameter("conv1d.weight"),
+          "conv checkpoint parameter name");
   Qwen35Cache cache(config, 4, 16, 2, gpu);
   require(cache.key_cache(0).dtype() == DataType::BFloat16, "key cache dtype");
   require(cache.value_cache(0).dtype() == DataType::BFloat16,
@@ -445,9 +449,10 @@ void check_projection_layout() {
   const auto cpu = Device::cpu();
   GatedDeltaNet delta(config, cpu);
   Qwen35SelfAttention attention(
-      config.hidden_size, config.num_attention_heads, config.num_key_value_heads,
-      config.head_dim, config.rms_norm_eps, config.max_position_embeddings,
-      config.rope_theta, DataType::BFloat16, gpu, config.rotary_dim(),
+      config.hidden_size, config.num_attention_heads,
+      config.num_key_value_heads, config.head_dim, config.rms_norm_eps,
+      config.max_position_embeddings, config.rope_theta, DataType::BFloat16,
+      gpu, config.rotary_dim(),
       /*zero_centered_norm=*/true);
   FP8SwiGLUMLP shared(16, 17, cpu);
   FP8Expert expert(16, 17, cpu);
@@ -500,7 +505,8 @@ int main() {
     check_delta();
     check_cache();
     std::cout
-        << "Mixed precision checks passed: streamed/captured full/partial RoPE, "
+        << "Mixed precision checks passed: streamed/captured full/partial "
+           "RoPE, "
            "BF16/FP8 linear and FP32 logits, "
            "FP32 residual, 513-token FP64 recurrence reference, chunk/decode "
            "parity through CausalConv1d, checkpoint names, cache dtypes\n";

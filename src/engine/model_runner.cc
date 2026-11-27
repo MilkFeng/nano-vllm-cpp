@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <format>
 #include <stdexcept>
 #include <utility>
 
@@ -45,21 +46,20 @@ ModelRunner::ModelRunner(std::shared_ptr<Logger> logger, EngineParams params,
     throw std::invalid_argument("expert profiling requires Qwen3.5 MoE");
   }
 
-  const CudaDeviceGuard guard(0);
   check_cuda(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking),
              "create inference stream");
   try {
-    temporary_pool_ = std::make_unique<TensorPool>(Device::cuda(0), stream_);
+    temporary_pool_ = std::make_unique<TensorPool>(Device::cuda(), stream_);
     // load model ckpt
     if (config_.architecture == ModelArchitecture::Qwen35Moe) {
       auto model = std::make_unique<Qwen35ForCausalLM>(
-          config_, Device::cuda(0), params_.cpu_threads, placement,
+          config_, Device::cuda(), params_.cpu_threads, placement,
           params_.profile_experts, params_.expert_adaptation,
           params_.cpu_affinity);
       model->transformer().build_rope_cache(stream_);
       model_ = std::move(model);
     } else {
-      auto model = std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda(0));
+      auto model = std::make_unique<Qwen3ForCausalLM>(config_, Device::cuda());
       model->transformer().build_rope_cache(stream_);
       model_ = std::move(model);
     }
@@ -145,8 +145,6 @@ std::vector<std::int32_t> ModelRunner::run(
   if (seqs.size() > params_.max_num_seqs) {
     throw std::invalid_argument("inference batch exceeds max_num_seqs");
   }
-
-  const CudaDeviceGuard guard(0);
 
   std::vector<std::int32_t> ids, positions, cu_q{0}, cu_k{0};
   std::vector<float> temperatures;

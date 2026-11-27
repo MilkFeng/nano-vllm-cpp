@@ -1,5 +1,6 @@
 #include "core/storage.hh"
 
+#include <format>
 #include <stdexcept>
 
 #include "common/cuda_utils.hh"
@@ -9,10 +10,6 @@ namespace nanovllm {
 Storage::Storage(std::size_t size_bytes, Device device)
     : size_bytes_(size_bytes),
       device_(device) {
-  if (!device_.is_valid()) {
-    throw std::invalid_argument("tensor device is invalid");
-  }
-
   switch (device_.type) {
     case DeviceType::Cpu:
       if (size_bytes_ != 0) {
@@ -25,11 +22,9 @@ Storage::Storage(std::size_t size_bytes, Device device)
         return;
       }
 
-      CudaDeviceGuard guard(device_.index);
-      const auto operation =
-          std::format("failed to allocate {} bytes on CUDA device {}",
-                      size_bytes_, device_.index);
-      check_cuda(cudaMalloc(&data_, size_bytes_), operation);
+      check_cuda(cudaMalloc(&data_, size_bytes_),
+                 std::format("failed to allocate {} bytes on CUDA device 0",
+                             size_bytes_));
       return;
     }
   }
@@ -46,17 +41,9 @@ Storage::~Storage() noexcept {
     case DeviceType::Cpu:
       ::operator delete(data_);
       return;
-    case DeviceType::Cuda: {
-      int previous_device = 0;
-      const bool have_previous = cudaGetDevice(&previous_device) == cudaSuccess;
-      const bool restore = have_previous && previous_device != device_.index
-                           && cudaSetDevice(device_.index) == cudaSuccess;
+    case DeviceType::Cuda:
       cudaFree(data_);
-      if (restore) {
-        cudaSetDevice(previous_device);
-      }
       return;
-    }
   }
 }
 

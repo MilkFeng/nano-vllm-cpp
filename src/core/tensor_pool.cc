@@ -13,7 +13,7 @@ thread_local TensorPool* TensorPool::current_ = nullptr;
 TensorPool::TensorPool(Device device, cudaStream_t stream)
     : device_(device),
       stream_(stream) {
-  if (!device.is_valid() || device.type != DeviceType::Cuda) {
+  if (device.type != DeviceType::Cuda) {
     throw std::invalid_argument("temporary tensor pool requires a CUDA device");
   }
 }

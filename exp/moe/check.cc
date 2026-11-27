@@ -222,7 +222,7 @@ std::vector<float> reference(const MoE& moe, const DenseWeights& dense,
 std::vector<float> download(ConstTensorView view, cudaStream_t stream) {
   Tensor expanded;
   if (view.dtype() == DataType::BFloat16) {
-    expanded = cast_tensor(view, DataType::Float32, stream);
+    expanded = functions::cast_tensor(view, DataType::Float32, stream);
     view = expanded.view().as_const();
   }
   std::vector<float> values(view.numel());
@@ -234,7 +234,7 @@ std::vector<float> download(ConstTensorView view, cudaStream_t stream) {
 }
 
 void check_combine_rounding(cudaStream_t stream) {
-  const auto device = Device::cuda(0);
+  const auto device = Device::cuda();
   auto parts = Tensor::empty({2, 1}, DataType::Float32, device);
   auto weights = Tensor::empty({1, 2}, DataType::Float32, device);
   auto shared = Tensor::empty({1, 1}, DataType::BFloat16, device);
@@ -271,15 +271,15 @@ void check_moe(const std::vector<std::int32_t>& resident, bool shared,
   std::optional<MoEExecutionWorkspace> workspace(std::in_place);
   const MoEConfig config{kHidden, kHidden, kExperts, kTopK,
                          shared ? kHidden : 0};
-  MoE a(config, workers, Device::cuda(0), resident, &*workspace);
-  MoE b(config, workers, Device::cuda(0), resident, &*workspace);
+  MoE a(config, workers, Device::cuda(), resident, &*workspace);
+  MoE b(config, workers, Device::cuda(), resident, &*workspace);
   const auto dense = initialize(a);
   initialize(b);
   a.populate_expert_cache(stream);
   b.populate_expert_cache(stream);
 
   const auto profile_values = input_values(1, 2, dtype);
-  auto profile_input = Tensor::empty({1, kHidden}, dtype, Device::cuda(0));
+  auto profile_input = Tensor::empty({1, kHidden}, dtype, Device::cuda());
   store(profile_input.view(), profile_values.data());
   MoEPhaseProfile profile;
   ExpertUsage usage;
@@ -295,7 +295,7 @@ void check_moe(const std::vector<std::int32_t>& resident, bool shared,
   compare(download(profiled.hidden_states.view(), stream),
           reference(a, dense, profile_values, 1, shared), 3e-4f, 2e-2f);
 
-  TensorPool pool(Device::cuda(0), stream);
+  TensorPool pool(Device::cuda(), stream);
   struct Result {
     Tensor output;
     std::vector<float> expected;
@@ -306,7 +306,7 @@ void check_moe(const std::vector<std::int32_t>& resident, bool shared,
   std::vector<std::vector<float>> expected;
   for (std::size_t i = 0; i < lengths.size(); ++i) {
     const auto values = input_values(lengths[i], i, dtype);
-    auto input = Tensor::empty({lengths[i], kHidden}, dtype, Device::cuda(0));
+    auto input = Tensor::empty({lengths[i], kHidden}, dtype, Device::cuda());
     store(input.view(), values.data());
     inputs.push_back(std::move(input));
     expected.push_back(reference(a, dense, values, lengths[i], shared));
@@ -338,14 +338,14 @@ void check_decode_prefetch(cudaStream_t stream) {
   resident.back() = resident.front();
 
   ThreadPool workers(4);
-  MoE moe({kHidden, kHidden, kExperts, kTopK}, workers, Device::cuda(0),
+  MoE moe({kHidden, kHidden, kExperts, kTopK}, workers, Device::cuda(),
           resident);
   initialize(moe);
   moe.populate_expert_cache(stream);
 
   constexpr auto dtype = DataType::BFloat16;
   const auto values = input_values(1, 0, dtype);
-  auto input = Tensor::empty({1, kHidden}, dtype, Device::cuda(0));
+  auto input = Tensor::empty({1, kHidden}, dtype, Device::cuda());
   store(input.view(), values.data());
   const auto output = moe.forward(input.view().as_const(), stream);
   require(output.cpu_experts == 1, "full slot count still has a CPU miss");
@@ -365,10 +365,10 @@ void check_graphs(const std::vector<std::int32_t>& resident, bool shared,
   constexpr auto dtype = DataType::BFloat16;
   ThreadPool workers(4);
   MoE moe({kHidden, kHidden, kExperts, kTopK, shared ? kHidden : 0},
-          workers, Device::cuda(0), resident);
+          workers, Device::cuda(), resident);
   const auto dense = initialize(moe);
   moe.populate_expert_cache(first);
-  auto input = Tensor::empty({1, kHidden}, dtype, Device::cuda(0));
+  auto input = Tensor::empty({1, kHidden}, dtype, Device::cuda());
   ExpertUsage usage{std::vector<double>(kExperts)};
   for (std::size_t step = 0; step < 32; ++step) {
     const auto stream = step < 16 ? first : second;
@@ -410,29 +410,29 @@ void check_state_graph(cudaStream_t stream, bool whole) {
   config.rms_norm_eps = 1e-6f;
   ThreadPool workers(4);
   MoEExecutionWorkspace work_a, work_b;
-  Qwen35DecoderLayer plain(config, 0, Device::cuda(0), {0, 2, 4}, workers,
+  Qwen35DecoderLayer plain(config, 0, Device::cuda(), {0, 2, 4}, workers,
                            work_a);
-  Qwen35DecoderLayer graphed(config, 0, Device::cuda(0), {0, 2, 4}, workers,
+  Qwen35DecoderLayer graphed(config, 0, Device::cuda(), {0, 2, 4}, workers,
                              work_b);
   initialize(plain);
   initialize(graphed);
   plain.mlp().populate_expert_cache(stream);
   graphed.mlp().populate_expert_cache(stream);
-  auto conv_a = Tensor::empty({1, 96, 2}, DataType::BFloat16, Device::cuda(0));
-  auto conv_b = Tensor::empty({1, 96, 2}, DataType::BFloat16, Device::cuda(0));
+  auto conv_a = Tensor::empty({1, 96, 2}, DataType::BFloat16, Device::cuda());
+  auto conv_b = Tensor::empty({1, 96, 2}, DataType::BFloat16, Device::cuda());
   auto state_a =
-      Tensor::empty({1, 2, 16, 32}, DataType::Float32, Device::cuda(0));
+      Tensor::empty({1, 2, 16, 32}, DataType::Float32, Device::cuda());
   auto state_b =
-      Tensor::empty({1, 2, 16, 32}, DataType::Float32, Device::cuda(0));
+      Tensor::empty({1, 2, 16, 32}, DataType::Float32, Device::cuda());
   for (auto* tensor : {&conv_a, &conv_b, &state_a, &state_b}) {
-    zero_tensor(tensor->view(), stream);
+    functions::zero_tensor(tensor->view(), stream);
   }
   plain.linear_attention()->set_state_cache(conv_a.view(), state_a.view());
   graphed.linear_attention()->set_state_cache(conv_b.view(), state_b.view());
-  auto input = Tensor::empty({1, kHidden}, DataType::BFloat16, Device::cuda(0));
+  auto input = Tensor::empty({1, kHidden}, DataType::BFloat16, Device::cuda());
   auto residual =
-      Tensor::empty({1, kHidden}, DataType::Float32, Device::cuda(0));
-  auto slots = Tensor::empty({1}, DataType::Int32, Device::cuda(0));
+      Tensor::empty({1, kHidden}, DataType::Float32, Device::cuda());
+  auto slots = Tensor::empty({1}, DataType::Int32, Device::cuda());
   const std::int32_t zero = 0;
   store(slots.view(), &zero);
   ForwardContext context;
